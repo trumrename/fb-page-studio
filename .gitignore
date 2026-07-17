@@ -17,3 +17,7 @@ dist-desktop-*/
 FB-Page-Studio-App/
 _test-server.*
 _clear_backoff.mjs
+# Gói khách: giữ README/.env.example trên git, không commit file .exe lớn
+pack-customer/*.exe
+pack-customer/**/*.exe
+license.backup.json

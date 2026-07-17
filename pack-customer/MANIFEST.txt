@@ -1,0 +1,8 @@
+Nội dung gói khách (không secret):
+ - .env.example
+ - FB-Page-Studio-Desktop.exe
+ - media-sample
+ - README-KHACH.txt
+ - VERSION.txt
+
+CẤM có trong gói khách: license-private.pem, .env có secret, data/app.db token, source src/

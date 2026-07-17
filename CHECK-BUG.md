@@ -1,139 +1,106 @@
 # CHECK-BUG — Checklist kiểm thử FB Page Studio
 
-> Chạy trước mỗi release. Đánh dấu `[x]` khi OK.  
-> Phiên bản: **1.2.0**
+> Trước mỗi ship / release. Đánh `[x]` khi OK.  
+> **Phiên bản code:** 1.2.0  
+> **Gốc DEV:** `D:\fb-page-poster\`  
+> **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`
 
 ---
 
-## 0. Tự động (bắt buộc)
+## 0. Phân biệt 2 gói
+
+- [ ] Fix/build làm trên **DEV gốc**, không sửa tay lung tung chỉ trong pack-customer  
+- [ ] Sau build đã chạy `node scripts/sync-customer-pack.mjs`  
+- [ ] `pack-customer` **không** chứa: `license-private.pem`, `.env` secret, `data/app.db` token, folder `src/`  
+- [ ] `pack-dev/README-DEV.md` và `pack-customer/README-KHACH.txt` còn đúng  
+
+---
+
+## 1. Tự động
 
 ```powershell
 cd D:\fb-page-poster
 node scripts/test-requirements.mjs
-# Kỳ vọng: ALL CHECKS PASSED (81/81)
 ```
 
-- [ ] Suite requirements pass
+- [ ] ALL CHECKS PASSED  
 
 ---
 
-## 1. Khởi động
+## 2. Khởi động (DEV)
 
-- [ ] `npm start` hoặc Desktop exe lên được, không black screen
-- [ ] Port 3847 (hoặc PORT trong `.env`) không conflict
-- [ ] `/api/meta` trả `version` + `license`
-- [ ] Log không spam error token/db
-
----
-
-## 2. License
-
-- [ ] `/license.html` hiện trial hoặc key
-- [ ] Machine ID hiển thị
-- [ ] Key giả → báo chữ ký sai
-- [ ] Key hết hạn → không active
-- [ ] Key bind máy khác → từ chối
-- [ ] Key đúng → kích hoạt, đăng được
-- [ ] Xóa key → về trial/hết hạn
-- [ ] Hết trial + không key → **chặn đăng / hẹn giờ**
-- [ ] Trial vượt max account → chặn Connect account mới
-
-```powershell
-# Cấp key test (máy dev có private key)
-node scripts/gen-license.mjs --type commercial --holder "Test" --days 30 --max-accounts 20 --max-pages 80
-```
+- [ ] `npm start` / Desktop exe không black screen  
+- [ ] `/api/meta` có `version` + `license`  
+- [ ] Log `[license]` / `[update]` không lỗi lạ  
 
 ---
 
-## 3. Multi Meta App / OAuth
+## 3. License
 
-- [ ] `GET /auth/apps` list app1 (+ app2 nếu có env)
-- [ ] Connect **App 1** → account badge App 1
-- [ ] Connect **App 2** (khi đã `FB_APP_ID_2`) → badge App 2
-- [ ] App 2 chưa config → lỗi rõ, **không** login nhầm App 1
-- [ ] 2FA: mở Chrome/Edge external OK
-- [ ] Redirect URI khớp Meta (ngrok)
-- [ ] Cùng nick Connect 2 app = 2 account rows
+- [ ] `/license.html` hiện trial hoặc key  
+- [ ] Key vĩnh viễn / còn hạn → active  
+- [ ] Key hết hạn → chặn đăng  
+- [ ] **Giả lập update:** key trong `data/license.json` vẫn còn sau restart  
+- [ ] Machine ID hiển thị  
 
 ---
 
-## 4. Pages / Sync
+## 4. Multi Meta App / OAuth
 
-- [ ] Sync list pages
-- [ ] Sync details followers (+7d nếu có)
-- [ ] Export Excel/CSV
-- [ ] Xóa account không crash
-
----
-
-## 5. Publish
-
-- [ ] Caption random từ txt/csv
-- [ ] Ảnh inbox → posted sau OK
-- [ ] Media hash: đăng lại cùng file → anti-spam chặn
-- [ ] Text post OK · log CSV
-- [ ] Interval / cooldown page hoạt động
+- [ ] Connect App 1 → badge App 1  
+- [ ] App 2 (nếu có env) Connect đúng  
+- [ ] App 2 chưa config → lỗi, không login nhầm App 1  
+- [ ] 2FA external browser OK  
 
 ---
 
-## 6. Schedule + Rotation
+## 5. Publish / Schedule / Rotation
 
-- [ ] Bulk dry-run plan có slot
-- [ ] Rotation **Xem thứ tự**: App1 P1 → App2 P1 → …
-- [ ] Khung sáng/tối + gap ≥ cài đặt (cùng page)
-- [ ] Slot quá khứ → +1 ngày (còn hợp lệ Graph)
-- [ ] Anti-spam bulk cắt khi > cap (15 page / 40 slot)
-- [ ] Hẹn giờ thật 1–2 page (kiểm tra FB scheduled)
+- [ ] Caption random · media hash 1 lần  
+- [ ] Rotation preview so-le App1↔App2  
+- [ ] Gap cùng page đúng khung  
+- [ ] Hẹn giờ 1–2 page thật (tuỳ)  
 
 ---
 
-## 7. Anti-spam
+## 6. Auto-update
 
-- [ ] Recommended: global 12/h, 40/day
-- [ ] Force ignore OFF mặc định
-- [ ] Graph lỗi rate → backoff
-- [ ] App usage cao → pause publish
-
----
-
-## 8. Jobs UI
-
-- [ ] Progress % tổng + từng task
-- [ ] Toast OK/FAIL
-- [ ] Job sequential (không 10 request cùng lúc)
+- [ ] Banner khi GitHub có version **mới hơn** + có file `.exe`  
+- [ ] Bấm Cập nhật → chỉ thay exe · **license còn**  
+- [ ] Release không có exe → báo thiếu asset, không crash  
 
 ---
 
-## 9. Desktop / Update
+## 7. Gói khách (pack-customer)
 
-- [ ] Portable exe mở được
-- [ ] `.env` cạnh exe được đọc
-- [ ] Nút cập nhật GitHub (nếu có release asset đúng tên)
-
----
-
-## 10. Bảo mật / ship
-
-- [ ] Không ship `.env` / `data/app.db` có token prod
-- [ ] Không ship `keys/license-private.pem`
-- [ ] `.gitignore` chặn private key + issued keys
-- [ ] Release note ghi version + changelog ngắn
+- [ ] Có `VERSION.txt` đúng version  
+- [ ] Có `README-KHACH.txt`, `.env.example`  
+- [ ] Có `.exe` sau khi build+sync (hoặc ghi rõ “chưa build”)  
+- [ ] Zip thử: giải nén máy sạch / folder mới chạy được (trial)  
 
 ---
 
-## Bug đã gặp & xử lý (lịch sử)
+## 8. GitHub (chỉ khi user đồng ý)
+
+- [ ] User đã **OK** push / release  
+- [ ] Không commit `.env`, private key, `data/`  
+- [ ] Tag version = package.json  
+- [ ] Release **có** `FB-Page-Studio-Desktop.exe`  
+
+---
+
+## 9. Bug lịch sử (đã xử lý)
 
 | Bug | Xử lý |
 |-----|--------|
-| Black screen desktop | better-sqlite3 rebuild Electron · env path |
-| OAuth validate / 2FA | external browser · không rerequest mặc định |
-| Caption random trùng | exclude đã dùng trong vòng |
-| App2 fallback App1 | `getMetaApp` không fallback key khác |
-| Slot >12h bị skip “30 ngày” | sửa `30*24*60*60*1000` |
-| EADDRINUSE | stop-port / đổi PORT |
+| Black screen desktop | sqlite rebuild · env path |
+| OAuth 2FA | browser ngoài |
+| App2 fallback App1 | getMetaApp không fallback |
+| Slot 30 ngày sai ms | `*60*1000` đủ |
+| Update mất data? | Chỉ đổi exe · license trong data/ |
 
 ---
 
-## Khi báo bug
+## Báo bug
 
-Ghi: **bước tái hiện · màn hình · log** (`desktop-startup.log` / console) · version `/api/meta` · license mode · app1/app2.
+Ghi: bước · màn · version topbar · license mode · DEV hay gói khách · log `desktop-startup.log`.

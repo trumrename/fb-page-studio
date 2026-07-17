@@ -19,6 +19,8 @@
     "release:zip": "node scripts/build-exe.mjs --zip",
     "build:desktop": "electron-builder --win portable --x64",
     "build:desktop:setup": "electron-builder --win nsis portable --x64",
+    "pack:customer": "node scripts/sync-customer-pack.mjs",
+    "build:customer": "electron-builder --win portable --x64 && node scripts/sync-customer-pack.mjs",
     "postinstall": "electron-builder install-app-deps"
   },
   "engines": {

@@ -1,0 +1,2 @@
+# Caption mẫu — copy vào data/media/captions sau khi chạy app
+Hello from FB Page Studio
