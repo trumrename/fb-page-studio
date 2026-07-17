@@ -235,7 +235,10 @@ export async function checkForUpdate() {
 }
 
 /**
- * Download latest exe next to current, write update.bat, optionally restart.
+ * In-place update: download into same folder as the RUNNING exe, then
+ * replace THAT file (same name/path). Does NOT create a second app.
+ *
+ * Windows locks a running .exe → must: download .new → exit → rename → start same path.
  */
 export async function applyUpdate({ restart = true } = {}) {
   const check = await checkForUpdate();
@@ -246,21 +249,36 @@ export async function applyUpdate({ restart = true } = {}) {
   if (!check.asset?.download_url) {
     return {
       ok: false,
-      error: `Release có tag ${check.latest_version} nhưng không có file .exe (asset ${getUpdateConfig().asset_name})`,
+      error: `Release có tag ${check.latest_version} nhưng không có file .exe trên GitHub (cần upload asset). Không mở bản khác — chờ admin upload rồi bấm lại.`,
       ...check,
     };
   }
 
-  const exeDir = getExeDir();
+  // Prefer exact path of running outer portable exe (FB_OUTER_EXE from Electron)
   const currentExe = getOuterExePath();
+  const exeDir = path.dirname(currentExe);
   const targetName = path.basename(currentExe) || getUpdateConfig().asset_name;
+  // Always stage next to current app — same folder, same final name
   const destNew = path.join(exeDir, targetName + ".new");
   const destBak = path.join(exeDir, targetName + ".bak");
   const batPath = path.join(exeDir, "_apply_update.bat");
 
+  // Clean old leftovers so user doesn't see "many versions"
+  for (const junk of [
+    destNew,
+    path.join(exeDir, "FB-Page-Studio-Desktop.exe.new"),
+    path.join(exeDir, "FB-Page-Studio.exe.new"),
+  ]) {
+    try {
+      if (fs.existsSync(junk)) fs.unlinkSync(junk);
+    } catch {
+      /* ignore */
+    }
+  }
+
   await downloadFile(check.asset.download_url, destNew);
 
-  // Snapshot license next to exe (extra safety — data/ is never deleted by update)
+  // Snapshot license (data/ never deleted)
   try {
     const dataLic = path.join(exeDir, "data", "license.json");
     const bakLic = path.join(exeDir, "license.backup.json");
@@ -271,28 +289,35 @@ export async function applyUpdate({ restart = true } = {}) {
     /* ignore */
   }
 
-  // Batch: ONLY replace .exe — never touch data/, .env, license.json
+  // Replace IN PLACE: old → .bak → delete; .new → same original name; start same path
   const bat = [
     "@echo off",
     "setlocal",
     `cd /d "${exeDir}"`,
-    "echo Updating FB Page Studio...",
-    "echo Giữ nguyên data, .env, license key (khong xoa thu muc data).",
+    "echo Cap nhat TAI CHO — cung file, cung thu muc...",
+    `echo Target: ${targetName}`,
+    "echo Giữ data, .env, license (khong tao app moi).",
     "timeout /t 2 /nobreak >nul",
     `:retry`,
     `if exist "${targetName}" (`,
-    `  del /f /q "${destBak}" 2>nul`,
+    `  del /f /q "${path.basename(destBak)}" 2>nul`,
     `  ren "${targetName}" "${path.basename(destBak)}" 2>nul`,
     `  if exist "${targetName}" (`,
     `    timeout /t 1 /nobreak >nul`,
     `    goto retry`,
     `  )`,
     `)`,
+    `if not exist "${path.basename(destNew)}" (`,
+    `  echo LOI: khong thay file .new`,
+    `  pause`,
+    `  exit /b 1`,
+    `)`,
     `move /y "${path.basename(destNew)}" "${targetName}"`,
+    `del /f /q "${path.basename(destBak)}" 2>nul`,
+    `del /f /q "*.new" 2>nul`,
     `if exist "license.backup.json" if not exist "data\\license.json" (`,
     `  if not exist "data" mkdir "data"`,
     `  copy /y "license.backup.json" "data\\license.json" >nul`,
-    `  echo Restored license.json from backup`,
     `)`,
     `start "" "${targetName}"`,
     `del /f /q "%~f0"`,
@@ -305,13 +330,17 @@ export async function applyUpdate({ restart = true } = {}) {
   const payload = {
     ok: true,
     updated: true,
-    message: restart
-      ? "Đã tải bản mới — đang thay .exe và khởi động lại. License key / data được giữ nguyên."
-      : "Đã tải bản mới (.new). License & data không bị xóa.",
+    message:
+      `Cập nhật tại chỗ: ${currentExe}\n` +
+      `v${check.current_version} → v${check.latest_version}\n` +
+      `Cùng file/tên — không tạo bản app khác. License & data giữ nguyên.` +
+      (restart ? "\nĐang khởi động lại…" : ""),
     from: check.current_version,
     to: check.latest_version,
+    target_exe: currentExe,
     dest: destNew,
     bat: batPath,
+    inplace: true,
     preserves: ["data/", ".env", "license.json", "license.backup.json"],
   };
 

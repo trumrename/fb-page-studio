@@ -128,18 +128,35 @@ export function getPackageJson() {
 }
 
 export function getOuterExePath() {
+  // Set by Electron main for portable — must be ON-DISK file, not Temp extract
   if (process.env.FB_OUTER_EXE && fs.existsSync(process.env.FB_OUTER_EXE)) {
     return path.resolve(process.env.FB_OUTER_EXE);
   }
+  if (
+    process.env.PORTABLE_EXECUTABLE_FILE &&
+    fs.existsSync(process.env.PORTABLE_EXECUTABLE_FILE)
+  ) {
+    return path.resolve(process.env.PORTABLE_EXECUTABLE_FILE);
+  }
   const names = [
     "FB-Page-Studio-Desktop.exe",
-    "FB Page Studio.exe",
     "FB-Page-Studio.exe",
+    "FB Page Studio.exe",
   ];
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    for (const n of names) {
+      const c = path.join(process.env.PORTABLE_EXECUTABLE_DIR, n);
+      if (fs.existsSync(c)) return path.resolve(c);
+    }
+  }
   const dir = getExeDir();
   for (const n of names) {
     const c = path.join(dir, n);
     if (fs.existsSync(c)) return c;
+  }
+  // Never prefer Temp extract path for updates
+  if (process.execPath && !/[\\/]Temp[\\/]/i.test(process.execPath)) {
+    return process.execPath;
   }
   return path.join(dir, "FB-Page-Studio-Desktop.exe");
 }

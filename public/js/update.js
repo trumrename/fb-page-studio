@@ -139,15 +139,19 @@
       }
       if (!check.asset) {
         alert(
-          `Release v${check.latest_version} chưa có file .exe.\nMở GitHub để tải thủ công.`
+          `Release v${check.latest_version} trên GitHub chưa có file .exe.\n` +
+            `Không thể cập nhật tại chỗ — chờ admin upload asset lên Release\n` +
+            `(không cần tải bản khác về Downloads).`
         );
-        if (check.release_url) window.open(check.release_url, "_blank");
+        // Do NOT force-open GitHub as a "second product" — optional only
         return;
       }
       const ok = confirm(
-        `Cập nhật v${check.current_version} → v${check.latest_version}?\n\n` +
-          `File: ${check.asset.name}\n` +
-          `App sẽ tải về, thay file và tự mở lại.`
+        `Cập nhật TẠI CHỖ (cùng app, cùng file .exe)?\n\n` +
+          `v${check.current_version} → v${check.latest_version}\n` +
+          `Nguồn: GitHub ${check.asset.name}\n` +
+          `→ Ghi đè file đang chạy, KHÔNG tạo bản app khác.\n` +
+          `License + data giữ nguyên. App tự mở lại.`
       );
       if (!ok) return;
 
@@ -158,7 +162,7 @@
       if (up.ok && up.updated) {
         alert(
           up.message ||
-            "Đã tải xong. App sẽ đóng và mở lại sau vài giây…"
+            "Đã cập nhật tại chỗ. App sẽ đóng và mở lại cùng đường dẫn…"
         );
       } else {
         alert(up.error || up.message || "Update thất bại");

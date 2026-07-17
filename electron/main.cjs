@@ -93,6 +93,41 @@ function iconPath(name) {
   return null;
 }
 
+/**
+ * Path of the portable .exe the user double-clicked (on disk).
+ * electron-builder portable extracts to %TEMP% — process.execPath is NOT the install file.
+ */
+function resolveOuterPortableExe(userDir) {
+  const names = [
+    "FB-Page-Studio-Desktop.exe",
+    "FB-Page-Studio.exe",
+    "FB Page Studio.exe",
+  ];
+  // 1) Official portable env (electron-builder)
+  if (
+    process.env.PORTABLE_EXECUTABLE_FILE &&
+    fs.existsSync(process.env.PORTABLE_EXECUTABLE_FILE)
+  ) {
+    return path.resolve(process.env.PORTABLE_EXECUTABLE_FILE);
+  }
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    const dir = process.env.PORTABLE_EXECUTABLE_DIR;
+    for (const n of names) {
+      const p = path.join(dir, n);
+      if (fs.existsSync(p)) return path.resolve(p);
+    }
+  }
+  // 2) Next to data/.env folder (USER_DIR)
+  if (userDir) {
+    for (const n of names) {
+      const p = path.join(userDir, n);
+      if (fs.existsSync(p)) return path.resolve(p);
+    }
+  }
+  // 3) Fallback: current process (dev / non-portable)
+  return process.execPath;
+}
+
 function loadAppIcon() {
   const p =
     iconPath("icon.ico") || iconPath("icon-256.png") || iconPath("icon.png");
@@ -161,6 +196,13 @@ function startBackend() {
   const serverJs = path.join(appRoot(), "src", "server.js");
   log("serverJs", serverJs);
 
+  // Portable (electron-builder): real .exe is on disk, process.execPath is TEMP extract.
+  // Update must replace the ON-DISK portable file — never the Temp path.
+  const outerExe = resolveOuterPortableExe(USER_DIR);
+  log("FB_OUTER_EXE", outerExe);
+  log("PORTABLE_EXECUTABLE_DIR", process.env.PORTABLE_EXECUTABLE_DIR || "");
+  log("PORTABLE_EXECUTABLE_FILE", process.env.PORTABLE_EXECUTABLE_FILE || "");
+
   const env = {
     ...process.env,
     ELECTRON_RUN_AS_NODE: "1",
@@ -170,7 +212,7 @@ function startBackend() {
     ELECTRON_APP_PATH: appRoot(),
     FB_USER_DIR: USER_DIR,
     FB_EXE_DIR: USER_DIR,
-    FB_OUTER_EXE: process.execPath,
+    FB_OUTER_EXE: outerExe,
     PORT: String(PORT),
   };
 
