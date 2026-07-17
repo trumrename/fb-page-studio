@@ -1,0 +1,31 @@
+{
+  "name": "fb-page-studio",
+  "version": "1.0.0",
+  "description": "FB Page Studio — Official Graph API multi-account Page manager + publish + schedule",
+  "type": "module",
+  "main": "src/server.js",
+  "githubRepo": "trumrename/fb-page-studio",
+  "updateAsset": "FB-Page-Studio.exe",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "stop": "node scripts/stop-port.js",
+    "restart": "node scripts/stop-port.js && node src/server.js",
+    "init-db": "node src/db/init.js",
+    "build:exe": "node scripts/build-exe.mjs",
+    "release:zip": "node scripts/build-exe.mjs --zip"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "nanoid": "^5.1.0"
+  },
+  "devDependencies": {
+    "caxa": "^3.0.1"
+  }
+}

@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Publish · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/">
+        <div class="brand-mark">FB</div>
+        <div class="brand-text">
+          <strong>Page Studio</strong>
+          <span>Graph API · Official</span>
+        </div>
+      </a>
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="/"><span class="ico">▣</span> Pages & Insights</a>
+      <a class="nav-item active" href="/posting.html"><span class="ico">✦</span> Publish & Schedule</a>
+      <div class="nav-label">Exports</div>
+      <a class="nav-item" href="/api/posting/logs/csv"><span class="ico">↓</span> Post logs CSV</a>
+      <div class="nav-label">System</div>
+      <a class="nav-item" href="#" onclick="document.getElementById('btnUpdateApp')?.click();return false"><span class="ico">↑</span> Cập nhật phiên bản</a>
+      <div class="nav-foot">
+        <div class="meta">
+          published=false + scheduled_publish_time<br/>
+          Caption pool · Media inbox · GitHub update
+        </div>
+      </div>
+    </aside>
+
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn" aria-label="Menu">☰</button>
+          <div>
+            <h1>Publish & Schedule</h1>
+            <div class="sub">Đăng ngay · Hẹn giờ FB · Bulk</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <a class="btn btn-ghost" href="/">← Pages</a>
+          <a class="btn btn-ghost" href="/api/posting/logs/csv">Logs CSV</a>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="flash" id="flash"></div>
+
+        <div class="hero" style="cursor:default">
+          <div>
+            <div class="hero-kicker">Graph schedule</div>
+            <div class="hero-title">Feed ngay · Hẹn giờ hàng loạt · Giờ ưa thích từng page</div>
+            <div class="hero-desc">
+              Caption random từ .txt/.csv · media inbox → posted · Meta đã deprecate page_fans_online — dùng giờ ưa thích.
+            </div>
+          </div>
+          <span class="badge live">Official API</span>
+        </div>
+
+        <div class="grid-2">
+          <section class="panel">
+            <h2 class="panel-hd">
+              <span>Pages</span>
+              <span class="hint">tick = bulk</span>
+            </h2>
+            <div class="panel-body tight">
+              <div class="actions" style="margin:0 0 .5rem;padding:0 .35rem">
+                <button type="button" class="btn-ghost btn-sm" id="btnSelAll">Chọn tất cả</button>
+                <button type="button" class="btn-ghost btn-sm" id="btnSelNone">Bỏ chọn</button>
+              </div>
+              <div class="panel-body scroll tight" id="pageList" style="max-height:62vh;padding:0.35rem">
+                <div class="muted">Loading…</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-hd">
+              <span>Config · <span id="cfgTitle" class="hint">chọn page</span></span>
+            </h2>
+            <div class="panel-body scroll" id="cfgBody">
+              <p class="muted">Chọn page bên trái — hoặc tick nhiều page cho bulk schedule bên dưới.</p>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel section-gap">
+          <h2 class="panel-hd">
+            <span>Hẹn giờ FB hàng loạt</span>
+            <span class="hint">10 phút – 30 ngày</span>
+          </h2>
+          <div class="panel-body">
+            <p class="muted" style="margin-top:0">
+              Mode <b>Giờ tích cực</b> = giờ ưa thích từng page · Mode <b>cố định</b> = 1 lịch cho mọi page đã tick.
+            </p>
+            <div class="row3">
+              <div>
+                <label>Mode</label>
+                <select id="bulkMode">
+                  <option value="active_times">Giờ tích cực từng page</option>
+                  <option value="fixed">Giờ cố định / start + interval</option>
+                </select>
+              </div>
+              <div>
+                <label>Loại bài</label>
+                <select id="bulkPostType">
+                  <option value="auto">auto (sequence)</option>
+                  <option value="photo">photo</option>
+                  <option value="text">text</option>
+                  <option value="video">video</option>
+                </select>
+              </div>
+              <div>
+                <label>Múi giờ offset (phút · VN = 420)</label>
+                <input type="number" id="bulkTz" value="420" />
+              </div>
+            </div>
+
+            <div id="bulkActive">
+              <div class="row3" style="margin-top:.25rem">
+                <div>
+                  <label>Số ngày tới</label>
+                  <input type="number" id="bulkDays" min="1" max="30" value="3" />
+                </div>
+                <div>
+                  <label>Bài / ngày (top giờ)</label>
+                  <input type="number" id="bulkPerDay" min="1" max="10" value="2" />
+                </div>
+                <div>
+                  <label>&nbsp;</label>
+                  <label class="checks" style="margin:.45rem 0 0"><input type="checkbox" id="bulkForceActive" /> Force refresh</label>
+                </div>
+              </div>
+            </div>
+
+            <div id="bulkFixed">
+              <div class="row2" style="margin-top:.25rem">
+                <div>
+                  <label>Start at</label>
+                  <input type="datetime-local" id="bulkStart" />
+                </div>
+                <div class="row2">
+                  <div>
+                    <label>Số bài / page</label>
+                    <input type="number" id="bulkCount" min="1" max="50" value="3" />
+                  </div>
+                  <div>
+                    <label>Interval (phút ≥10)</label>
+                    <input type="number" id="bulkInterval" min="10" value="120" />
+                  </div>
+                </div>
+              </div>
+              <label>Hoặc list thời điểm (mỗi dòng · YYYY-MM-DD HH:mm)</label>
+              <textarea id="bulkTimes" placeholder="2026-07-18 09:00&#10;2026-07-18 19:00"></textarea>
+            </div>
+
+            <div class="actions">
+              <button type="button" class="btn-ghost" id="btnDryRun">Xem kế hoạch</button>
+              <button type="button" class="btn-warn" id="btnBulkSchedule">Hẹn giờ hàng loạt</button>
+              <button type="button" class="btn-ok btn-sm" id="btnActiveSelected">⏱ Giờ tích cực (đã tick)</button>
+            </div>
+            <div id="bulkResult" class="muted" style="margin-top:.85rem"></div>
+          </div>
+        </section>
+
+        <section class="panel section-gap">
+          <h2 class="panel-hd">Activity log</h2>
+          <div class="panel-body" style="padding:0">
+            <div class="table-wrap" style="max-height:320px">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th><th>Page</th><th>Type</th><th>Status</th><th>Hẹn lúc</th><th>Post</th><th>Error</th>
+                  </tr>
+                </thead>
+                <tbody id="logs"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="/js/shell.js"></script>
+  <script src="/js/update.js"></script>
+  <script>
+    let selectedId = null;
+    let pages = [];
+    const $ = (id) => document.getElementById(id);
+
+    async function api(path, opts) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function flash(msg, ok) {
+      const el = $("flash");
+      el.className = "flash show " + (ok ? "ok" : "err");
+      el.textContent = msg;
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    }
+
+    function selectedPageIds() {
+      return [...document.querySelectorAll(".pg-check:checked")].map((c) => Number(c.value));
+    }
+
+    function renderHourBars(hourly) {
+      if (!hourly?.length) return "<p class='muted'>Không có hourly data</p>";
+      const max = Math.max(...hourly.map((h) => h.score), 1);
+      return hourly.map((h) => {
+        const pct = Math.round((h.score / max) * 100);
+        const peak = h.score === max && h.score > 0 ? " ★" : "";
+        return `<div class="bar-row"><span class="h">${String(h.hour).padStart(2,"0")}h</span>
+          <div class="bar"><i style="width:${pct}%"></i></div>
+          <span>${h.score}${peak}</span></div>`;
+      }).join("");
+    }
+
+    async function loadPages() {
+      const data = await api("/api/posting/pages");
+      pages = data.pages || [];
+      const el = $("pageList");
+      if (!pages.length) {
+        el.innerHTML = `<p class="muted" style="padding:1rem">Chưa có page. <a href="/">Connect + sync</a>.</p>`;
+        return;
+      }
+      if (!selectedId) {
+        const q = Number(new URLSearchParams(location.search).get("page") || 0);
+        if (q && pages.some((p) => p.id === q)) selectedId = q;
+      }
+      const checked = new Set(selectedPageIds());
+      el.innerHTML = pages.map((p) => `
+        <div class="page-item ${selectedId === p.id ? "active" : ""}" data-id="${p.id}">
+          <input type="checkbox" class="pg-check" value="${p.id}" ${checked.has(p.id) ? "checked" : ""}
+            onclick="event.stopPropagation()" />
+          <div style="min-width:0;flex:1">
+            <strong>${esc(p.name)}</strong>
+            <div class="sub">
+              <span class="badge ${p.enabled ? "on" : "off"}">${p.enabled ? "ON" : "OFF"}</span>
+              · ${p.posts_today || 0}/${p.max_posts_per_day || "?"} today
+              · ${p.interval_minutes || "?"}m
+            </div>
+            <div class="page-tools">
+              <button type="button" class="btn-warn btn-sm btn-active" data-id="${p.id}">⏱ Giờ</button>
+              <button type="button" class="btn-ghost btn-sm btn-fb-sched" data-id="${p.id}">FB sched</button>
+            </div>
+            <div class="active-box muted" id="active-${p.id}" style="margin-top:.35rem"></div>
+          </div>
+        </div>
+      `).join("");
+
+      el.querySelectorAll(".page-item").forEach((n) => {
+        n.onclick = (e) => {
+          if (e.target.closest("button") || e.target.closest("input")) return;
+          selectedId = Number(n.dataset.id);
+          history.replaceState({}, "", `/posting.html?page=${selectedId}`);
+          loadPages();
+          loadConfig(selectedId);
+        };
+      });
+      el.querySelectorAll(".btn-active").forEach((btn) => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          loadActiveTimes(Number(btn.dataset.id), true);
+        };
+      });
+      el.querySelectorAll(".btn-fb-sched").forEach((btn) => {
+        btn.onclick = async (e) => {
+          e.stopPropagation();
+          const id = Number(btn.dataset.id);
+          try {
+            const r = await api(`/api/posting/scheduled/${id}`);
+            const box = document.getElementById(`active-${id}`);
+            if (!r.posts?.length) {
+              box.innerHTML = "<i>FB: chưa có scheduled_posts</i>";
+              return;
+            }
+            box.innerHTML = `<b>FB scheduled (${r.posts.length}):</b><br/>` +
+              r.posts.slice(0, 8).map((p) => {
+                const t = p.scheduled_publish_time
+                  ? new Date(Number(p.scheduled_publish_time) * 1000).toISOString()
+                  : "?";
+                return `· ${esc(t)} · ${esc((p.message || "").slice(0, 40))}`;
+              }).join("<br/>");
+          } catch (err) {
+            flash(err.message, false);
+          }
+        };
+      });
+      if (selectedId) loadConfig(selectedId);
+    }
+
+    async function loadActiveTimes(id, force) {
+      const box = document.getElementById(`active-${id}`);
+      if (box) box.innerHTML = "Đang lấy giờ…";
+      try {
+        const r = await api(`/api/posting/active-times/${id}${force ? "?force=1" : ""}`);
+        if (!box) return;
+        const pref = (r.preferred_hours || []).join(",");
+        const editor = `
+          <div style="margin-top:.4rem">
+            <label style="margin:0">Giờ ưa thích (0–23)</label>
+            <div style="display:flex;gap:.35rem;margin-top:.25rem;align-items:center;flex-wrap:wrap">
+              <input type="text" id="pref-h-${id}" value="${esc(pref || "9,12,19,21")}" style="flex:1;min-width:120px;padding:.35rem .5rem;font-size:.8rem" />
+              <button type="button" class="btn-ok btn-sm btn-save-pref" data-id="${id}">Lưu</button>
+              <button type="button" class="btn-ghost btn-sm btn-preset-pref" data-id="${id}" data-h="9,12,19,21">Preset VN</button>
+            </div>
+          </div>`;
+        if (!r.ok) {
+          box.innerHTML = `<span class="fail">${esc(r.error || "Không có data")}</span>${editor}`;
+          bindPrefButtons(box);
+          return;
+        }
+        const src =
+          r.source === "preferred" ? "preferred" :
+          r.source === "insights" ? "insights" : esc(r.metric || "");
+        box.innerHTML = `
+          <div><b>Top:</b> ${(r.top_hours || []).map((h) => String(h).padStart(2,"0")+":00").join(", ")}
+            · <span class="badge live">${esc(src)}</span>${r.cached ? " · cache" : ""}</div>
+          <div style="max-height:120px;overflow:auto;margin-top:.35rem">${renderHourBars(r.hourly)}</div>
+          <div class="muted" style="margin-top:.25rem;font-size:.72rem">${esc(r.timezone_note || "")}</div>
+          ${editor}
+        `;
+        bindPrefButtons(box);
+      } catch (e) {
+        if (box) box.innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+      }
+    }
+
+    function bindPrefButtons(root) {
+      root.querySelectorAll(".btn-save-pref").forEach((btn) => {
+        btn.onclick = async (e) => {
+          e.stopPropagation();
+          const id = Number(btn.dataset.id);
+          const raw = document.getElementById(`pref-h-${id}`)?.value || "";
+          const hours = raw.split(/[,\s]+/).map((x) => Number(x)).filter((n) => n >= 0 && n <= 23);
+          try {
+            await api(`/api/posting/preferred-hours/${id}`, {
+              method: "PUT",
+              body: JSON.stringify({ hours }),
+            });
+            flash(`Đã lưu giờ page #${id}: ${hours.join(",")}`, true);
+            await loadActiveTimes(id, true);
+          } catch (err) {
+            flash(err.message, false);
+          }
+        };
+      });
+      root.querySelectorAll(".btn-preset-pref").forEach((btn) => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const inp = document.getElementById(`pref-h-${btn.dataset.id}`);
+          if (inp) inp.value = btn.dataset.h || "9,12,19,21";
+        };
+      });
+    }
+
+    async function loadConfig(id) {
+      const data = await api(`/api/posting/config/${id}`);
+      const c = data.config;
+      const p = data.page;
+      $("cfgTitle").textContent = p.name;
+      const seq = (c.sequence || []).join(", ");
+      const caps = (c.captions || []).join("\n");
+      const tpls = (c.comment_templates || []).join("\n");
+      const see = (c.link_lists?.see_more || []).join("\n");
+      const alb = (c.link_lists?.full_album || []).join("\n");
+      $("cfgBody").innerHTML = `
+        <div class="checks">
+          <label><input type="checkbox" id="enabled" ${c.enabled ? "checked" : ""}/> Auto scheduler (local)</label>
+          <label><input type="checkbox" id="comment_enabled" ${c.comment_enabled ? "checked" : ""}/> Auto comment</label>
+          <label><input type="checkbox" id="story_enabled" ${c.story_enabled ? "checked" : ""}/> Story flag</label>
+        </div>
+        <div class="row2">
+          <div>
+            <label>Số lần / ngày</label>
+            <input type="number" id="max_posts_per_day" min="1" value="${esc(c.max_posts_per_day)}" />
+          </div>
+          <div>
+            <label>Interval (phút)</label>
+            <input type="number" id="interval_minutes" min="1" value="${esc(c.interval_minutes)}" />
+          </div>
+        </div>
+        <label>Sequence</label>
+        <input type="text" id="sequence" value="${esc(seq)}" placeholder="photo, video, text" />
+        <label>Pick mode</label>
+        <select id="pick_mode">
+          <option value="random" ${c.pick_mode !== "sequential" ? "selected" : ""}>random</option>
+          <option value="sequential" ${c.pick_mode === "sequential" ? "selected" : ""}>sequential</option>
+        </select>
+        <label>Media folder</label>
+        <input type="text" id="media_folder" value="${esc(c.media_folder)}" />
+        <label>Posted folder</label>
+        <input type="text" id="posted_folder" value="${esc(c.posted_folder)}" />
+        <p class="muted">Media: <b>${(data.media && data.media.photos) || 0}</b> ảnh · <b>${(data.media && data.media.videos) || 0}</b> video</p>
+        <label>Kho caption (.txt / .csv)</label>
+        <input type="text" id="captions_folder" value="${esc(c.captions_folder || "")}" />
+        <p class="muted">
+          Pool: <b>${(data.captions_pool && data.captions_pool.from_disk) || 0}</b> file
+          · <b>${(data.captions_pool && data.captions_pool.from_inline) || 0}</b> inline
+          · total <b>${(data.captions_pool && data.captions_pool.total) || 0}</b>
+        </p>
+        <label>Captions inline</label>
+        <textarea id="captions">${esc(caps)}</textarea>
+        <label>Comment templates</label>
+        <textarea id="comment_templates">${esc(tpls)}</textarea>
+        <div class="row2">
+          <div>
+            <label>see_more links</label>
+            <textarea id="see_more">${esc(see)}</textarea>
+          </div>
+          <div>
+            <label>full_album links</label>
+            <textarea id="full_album">${esc(alb)}</textarea>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+        <label style="margin-top:0"><b>Hẹn 1 bài trên FB</b></label>
+        <div class="row2">
+          <div>
+            <label>Thời điểm</label>
+            <input type="datetime-local" id="oneScheduleAt" />
+          </div>
+          <div>
+            <label>Loại</label>
+            <select id="oneScheduleType">
+              <option value="text">text</option>
+              <option value="photo">photo</option>
+              <option value="video">video</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:.65rem">
+          <button type="button" class="btn-warn" id="btnScheduleOne">Hẹn giờ FB</button>
+          <button type="button" class="btn-warn btn-sm" id="btnActiveThis">⏱ Giờ page này</button>
+        </div>
+        <div id="oneActiveBox" class="muted" style="margin-top:.5rem"></div>
+
+        <p class="muted" style="margin-top:1rem">Hôm nay: ${c.posts_today || 0} · last: ${esc(c.last_post_at || "—")} · slot: ${c.next_slot_index || 0}</p>
+        <div class="actions">
+          <button type="button" class="btn-primary" id="btnSave">Lưu config</button>
+          <button type="button" class="btn-ok" id="btnRun">Đăng ngay</button>
+          <button type="button" class="btn-ghost" id="btnRunForce">Đăng (force)</button>
+        </div>
+      `;
+      $("btnSave").onclick = saveConfig;
+      $("btnRun").onclick = () => runPost(false);
+      $("btnRunForce").onclick = () => runPost(true);
+      $("btnScheduleOne").onclick = scheduleOne;
+      $("btnActiveThis").onclick = async () => {
+        await loadActiveTimes(id, true);
+        const src = document.getElementById(`active-${id}`);
+        $("oneActiveBox").innerHTML = src ? src.innerHTML : "";
+      };
+      const d = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      const pad = (n) => String(n).padStart(2, "0");
+      $("oneScheduleAt").value =
+        `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function collectConfig() {
+      return {
+        enabled: $("enabled").checked ? 1 : 0,
+        comment_enabled: $("comment_enabled").checked ? 1 : 0,
+        story_enabled: $("story_enabled").checked ? 1 : 0,
+        max_posts_per_day: Number($("max_posts_per_day").value) || 3,
+        interval_minutes: Number($("interval_minutes").value) || 120,
+        sequence: $("sequence").value,
+        pick_mode: $("pick_mode").value,
+        media_folder: $("media_folder").value.trim(),
+        posted_folder: $("posted_folder").value.trim(),
+        captions_folder: $("captions_folder").value.trim(),
+        captions: $("captions").value,
+        comment_templates: $("comment_templates").value,
+        link_lists: {
+          see_more: $("see_more").value,
+          full_album: $("full_album").value,
+        },
+      };
+    }
+
+    async function saveConfig() {
+      if (!selectedId) return;
+      try {
+        await api(`/api/posting/config/${selectedId}`, {
+          method: "PUT",
+          body: JSON.stringify(collectConfig()),
+        });
+        flash("Đã lưu config", true);
+        await loadPages();
+        await loadConfig(selectedId);
+      } catch (e) {
+        flash(e.message, false);
+      }
+    }
+
+    async function runPost(ignoreLimits) {
+      if (!selectedId) return;
+      try {
+        await saveConfig();
+        const r = await api(`/api/posting/run/${selectedId}`, {
+          method: "POST",
+          body: JSON.stringify({
+            ignore_quota: ignoreLimits,
+            ignore_interval: ignoreLimits,
+          }),
+        });
+        if (r.ok) {
+          flash(`OK · ${r.post_type} · ${r.post?.post_id || "—"}`, true);
+        } else {
+          flash(`FAIL · ${r.error || "unknown"}`, false);
+        }
+        await loadPages();
+        await loadConfig(selectedId);
+        await loadLogs();
+      } catch (e) {
+        flash(e.message, false);
+      }
+    }
+
+    async function scheduleOne() {
+      if (!selectedId) return;
+      const local = $("oneScheduleAt").value;
+      if (!local) return flash("Chọn thời điểm", false);
+      const unix = Math.floor(new Date(local).getTime() / 1000);
+      try {
+        const r = await api(`/api/posting/schedule/${selectedId}`, {
+          method: "POST",
+          body: JSON.stringify({
+            scheduled_publish_time: unix,
+            post_type: $("oneScheduleType").value,
+          }),
+        });
+        if (r.ok) {
+          flash(`Đã hẹn FB · ${r.post_type} · ${r.scheduled_at_iso}`, true);
+        } else {
+          flash(`Hẹn FAIL · ${r.error || "?"}`, false);
+        }
+        await loadLogs();
+      } catch (e) {
+        flash(e.message, false);
+      }
+    }
+
+    function bulkBody(dryRun) {
+      const ids = selectedPageIds();
+      if (!ids.length && selectedId) ids.push(selectedId);
+      const mode = $("bulkMode").value;
+      const body = {
+        page_row_ids: ids.length ? ids : (selectedId ? [selectedId] : []),
+        mode,
+        post_type: $("bulkPostType").value,
+        tz_offset_minutes: Number($("bulkTz").value) || 420,
+        dry_run: !!dryRun,
+      };
+      if (mode === "active_times") {
+        body.days_ahead = Number($("bulkDays").value) || 3;
+        body.posts_per_day = Number($("bulkPerDay").value) || 2;
+        body.force_active = $("bulkForceActive").checked;
+      } else {
+        const lines = $("bulkTimes").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        if (lines.length) body.times = lines;
+        else {
+          body.start_at = $("bulkStart").value ? $("bulkStart").value.replace("T", " ") : null;
+          body.count_per_page = Number($("bulkCount").value) || 1;
+          body.interval_minutes = Number($("bulkInterval").value) || 120;
+        }
+      }
+      return body;
+    }
+
+    function renderBulkResult(r) {
+      const box = $("bulkResult");
+      if (r.dry_run) {
+        box.innerHTML =
+          `<b>Dry-run · ${esc(r.mode)}</b><br/>` +
+          (r.plan || []).map((p) => {
+            if (p.error) return `<div class="fail">· ${esc(p.page_name)}: ${esc(p.error)}</div>`;
+            const tops = p.active?.top_hours ? ` peak=[${p.active.top_hours.join(",")}]` : "";
+            return `<div class="ok">· ${esc(p.page_name)}${tops}: ${p.slots.length} slot<br/>` +
+              p.slots.slice(0, 12).map((s) => `&nbsp;&nbsp;${esc(s.local_label)}`).join("<br/>") +
+              (p.slots.length > 12 ? "<br/>…" : "") + `</div>`;
+          }).join("");
+        return;
+      }
+      box.innerHTML =
+        `<b>OK ${r.total_ok || 0} · FAIL ${r.total_fail || 0}</b><br/>` +
+        (r.results || []).map((p) => {
+          const head = `${esc(p.page_name)} · ok=${p.scheduled_ok || 0} fail=${p.scheduled_fail || 0}`;
+          if (p.error && !p.items?.length) return `<div class="fail">· ${head}: ${esc(p.error)}</div>`;
+          const lines = (p.items || []).map((i) =>
+            `&nbsp;&nbsp;<span class="${i.ok ? "ok" : "fail"}">${i.ok ? "OK" : "FAIL"}</span> ` +
+            `${esc(i.local_label)} · ${esc(i.post_type)} · ${esc(i.post_id || i.error || "")}`
+          ).join("<br/>");
+          return `<div>· ${head}<br/>${lines}</div>`;
+        }).join("<br/>");
+    }
+
+    async function runBulk(dry) {
+      const body = bulkBody(dry);
+      if (!body.page_row_ids.length) {
+        flash("Tick ít nhất 1 page", false);
+        return;
+      }
+      if (!dry && !confirm(`Hẹn giờ ${body.page_row_ids.length} page trên Facebook?\nMode: ${body.mode}`)) return;
+      $("bulkResult").innerHTML = dry ? "Đang lập kế hoạch…" : "Đang gọi Graph…";
+      try {
+        const r = await api("/api/posting/schedule/bulk", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        renderBulkResult(r);
+        flash(dry ? `Dry-run xong` : `Bulk · OK ${r.total_ok} · FAIL ${r.total_fail}`, !dry ? (r.total_ok || 0) > 0 : true);
+        if (!dry) await loadLogs();
+      } catch (e) {
+        flash(e.message, false);
+        $("bulkResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+      }
+    }
+
+    async function loadLogs() {
+      const data = await api("/api/posting/logs?limit=40");
+      const tb = $("logs");
+      if (!data.logs?.length) {
+        tb.innerHTML = `<tr><td colspan="7" class="empty">Chưa có log</td></tr>`;
+        return;
+      }
+      tb.innerHTML = data.logs.map((l) => {
+        const st =
+          l.status === "ok" || l.status === "ok_comment_failed" ? "ok" :
+          l.status === "scheduled" ? "sched" : "fail";
+        return `<tr>
+          <td>${esc(l.created_at)}</td>
+          <td>${esc(l.page_name)}</td>
+          <td>${esc(l.post_type)}</td>
+          <td class="${st}">${esc(l.status)}</td>
+          <td>${esc(l.scheduled_publish_time || "—")}</td>
+          <td>${l.fb_post_url ? `<a href="${esc(l.fb_post_url)}" target="_blank">link</a>` : esc(l.fb_post_id || "—")}</td>
+          <td class="fail">${esc(l.error || "")}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    $("bulkMode").onchange = () => {
+      const m = $("bulkMode").value;
+      $("bulkActive").style.display = m === "active_times" ? "block" : "none";
+      $("bulkFixed").style.display = m === "fixed" ? "block" : "none";
+    };
+    $("btnDryRun").onclick = () => runBulk(true);
+    $("btnBulkSchedule").onclick = () => runBulk(false);
+    $("btnActiveSelected").onclick = async () => {
+      const ids = selectedPageIds();
+      if (!ids.length) return flash("Tick page trước", false);
+      for (const id of ids) await loadActiveTimes(id, true);
+      flash(`Đã lấy giờ ${ids.length} page`, true);
+    };
+    $("btnSelAll").onclick = () => document.querySelectorAll(".pg-check").forEach((c) => (c.checked = true));
+    $("btnSelNone").onclick = () => document.querySelectorAll(".pg-check").forEach((c) => (c.checked = false));
+
+    (() => {
+      const d = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      const pad = (n) => String(n).padStart(2, "0");
+      $("bulkStart").value =
+        `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    })();
+
+    loadPages().then(loadLogs).catch((e) => flash(e.message, false));
+  </script>
+</body>
+</html>

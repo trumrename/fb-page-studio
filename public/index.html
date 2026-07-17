@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pages · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/">
+        <div class="brand-mark">FB</div>
+        <div class="brand-text">
+          <strong>Page Studio</strong>
+          <span>Graph API · Official</span>
+        </div>
+      </a>
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item active" href="/"><span class="ico">▣</span> Pages & Insights</a>
+      <a class="nav-item" href="/posting.html"><span class="ico">✦</span> Publish & Schedule</a>
+      <div class="nav-label">Quick</div>
+      <a class="nav-item" href="/auth/facebook"><span class="ico">+</span> Connect Facebook</a>
+      <a class="nav-item" href="/api/posting/logs/csv"><span class="ico">↓</span> Post logs CSV</a>
+      <div class="nav-label">System</div>
+      <a class="nav-item" href="#" id="navUpdate" onclick="document.getElementById('btnUpdateApp')?.click();return false"><span class="ico">↑</span> Cập nhật phiên bản</a>
+      <div class="nav-foot">
+        <div class="meta">
+          Multi-account · Feed + hẹn giờ FB<br/>
+          Không cookie · Không emulator<br/>
+          <span id="sidebarVer">portable exe + GitHub update</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn" aria-label="Menu">☰</button>
+          <div>
+            <h1>Pages & Insights</h1>
+            <div class="sub">Quản lý fanpage · sync · export</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn-ghost" id="btnRefresh" type="button">Refresh</button>
+          <button class="btn-ok" id="btnEnrichAll" type="button">Sync all</button>
+          <button class="btn-ghost" id="btnExportXlsx" type="button">Excel</button>
+          <button class="btn-ghost" id="btnExportCsv" type="button">CSV</button>
+          <a class="btn btn-primary" href="/posting.html">Publish →</a>
+          <a class="btn btn-ghost" href="/auth/facebook">+ Connect</a>
+        </div>
+      </header>
+
+      <main class="content">
+        <div id="flash"></div>
+
+        <a href="/posting.html" class="hero">
+          <div>
+            <div class="hero-kicker">Publish pipeline</div>
+            <div class="hero-title">Đăng feed · Hẹn giờ FB · Caption random</div>
+            <div class="hero-desc">
+              Kho .txt/.csv · media inbox · giờ ưa thích từng page · bulk schedule qua Graph API
+            </div>
+          </div>
+          <span class="btn btn-primary btn-lg">Mở Publish</span>
+        </a>
+
+        <div class="stats">
+          <div class="stat"><div class="n" id="statAccounts">—</div><div class="l">Tài khoản FB</div></div>
+          <div class="stat"><div class="n" id="statPages">—</div><div class="l">Fanpage</div></div>
+          <div class="stat"><div class="n" id="statEnriched">—</div><div class="l">Đã có followers</div></div>
+          <div class="stat"><div class="n" id="statErrors">—</div><div class="l">Account lỗi</div></div>
+          <div class="stat"><div class="n" id="statUsage">—</div><div class="l">App API usage</div></div>
+        </div>
+        <p id="usageHint" class="muted" style="margin:-.35rem 0 1rem;font-size:.8rem"></p>
+
+        <div class="grid-2">
+          <section class="panel">
+            <h2 class="panel-hd">Accounts <span id="accCount" class="badge">0</span></h2>
+            <div class="panel-body tight scroll" id="accountList">
+              <div class="empty">Chưa có account.<br/>Bấm <b>Connect</b>.</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-hd">
+              <span>Pages <span id="pageCount" class="badge">0</span></span>
+              <span class="hint">Click row = chi tiết</span>
+            </h2>
+            <div class="toolbar">
+              <input type="search" id="search" placeholder="Tìm tên page / page id…" />
+              <button class="btn-ghost btn-sm" id="btnSync" type="button" disabled>Sync list</button>
+              <button class="btn-ok btn-sm" id="btnEnrich" type="button" disabled>Sync details</button>
+              <button class="btn-ghost btn-sm" id="btnEnrichForce" type="button" disabled>Force</button>
+              <button class="btn-danger btn-sm" id="btnDelete" type="button" disabled>Xóa</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Page</th>
+                    <th>Followers</th>
+                    <th>Tăng 7d</th>
+                    <th>Category</th>
+                    <th>Account</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="pageRows">
+                  <tr><td colspan="6" class="empty">Chọn account hoặc Connect Facebook</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <p class="footer-note">
+          Graph API only · OAuth multi-account · followers + tăng 7d · feed post · scheduled_publish_time · export Excel/CSV.
+          Data không bịa — metric Meta deprecate sẽ báo rõ.
+        </p>
+      </main>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="modalBg">
+    <div class="modal">
+      <h3 id="modalTitle">Page</h3>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <a class="btn btn-primary btn-sm" id="modalPost" href="/posting.html">Publish</a>
+        <button class="btn-ok btn-sm" id="modalEnrich" type="button">Sync this page</button>
+        <button class="btn-ghost btn-sm" id="modalClose" type="button">Đóng</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/shell.js"></script>
+  <script src="/js/update.js"></script>
+  <script>
+    let selectedAccountId = null;
+    let searchTimer = null;
+    let detailPageId = null;
+    const $ = (id) => document.getElementById(id);
+
+    function showFlash() {
+      const p = new URLSearchParams(location.search);
+      const box = $("flash");
+      if (p.get("connected")) {
+        box.innerHTML = `<div class="flash-block ok">Đã kết nối account #${p.get("account")} — ${p.get("pages")} page(s). Bấm <b>Sync details</b> để lấy followers.</div>`;
+        history.replaceState({}, "", "/");
+      } else if (p.get("error")) {
+        box.innerHTML = `<div class="flash-block err">${decodeURIComponent(p.get("error"))}</div>`;
+        history.replaceState({}, "", "/");
+      }
+    }
+
+    async function api(path, opts) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+    function fmtNum(n) {
+      if (n == null || n === "") return "—";
+      return Number(n).toLocaleString("vi-VN");
+    }
+    function growthLabel(p) {
+      const g = p.insights?.growth_7d;
+      if (!g || g.absolute == null) return { text: "—", cls: "" };
+      const sign = g.absolute > 0 ? "+" : "";
+      let s = `${sign}${fmtNum(g.absolute)}`;
+      if (g.percent != null) s += ` (${sign}${g.percent}%)`;
+      const cls = g.absolute > 0 ? "growth-up" : g.absolute < 0 ? "growth-down" : "";
+      return { text: s, cls };
+    }
+
+    async function loadStats() {
+      const s = await api("/api/stats");
+      $("statAccounts").textContent = s.account_count;
+      $("statPages").textContent = s.page_count;
+      $("statErrors").textContent = s.accounts_error;
+      $("statEnriched").textContent = s.pages_enriched ?? "—";
+      const u = s.app_usage?.call_count;
+      $("statUsage").textContent = u != null ? u + "%" : "—";
+      $("usageHint").textContent =
+        (s.usage_warning ? s.usage_warning + " · " : "") +
+        "Usage từ Meta x-app-usage · Sync details bỏ qua page fresh <12h.";
+    }
+
+    async function loadAccounts() {
+      const { accounts } = await api("/api/accounts");
+      $("accCount").textContent = accounts.length;
+      const el = $("accountList");
+      if (!accounts.length) {
+        el.innerHTML = `<div class="empty">Chưa có account.<br/>Bấm <b>Connect</b>.</div>`;
+        return;
+      }
+      el.innerHTML = accounts.map((a) => `
+        <div class="account ${selectedAccountId === a.id ? "active" : ""}" data-id="${a.id}">
+          <img src="${a.picture_url || ""}" alt="" onerror="this.style.opacity=.3" />
+          <div>
+            <div class="name">${escapeHtml(a.name || a.fb_user_id)}</div>
+            <div class="sub">${a.page_count} pages · <span class="badge ${a.status === "error" ? "err" : "on"}">${a.status}</span></div>
+          </div>
+        </div>
+      `).join("");
+      el.querySelectorAll(".account").forEach((node) => {
+        node.addEventListener("click", () => {
+          selectedAccountId = Number(node.dataset.id);
+          ["btnSync", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
+            $(id).disabled = false;
+          });
+          loadAccounts();
+          loadPages();
+        });
+      });
+    }
+
+    async function loadPages() {
+      const q = $("search").value.trim();
+      const params = new URLSearchParams({ limit: "1000", offset: "0" });
+      if (selectedAccountId) params.set("account_id", String(selectedAccountId));
+      if (q) params.set("q", q);
+      const data = await api("/api/pages?" + params);
+      $("pageCount").textContent = data.total;
+      const tbody = $("pageRows");
+      if (!data.pages.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="empty">Không có page</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = data.pages.map((p) => {
+        const g = growthLabel(p);
+        return `
+        <tr class="clickable" data-id="${p.id}">
+          <td>
+            <strong>${escapeHtml(p.name || "—")}</strong>
+            <div class="muted" style="font-size:.72rem;margin-top:.15rem"><code>${escapeHtml(p.page_id)}</code></div>
+          </td>
+          <td class="num">${fmtNum(p.followers_count ?? p.fan_count)}</td>
+          <td class="num ${g.cls}">${escapeHtml(g.text)}</td>
+          <td class="muted">${escapeHtml(p.category || "—")}</td>
+          <td class="muted">${escapeHtml(p.account_name || "")}</td>
+          <td style="white-space:nowrap">
+            <a class="btn btn-primary btn-sm" href="/posting.html?page=${p.id}" onclick="event.stopPropagation()">Publish</a>
+            <button type="button" class="btn-ghost btn-sm btn-one" data-id="${p.id}">↻</button>
+          </td>
+        </tr>`;
+      }).join("");
+
+      tbody.querySelectorAll("tr.clickable").forEach((tr) => {
+        tr.addEventListener("click", (e) => {
+          if (e.target.closest(".btn-one") || e.target.closest("a")) return;
+          openDetail(Number(tr.dataset.id));
+        });
+      });
+      tbody.querySelectorAll(".btn-one").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          btn.disabled = true;
+          try {
+            await api(`/api/pages/${btn.dataset.id}/enrich`, {
+              method: "POST",
+              body: JSON.stringify({ force: true }),
+            });
+            await loadPages();
+            await loadStats();
+          } catch (err) {
+            alert(err.message);
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+    }
+
+    async function openDetail(id) {
+      detailPageId = id;
+      const { page: p } = await api(`/api/pages/${id}`);
+      const g = growthLabel(p);
+      $("modalTitle").textContent = p.name || p.page_id;
+      $("modalPost").href = `/posting.html?page=${id}`;
+      $("modalBody").innerHTML = `
+        <div class="row"><span class="label">Page ID</span> <code>${escapeHtml(p.page_id)}</code></div>
+        <div class="row"><span class="label">Followers</span> <b>${fmtNum(p.followers_count)}</b> · fans <b>${fmtNum(p.fan_count)}</b></div>
+        <div class="row"><span class="label">Tăng 7 ngày</span> <b class="${g.cls}">${escapeHtml(g.text)}</b></div>
+        <div class="row"><span class="label">Category</span> ${escapeHtml(p.category || "—")}</div>
+        <div class="row"><span class="label">Verified</span> ${escapeHtml(p.verification_status || "—")}</div>
+        <div class="row"><span class="label">Link</span>
+          ${p.link ? `<a href="${escapeHtml(p.link)}" target="_blank" rel="noopener">${escapeHtml(p.link)}</a>` : "—"}</div>
+        <div class="row"><span class="label">Enriched</span> ${escapeHtml(p.enriched_at || "chưa")}</div>
+        ${p.enrich_error ? `<div class="row"><span class="badge err">${escapeHtml(p.enrich_error)}</span></div>` : ""}
+        <div class="divider"></div>
+        <div class="muted" style="font-size:.85rem;white-space:pre-wrap">${escapeHtml(p.about || "—")}</div>
+      `;
+      $("modalBg").classList.add("open");
+    }
+
+    $("btnRefresh").onclick = () => refreshAll();
+    $("search").oninput = () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(loadPages, 250);
+    };
+    $("btnSync").onclick = async () => {
+      if (!selectedAccountId) return;
+      $("btnSync").disabled = true;
+      try {
+        const r = await api(`/api/accounts/${selectedAccountId}/sync`, { method: "POST", body: "{}" });
+        alert(`Synced list: ${r.page_count} pages`);
+        await refreshAll();
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        $("btnSync").disabled = !selectedAccountId;
+      }
+    };
+
+    async function runEnrich(force) {
+      if (!selectedAccountId) return;
+      if (!confirm(force ? "Force re-scan mọi page (tốn API)?" : "Sync details (bỏ qua page fresh <12h)?")) return;
+      $("btnEnrich").disabled = true;
+      $("btnEnrichForce").disabled = true;
+      try {
+        const r = await api(`/api/accounts/${selectedAccountId}/enrich`, {
+          method: "POST",
+          body: JSON.stringify({ force }),
+        });
+        alert(
+          `Quét mới: ${r.ok_count} · Bỏ qua: ${r.skipped_count || 0} · Lỗi: ${r.fail_count}` +
+            (r.app_usage ? `\nApp usage: ${r.app_usage.call_count}%` : "")
+        );
+        await refreshAll();
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        $("btnEnrich").disabled = !selectedAccountId;
+        $("btnEnrichForce").disabled = !selectedAccountId;
+      }
+    }
+    $("btnEnrich").onclick = () => runEnrich(false);
+    $("btnEnrichForce").onclick = () => runEnrich(true);
+
+    $("btnEnrichAll").onclick = async () => {
+      if (!confirm("Sync details tất cả account?")) return;
+      try {
+        const r = await api("/api/pages/enrich-all", {
+          method: "POST",
+          body: JSON.stringify({ force: false }),
+        });
+        alert(`Done ${r.accounts} account(s)` + (r.app_usage ? ` · usage ${r.app_usage.call_count}%` : ""));
+        await refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+
+    $("btnExportXlsx").onclick = async () => {
+      $("btnExportXlsx").disabled = true;
+      try {
+        const body = {};
+        if (selectedAccountId) body.account_id = selectedAccountId;
+        const q = $("search").value.trim();
+        if (q) body.q = q;
+        const meta = await api("/api/export/xlsx/meta", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        alert(`Sheet "${meta.sheetName}" · ${meta.rowCount} dòng · Tổng ${meta.sheets.length} sheet`);
+        window.location.href = "/api/export/xlsx/file";
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        $("btnExportXlsx").disabled = false;
+      }
+    };
+    $("btnExportCsv").onclick = () => {
+      const params = new URLSearchParams();
+      if (selectedAccountId) params.set("account_id", String(selectedAccountId));
+      const q = $("search").value.trim();
+      if (q) params.set("q", q);
+      window.location.href = "/api/export/csv?" + params;
+    };
+    $("btnDelete").onclick = async () => {
+      if (!selectedAccountId) return;
+      if (!confirm("Xóa account + page tokens?")) return;
+      await api(`/api/accounts/${selectedAccountId}`, { method: "DELETE" });
+      selectedAccountId = null;
+      ["btnSync", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
+        $(id).disabled = true;
+      });
+      await refreshAll();
+    };
+    $("modalClose").onclick = () => $("modalBg").classList.remove("open");
+    $("modalBg").onclick = (e) => {
+      if (e.target === $("modalBg")) $("modalBg").classList.remove("open");
+    };
+    $("modalEnrich").onclick = async () => {
+      if (!detailPageId) return;
+      try {
+        await api(`/api/pages/${detailPageId}/enrich`, {
+          method: "POST",
+          body: JSON.stringify({ force: true }),
+        });
+        await openDetail(detailPageId);
+        await loadPages();
+        await loadStats();
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+
+    async function refreshAll() {
+      await Promise.all([loadStats(), loadAccounts(), loadPages()]);
+    }
+
+    showFlash();
+    refreshAll().catch((e) => {
+      $("flash").innerHTML = `<div class="flash-block err">${escapeHtml(e.message)}</div>`;
+    });
+  </script>
+</body>
+</html>
