@@ -1,0 +1,48 @@
+appId: com.fbpagestudio.app
+productName: FB Page Studio
+copyright: Copyright © FB Page Studio
+directories:
+  output: dist-desktop-oauth
+  buildResources: build
+files:
+  - electron/**/*
+  - src/**/*
+  - public/**/*
+  - assets/**/*
+  - package.json
+  - "!data/**/*"
+  - "!dist/**/*"
+  - "!dist-desktop/**/*"
+  - "!build-staging/**/*"
+  - "!.git/**/*"
+asar: true
+asarUnpack:
+  - "**/*.node"
+  - "**/better-sqlite3/**/*"
+win:
+  icon: build/icon.ico
+  target:
+    - target: portable
+      arch:
+        - x64
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+portable:
+  artifactName: FB-Page-Studio-Desktop.exe
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: FB Page Studio
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+extraMetadata:
+  main: electron/main.cjs
+
+
+
+

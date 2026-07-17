@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    .toast-wrap {
+      position: fixed; top: 1rem; right: 1rem; z-index: 100;
+      display: flex; flex-direction: column; gap: .5rem; max-width: 380px;
+    }
+    .toast {
+      padding: .85rem 1rem; border-radius: 12px; border: 1px solid var(--border);
+      background: var(--panel); box-shadow: var(--shadow); animation: in .2s ease;
+      font-size: .88rem;
+    }
+    .toast.success { border-color: rgba(61,214,140,.4); background: var(--ok-soft); }
+    .toast.error { border-color: rgba(255,107,122,.4); background: var(--danger-soft); }
+    .toast.warn { border-color: rgba(245,197,66,.4); background: var(--warn-soft); }
+    @keyframes in { from { opacity:0; transform: translateY(-8px);} to { opacity:1; transform:none;} }
+    .progress-big {
+      height: 14px; background: rgba(255,255,255,.06); border-radius: 99px; overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .progress-big > i {
+      display: block; height: 100%; width: 0%;
+      background: linear-gradient(90deg, #1877f2, #7c5cff);
+      transition: width .35s ease;
+    }
+    .progress-big.fail > i { background: linear-gradient(90deg, #ff6b7a, #c44); }
+    .progress-big.ok > i { background: linear-gradient(90deg, #3dd68c, #1a9); }
+    .task-row { display: grid; grid-template-columns: 1fr 90px 100px; gap: .5rem; align-items: center;
+      padding: .55rem .35rem; border-bottom: 1px solid var(--border); font-size: .82rem; }
+    .mini-bar { height: 6px; background: rgba(255,255,255,.06); border-radius: 4px; overflow: hidden; }
+    .mini-bar > i { display:block; height:100%; background: var(--accent); }
+    .page-card {
+      border: 1px solid var(--border); border-radius: 12px; padding: .75rem;
+      background: rgba(0,0,0,.15); margin-bottom: .5rem;
+    }
+    .page-card.running { border-color: rgba(24,119,242,.45); }
+    .page-card.ok { border-color: rgba(61,214,140,.35); }
+    .page-card.fail { border-color: rgba(255,107,122,.35); }
+    .pct { font-weight: 800; font-variant-numeric: tabular-nums; font-size: 1.1rem; }
+  </style>
+</head>
+<body>
+  <div class="toast-wrap" id="toasts"></div>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/app.html">
+        <img class="brand-mark" src="/assets/icon-64.png" alt="FB Page Studio" width="38" height="38" style="border-radius:11px;object-fit:cover;box-shadow:0 8px 24px rgba(24,119,242,.35)" onerror="this.outerHTML='&lt;div class=&quot;brand-mark&quot;&gt;FB&lt;/div&gt;'" />
+        <div class="brand-text">
+          <strong>Page Studio</strong>
+          <span>Desktop App</span>
+        </div>
+      </a>
+      <div class="nav-label">App</div>
+      <a class="nav-item active" href="/app.html"><span class="ico">▶</span> Vận hành</a>
+      <a class="nav-item" href="/index.html"><span class="ico">▣</span> Pages / Connect</a>
+      <a class="nav-item" href="/posting.html"><span class="ico">✦</span> Cấu hình đăng</a>
+      <a class="nav-item" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
+      <div class="nav-label">Báo cáo</div>
+      <a class="nav-item" href="/api/jobs/reports/csv"><span class="ico">↓</span> Tải CSV chi tiết</a>
+      <a class="nav-item" href="/api/jobs/reports/xlsx"><span class="ico">↓</span> Tải Excel chi tiết</a>
+      <div class="nav-foot">
+        <div class="meta" id="reportPath">Báo cáo: data/exports/</div>
+      </div>
+    </aside>
+
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <h1>Vận hành đăng bài</h1>
+            <div class="sub">Tiến trình % · thông báo · báo cáo CSV/Excel</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <a class="btn btn-ghost btn-sm" href="/index.html">Connect FB</a>
+          <a class="btn btn-ghost btn-sm" href="/api/jobs/reports/csv">CSV</a>
+          <a class="btn btn-ghost btn-sm" href="/api/jobs/reports/xlsx">Excel</a>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="hero" style="cursor:default">
+          <div>
+            <div class="hero-kicker">FB Page Studio · 1 app · nhiều page</div>
+            <div class="hero-title">Đăng ngay · hoặc Hẹn giờ — chọn page rồi bấm nút xanh / vàng</div>
+            <div class="hero-desc">
+              <b style="color:#8fd9a8">Nút xanh = ĐĂNG NGAY</b> lên feed.
+              <b style="color:#e8c96a">Nút vàng = HẸN GIỜ</b> trên Facebook.
+              Progress % · toast OK/FAIL · CSV/Excel.
+            </div>
+          </div>
+          <span class="badge live" id="appVer">v—</span>
+        </div>
+
+        <div class="grid-2">
+          <!-- Pages select -->
+          <section class="panel">
+            <h2 class="panel-hd">
+              <span>Chọn page</span>
+              <span class="hint">
+                <button type="button" class="btn-ghost btn-sm" id="btnAll">Tất cả</button>
+                <button type="button" class="btn-ghost btn-sm" id="btnNone">Bỏ</button>
+              </span>
+            </h2>
+            <div class="panel-body scroll tight" id="pageList" style="max-height:52vh">
+              <div class="muted" style="padding:1rem">Loading…</div>
+            </div>
+            <div class="panel-body" style="border-top:1px solid var(--border)">
+              <!-- ĐĂNG NGAY -->
+              <div style="padding:.75rem;border-radius:12px;border:1px solid rgba(61,214,140,.35);background:rgba(61,214,140,.08);margin-bottom:.85rem">
+                <div style="font-weight:700;color:#8fd9a8;margin-bottom:.35rem">① ĐĂNG NGAY (Feed API)</div>
+                <p class="muted" style="margin:0 0 .65rem;font-size:.8rem">
+                  Đăng <b>ngay lập tức</b> 1 bài lên mỗi page đã tick (text/ảnh/video theo config page).
+                  Cần media trong <code>data/media/inbox</code> + caption kho.
+                </p>
+                <button type="button" class="btn-ok btn-lg" id="btnPost" style="width:100%">
+                  ▶ Đăng ngay — 1 bài / page đã chọn
+                </button>
+              </div>
+
+              <!-- HẸN GIỜ -->
+              <div style="padding:.75rem;border-radius:12px;border:1px solid rgba(245,197,66,.3);background:rgba(245,197,66,.06)">
+                <div style="font-weight:700;color:#e8c96a;margin-bottom:.35rem">② HẸN GIỜ Facebook</div>
+                <p class="muted" style="margin:0 0 .5rem;font-size:.8rem">
+                  Tạo bài <b>scheduled</b> trên FB (10 phút–30 ngày). Khác với đăng ngay.
+                </p>
+                <div class="row2">
+                  <div>
+                    <label>Số ngày tới</label>
+                    <input type="number" id="days" value="1" min="1" max="7" />
+                  </div>
+                  <div>
+                    <label>Bài / ngày / page</label>
+                    <input type="number" id="perDay" value="2" min="1" max="4" />
+                  </div>
+                </div>
+                <button type="button" class="btn-warn" id="btnSched" style="width:100%;margin-top:.65rem">
+                  ⏱ Hẹn giờ (giờ ưa thích page)
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- Progress -->
+          <section class="panel">
+            <h2 class="panel-hd">
+              <span>Tiến trình job</span>
+              <span class="hint" id="jobTitle">Chưa chạy</span>
+            </h2>
+            <div class="panel-body">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:.5rem">
+                <div>
+                  <span class="pct" id="jobPct">0%</span>
+                  <span class="muted" id="jobStats"> · 0/0</span>
+                </div>
+                <span class="badge" id="jobStatus">idle</span>
+              </div>
+              <div class="progress-big" id="jobBar"><i id="jobBarFill"></i></div>
+              <p class="muted" id="jobCurrent" style="margin:.65rem 0">—</p>
+
+              <h3 style="font-size:.85rem;margin:1rem 0 .5rem;color:var(--muted)">Theo page</h3>
+              <div id="pageProgress"><p class="muted">Chọn page và bấm chạy.</p></div>
+
+              <h3 style="font-size:.85rem;margin:1rem 0 .5rem;color:var(--muted)">Từng nhiệm vụ</h3>
+              <div id="taskList" style="max-height:240px;overflow:auto"></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel section-gap">
+          <h2 class="panel-hd">
+            <span>Thông báo job</span>
+            <span class="hint">OK / FAIL chi tiết</span>
+          </h2>
+          <div class="panel-body" id="notifs" style="max-height:200px;overflow:auto">
+            <p class="muted">Chưa có thông báo.</p>
+          </div>
+        </section>
+
+        <section class="panel section-gap">
+          <h2 class="panel-hd">
+            <span>Báo cáo gần đây (DB log)</span>
+            <a class="hint" href="/api/jobs/reports/xlsx" style="color:#9ec1ff">Tải Excel đầy đủ →</a>
+          </h2>
+          <div class="panel-body" style="padding:0">
+            <div class="table-wrap" style="max-height:280px">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Thời gian</th>
+                    <th>Page</th>
+                    <th>Loại</th>
+                    <th>Kết quả</th>
+                    <th>Link</th>
+                    <th>Lỗi</th>
+                  </tr>
+                </thead>
+                <tbody id="logs"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="/js/shell.js"></script>
+  <script src="/js/update.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let pages = [];
+    let currentJobId = null;
+    let pollTimer = null;
+    let seenNotifs = new Set();
+
+    async function api(path, opts) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    }
+
+    function toast(level, title, body) {
+      const el = document.createElement("div");
+      el.className = "toast " + (level === "error" ? "error" : level === "warn" ? "warn" : "success");
+      el.innerHTML = `<b>${esc(title)}</b><div class="muted" style="margin-top:.25rem;color:inherit;opacity:.9">${esc(body || "")}</div>`;
+      $("toasts").appendChild(el);
+      setTimeout(() => el.remove(), 7000);
+    }
+
+    function selectedIds() {
+      return [...document.querySelectorAll(".pg:checked")].map((c) => Number(c.value));
+    }
+
+    async function loadPages() {
+      const data = await api("/api/posting/pages");
+      pages = data.pages || [];
+      const el = $("pageList");
+      if (!pages.length) {
+        el.innerHTML = `<div class="empty">Chưa có page. <a href="/index.html">Connect Facebook</a></div>`;
+        return;
+      }
+      el.innerHTML = pages.map((p) => `
+        <label class="page-item" style="cursor:pointer;display:flex;gap:.65rem;align-items:flex-start">
+          <input type="checkbox" class="pg" value="${p.id}" style="margin-top:.35rem" />
+          <div>
+            <strong>${esc(p.name)}</strong>
+            <div class="sub">
+              <span class="badge ${p.enabled ? "on" : "off"}">${p.enabled ? "sched ON" : "OFF"}</span>
+              · ${p.posts_today || 0}/${p.max_posts_per_day || "?"} today
+            </div>
+          </div>
+        </label>
+      `).join("");
+    }
+
+    function renderJob(job) {
+      if (!job) return;
+      const p = job.progress || {};
+      $("jobTitle").textContent = job.title || job.id;
+      $("jobPct").textContent = (p.percent || 0) + "%";
+      $("jobStats").textContent = ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · ${p.done || 0}/${p.total || 0}`;
+      $("jobStatus").textContent = job.status;
+      $("jobStatus").className = "badge " + (job.status === "ok" ? "on" : job.status === "fail" ? "err" : "live");
+      $("jobBarFill").style.width = (p.percent || 0) + "%";
+      const bar = $("jobBar");
+      bar.className = "progress-big " + (job.status === "ok" ? "ok" : job.status === "fail" ? "fail" : "");
+      $("jobCurrent").textContent = p.current_label || "—";
+
+      // pages
+      const pp = $("pageProgress");
+      if (!job.pages?.length) pp.innerHTML = "<p class='muted'>—</p>";
+      else {
+        pp.innerHTML = job.pages.map((pg) => `
+          <div class="page-card ${esc(pg.status)}">
+            <div style="display:flex;justify-content:space-between">
+              <b>${esc(pg.page_name)}</b>
+              <span class="badge">${esc(pg.status)} · ${pg.percent}%</span>
+            </div>
+            <div class="mini-bar" style="margin-top:.4rem"><i style="width:${pg.percent}%"></i></div>
+            <div class="muted" style="margin-top:.3rem;font-size:.75rem">OK ${pg.ok} · FAIL ${pg.fail} · ${pg.done}/${pg.total}</div>
+          </div>
+        `).join("");
+      }
+
+      // tasks
+      const tl = $("taskList");
+      tl.innerHTML = (job.tasks || []).map((t) => `
+        <div class="task-row">
+          <div>
+            <b>${esc(t.page_name)}</b>
+            <div class="muted">${esc(t.label)} · ${esc(t.message || "")}</div>
+          </div>
+          <div class="${t.status === "ok" ? "ok" : t.status === "fail" ? "fail" : "muted"}">${esc(t.status)}</div>
+          <div>
+            <div class="mini-bar"><i style="width:${t.percent || 0}%"></i></div>
+            <div class="muted" style="font-size:.7rem;margin-top:.15rem">${t.percent || 0}%</div>
+          </div>
+        </div>
+      `).join("");
+
+      // notifications → toasts once
+      for (const n of job.notifications || []) {
+        if (seenNotifs.has(n.id)) continue;
+        seenNotifs.add(n.id);
+        toast(n.level === "error" ? "error" : n.level === "warn" ? "warn" : "success", n.title, n.body);
+      }
+
+      const box = $("notifs");
+      if (!job.notifications?.length) box.innerHTML = "<p class='muted'>—</p>";
+      else {
+        box.innerHTML = job.notifications.map((n) => `
+          <div style="padding:.45rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
+            <span class="${n.level === "error" ? "fail" : n.level === "success" ? "ok" : "muted"}">[${esc(n.level)}]</span>
+            <b>${esc(n.title)}</b>
+            <div class="muted">${esc(n.body)} · ${esc(n.at)}</div>
+          </div>
+        `).join("");
+      }
+
+      if (job.report_files?.length) {
+        $("reportPath").textContent = "Đã ghi: " + job.report_files.map((f) => f.split(/[/\\]/).pop()).join(", ");
+      }
+
+      if (["ok", "fail", "partial"].includes(job.status)) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        loadLogs();
+      }
+    }
+
+    async function watchJob(id) {
+      currentJobId = id;
+      seenNotifs = new Set();
+      clearInterval(pollTimer);
+      const pull = async () => {
+        try {
+          const data = await api("/api/jobs/" + id);
+          renderJob(data.job);
+          if (data.reports) {
+            $("reportPath").textContent =
+              (data.reports.csv_exists ? "CSV ✓ " : "CSV — ") +
+              (data.reports.xlsx_exists ? "Excel ✓" : "Excel — ") +
+              " · " + (data.reports.dir || "");
+          }
+        } catch (e) {
+          toast("error", "Job error", e.message);
+        }
+      };
+      await pull();
+      pollTimer = setInterval(pull, 800);
+    }
+
+    async function runPost() {
+      const ids = selectedIds();
+      if (!ids.length) return toast("warn", "Chưa chọn page", "Tick ít nhất 1 page");
+      if (!confirm(`Đăng 1 bài ngay trên ${ids.length} page?\n(Tuần tự + anti-spam, ghi CSV/Excel)`)) return;
+      try {
+        const r = await api("/api/jobs/bulk-post", {
+          method: "POST",
+          body: JSON.stringify({ page_row_ids: ids }),
+        });
+        toast("success", "Job bắt đầu", r.job.title);
+        watchJob(r.job.id);
+      } catch (e) {
+        toast("error", "Không chạy được", e.message);
+      }
+    }
+
+    async function runSched() {
+      const ids = selectedIds();
+      if (!ids.length) return toast("warn", "Chưa chọn page", "Tick ít nhất 1 page");
+      const days = Number($("days").value) || 1;
+      const perDay = Number($("perDay").value) || 2;
+      if (!confirm(`Hẹn giờ FB: ${ids.length} page × ${perDay} bài/ngày × ${days} ngày?\nCó progress % + báo cáo`)) return;
+      try {
+        const r = await api("/api/jobs/bulk-schedule", {
+          method: "POST",
+          body: JSON.stringify({
+            page_row_ids: ids,
+            mode: "active_times",
+            days_ahead: days,
+            posts_per_day: perDay,
+            tz_offset_minutes: 420,
+            post_type: "photo",
+            force_active: false,
+          }),
+        });
+        if (!r.ok && r.error) throw new Error(r.error);
+        toast("success", "Job hẹn giờ", r.job.title);
+        watchJob(r.job.id);
+      } catch (e) {
+        toast("error", "Hẹn giờ fail", e.message);
+      }
+    }
+
+    async function loadLogs() {
+      try {
+        const data = await api("/api/posting/logs?limit=40");
+        const tb = $("logs");
+        if (!data.logs?.length) {
+          tb.innerHTML = `<tr><td colspan="6" class="muted">Chưa có log</td></tr>`;
+          return;
+        }
+        tb.innerHTML = data.logs.map((l) => {
+          const ok = l.status === "ok" || l.status === "scheduled" || l.status === "ok_comment_failed";
+          return `<tr>
+            <td>${esc(l.created_at)}</td>
+            <td>${esc(l.page_name)}</td>
+            <td>${esc(l.post_type)}</td>
+            <td class="${ok ? "ok" : "fail"}">${esc(l.status)}</td>
+            <td>${l.fb_post_url ? `<a href="${esc(l.fb_post_url)}" target="_blank">link</a>` : esc(l.fb_post_id || "—")}</td>
+            <td class="fail">${esc(l.error || "")}</td>
+          </tr>`;
+        }).join("");
+      } catch {
+        /* ignore */
+      }
+    }
+
+    $("btnAll").onclick = () => document.querySelectorAll(".pg").forEach((c) => (c.checked = true));
+    $("btnNone").onclick = () => document.querySelectorAll(".pg").forEach((c) => (c.checked = false));
+    $("btnPost").onclick = runPost;
+    $("btnSched").onclick = runSched;
+
+    api("/api/version").then((v) => { $("appVer").textContent = "v" + v.version; }).catch(() => {});
+    api("/api/jobs/reports/info").then((r) => {
+      $("reportPath").textContent = r.dir || "data/exports";
+    }).catch(() => {});
+
+    loadPages().then(loadLogs).catch((e) => toast("error", "Lỗi", e.message));
+  </script>
+</body>
+</html>

@@ -27,13 +27,22 @@ import {
   refreshAppUsageFromMeta,
 } from "../services/rateLimit.js";
 import { config } from "../config.js";
-import { isPackaged, getExeDir } from "../paths.js";
+import { isPackaged, getExeDir, debugPaths } from "../paths.js";
 import {
   checkForUpdate,
   applyUpdate,
   getUpdateConfig,
   scheduleRestart,
 } from "../services/updater.js";
+import {
+  getAntiSpamSettings,
+  saveAntiSpamSettings,
+  applyPreset,
+  getAntiSpamStats,
+  getRecommendations,
+  listRecentBlocks,
+  ensureAntiSpamTables,
+} from "../services/antiSpam.js";
 
 const router = Router();
 
@@ -44,7 +53,65 @@ router.get("/health", (_req, res) => {
     service: "fb-page-studio",
     version: config.version,
     phase: "auth+pages+enrich+publish",
+    fb_configured: !!(config.facebook.appId && config.facebook.appSecret),
   });
+});
+
+/** GET /api/debug/paths — diagnose packaged .env / data */
+router.get("/debug/paths", (_req, res) => {
+  res.json({
+    ...debugPaths(),
+    fb_app_id_set: !!config.facebook.appId,
+    redirect_uri: config.facebook.redirectUri,
+    app_base_url: config.appBaseUrl,
+  });
+});
+
+/** GET /api/anti-spam — settings + live stats + tips */
+router.get("/anti-spam", (_req, res) => {
+  ensureAntiSpamTables();
+  res.json(getAntiSpamStats());
+});
+
+/** PUT /api/anti-spam — update settings (all numbers customizable) */
+router.put("/anti-spam", (req, res) => {
+  try {
+    const body = req.body || {};
+    if (typeof body.blocked_keywords === "string") {
+      body.blocked_keywords = body.blocked_keywords
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    if (typeof body.blocked_page_ids === "string") {
+      body.blocked_page_ids = body.blocked_page_ids
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    const settings = saveAntiSpamSettings(body);
+    res.json({ ok: true, settings, stats: getAntiSpamStats() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** POST /api/anti-spam/preset { name: 'safe'|'strict'|'loose' } */
+router.post("/anti-spam/preset", (req, res) => {
+  try {
+    const settings = applyPreset(req.body?.name || "safe");
+    res.json({
+      ok: true,
+      settings,
+      tips: getRecommendations().tips,
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.get("/anti-spam/events", (req, res) => {
+  res.json({ events: listRecentBlocks(Number(req.query.limit) || 40) });
 });
 
 /** GET /api/version — current build + update config */

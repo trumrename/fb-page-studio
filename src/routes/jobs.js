@@ -1,0 +1,182 @@
+import { Router } from "express";
+import { getDb } from "../db/index.js";
+import {
+  startBulkPostJob,
+  startBulkScheduleJob,
+  startJob,
+  listJobs,
+  getJob,
+  subscribeJob,
+} from "../services/jobRunner.js";
+import { scheduleBulk } from "../services/schedule.js";
+import { getReportPaths } from "../services/reportExport.js";
+
+const router = Router();
+
+function pagesMeta(ids) {
+  const db = getDb();
+  if (!ids?.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  return db
+    .prepare(
+      `SELECT id, page_id, name FROM fb_pages WHERE id IN (${placeholders})`
+    )
+    .all(...ids);
+}
+
+/** GET /api/jobs */
+router.get("/", (_req, res) => {
+  res.json({ jobs: listJobs(30), reports: getReportPaths() });
+});
+
+/** Reports — before /:id */
+router.get("/reports/info", (_req, res) => {
+  res.json(getReportPaths());
+});
+
+router.get("/reports/csv", (_req, res) => {
+  const p = getReportPaths();
+  if (!p.csv_exists) {
+    return res.status(404).json({ error: "Chưa có file CSV báo cáo" });
+  }
+  res.download(p.csv, "dang_bai_chi_tiet.csv");
+});
+
+router.get("/reports/xlsx", (_req, res) => {
+  const p = getReportPaths();
+  if (!p.xlsx_exists) {
+    return res.status(404).json({ error: "Chưa có file Excel báo cáo" });
+  }
+  res.download(p.xlsx, "dang_bai_chi_tiet.xlsx");
+});
+
+/**
+ * POST /api/jobs/bulk-post
+ */
+router.post("/bulk-post", (req, res) => {
+  try {
+    const ids = (req.body?.page_row_ids || []).map(Number).filter((n) => n > 0);
+    if (!ids.length) return res.status(400).json({ error: "Chọn ít nhất 1 page" });
+    const job = startBulkPostJob({
+      page_row_ids: ids,
+      pagesMeta: pagesMeta(ids),
+      ignore_quota: !!req.body?.ignore_quota,
+      ignore_interval: !!req.body?.ignore_interval,
+      title: req.body?.title,
+    });
+    res.json({ ok: true, job, reports: getReportPaths() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * POST /api/jobs/bulk-schedule
+ */
+router.post("/bulk-schedule", async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.dry_run) {
+      const plan = await scheduleBulk({ ...body, dry_run: true });
+      return res.json(plan);
+    }
+
+    const planned = await scheduleBulk({ ...body, dry_run: true });
+    const slots = [];
+    for (const p of planned.plan || []) {
+      if (p.error || !p.slots?.length) continue;
+      const meta = pagesMeta([p.page_row_id])[0] || {};
+      for (const s of p.slots) {
+        slots.push({
+          page_row_id: p.page_row_id,
+          page_name: p.page_name || meta.name,
+          page_id: meta.page_id,
+          unix: s.unix,
+          local_label: s.local_label,
+          post_type: body.post_type === "auto" ? undefined : body.post_type,
+        });
+      }
+    }
+    if (!slots.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "Không có slot hợp lệ để hẹn (kiểm tra anti-spam / giờ / page)",
+        plan: planned,
+      });
+    }
+
+    const job = startBulkScheduleJob({
+      slots,
+      title: `Hẹn giờ · ${slots.length} slot · ${planned.mode}`,
+    });
+    res.json({
+      ok: true,
+      job,
+      plan_preview: planned,
+      reports: getReportPaths(),
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/run-one", (req, res) => {
+  try {
+    const id = Number(req.body?.page_row_id);
+    if (!id) return res.status(400).json({ error: "page_row_id required" });
+    const meta = pagesMeta([id]);
+    const job = startJob({
+      type: "single_post",
+      title: `Đăng 1 bài · ${meta[0]?.name || id}`,
+      tasks: [
+        {
+          kind: "post",
+          page_row_id: id,
+          page_name: meta[0]?.name || `page#${id}`,
+          page_id: meta[0]?.page_id,
+          label: "Đăng 1 bài ngay",
+          opts: {
+            ignore_quota: !!req.body?.ignore_quota,
+            ignore_interval: !!req.body?.ignore_interval,
+          },
+        },
+      ],
+    });
+    res.json({ ok: true, job, reports: getReportPaths() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** GET /api/jobs/:id */
+router.get("/:id", (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json({ job, reports: getReportPaths() });
+});
+
+/** SSE progress */
+router.get("/:id/stream", (req, res) => {
+  const id = req.params.id;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  const send = (job) => {
+    res.write(`data: ${JSON.stringify({ job })}\n\n`);
+  };
+
+  const cur = getJob(id);
+  if (cur) send(cur);
+  else res.write(`data: ${JSON.stringify({ error: "not found" })}\n\n`);
+
+  const unsub = subscribeJob(id, send);
+  const keep = setInterval(() => res.write(`: ping\n\n`), 15000);
+  req.on("close", () => {
+    clearInterval(keep);
+    unsub();
+  });
+});
+
+export default router;

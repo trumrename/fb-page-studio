@@ -6,7 +6,14 @@ import { noteGraphResponse } from "./rateLimit.js";
  * Multi-account: call these with each account's tokens.
  */
 
-export function buildLoginUrl(state) {
+/**
+ * Official Facebook Login dialog URL.
+ * - Do NOT force auth_type=rerequest on first login (breaks 2FA / "could not validate").
+ * - Use display=page so full 2FA works in system browser.
+ * @param {string} state
+ * @param {{ rerequest?: boolean }} [opts]
+ */
+export function buildLoginUrl(state, opts = {}) {
   const { appId, redirectUri, scopes } = config.facebook;
   const params = new URLSearchParams({
     client_id: appId,
@@ -14,9 +21,13 @@ export function buildLoginUrl(state) {
     state,
     scope: scopes.join(","),
     response_type: "code",
-    // auth_type=rerequest forces re-prompt when permissions missing
-    auth_type: "rerequest",
+    // Full page in real browser — supports password + 2FA + device check
+    display: "page",
   });
+  // Only when user explicitly re-grants missing permissions
+  if (opts.rerequest) {
+    params.set("auth_type", "rerequest");
+  }
   return `https://www.facebook.com/${config.facebook.graphVersion}/dialog/oauth?${params}`;
 }
 

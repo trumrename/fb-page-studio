@@ -25,6 +25,14 @@ import {
   loadCaptionsFromDisk,
 } from "./mediaLibrary.js";
 import { appendPostCsv } from "./postLogCsv.js";
+import {
+  assertCanPublish,
+  pickUnusedMedia,
+  finalizeMediaAfterSuccess,
+  noteGraphFailure,
+  clampPageLimits,
+  ensureAntiSpamTables,
+} from "./antiSpam.js";
 
 function todayKey() {
   const d = new Date();
@@ -105,11 +113,13 @@ export function getPagePostConfig(pageRowId) {
 
 export function savePagePostConfig(pageRowId, body) {
   const cur = getPagePostConfig(pageRowId);
-  const next = {
+  let next = {
     ...cur,
     ...body,
     page_row_id: pageRowId,
   };
+  // Apply anti-spam floors/caps so UI and DB stay consistent
+  next = clampPageLimits(next);
   const db = getDb();
   db.prepare(
     `INSERT INTO page_post_config (
@@ -200,6 +210,7 @@ function logPost(row) {
  * @param {object} opts { force?: boolean } — force ignores enabled flag for manual test
  */
 export async function runOnePost(pageRowId, opts = {}) {
+  ensureAntiSpamTables();
   const db = getDb();
   const page = db
     .prepare(
@@ -210,13 +221,10 @@ export async function runOnePost(pageRowId, opts = {}) {
     throw new Error("Page not found or inactive");
   }
 
-  let cfg = resetDayCounterIfNeeded(getPagePostConfig(pageRowId));
+  let cfg = clampPageLimits(resetDayCounterIfNeeded(getPagePostConfig(pageRowId)));
   if (!opts.force && !cfg.enabled) {
     throw new Error("Posting disabled for this page (bật enabled trong config)");
   }
-
-  // story only flag — not implemented
-  // Feed post ignores story_enabled
 
   if (cfg.posts_today >= cfg.max_posts_per_day && !opts.ignore_quota) {
     throw new Error(
@@ -240,16 +248,75 @@ export async function runOnePost(pageRowId, opts = {}) {
   const postType = String(sequence[slot % sequence.length]).toLowerCase();
 
   const pageToken = decryptToken(page.page_token_enc);
-  // Captions: ưu tiên kho file txt/csv (random mặc định), kèm inline nếu có
-  const caption = pickCaption(
-    cfg.captions,
-    slot,
-    cfg.pick_mode || "random",
-    cfg.captions_folder
-  );
-  const dayIndex = (cfg.posts_today || 0) + 1;
-
+  // Try several captions if duplicate blocked (exclude already-tried)
+  let caption = "";
   let mediaPath = null;
+  let mediaSkipped = 0;
+  const triedCaptions = [];
+  for (let attempt = 0; attempt < 12; attempt++) {
+    caption = pickCaption(
+      cfg.captions,
+      slot + attempt,
+      attempt === 0 ? cfg.pick_mode || "random" : "sequential",
+      cfg.captions_folder,
+      triedCaptions
+    );
+    if (caption) triedCaptions.push(caption);
+    if (postType === "photo" || postType === "image" || postType === "video") {
+      const kind = postType === "video" ? "video" : "photo";
+      const picked = pickUnusedMedia(
+        cfg.media_folder,
+        kind,
+        cfg.pick_mode,
+        slot + attempt,
+        cfg.posted_folder
+      );
+      mediaPath = picked.path;
+      mediaSkipped += picked.skipped || 0;
+    }
+    const gate = assertCanPublish({
+      pageRowId,
+      pageId: page.page_id,
+      caption,
+      mediaPath,
+      ignore_quota: !!opts.ignore_quota,
+      ignore_interval: !!opts.ignore_interval,
+    });
+    if (gate.ok && caption) break;
+    if (gate.ok && !caption) {
+      // empty pool
+      break;
+    }
+    // hard fail codes that won't fix by retrying caption/media
+    if (
+      [
+        "IGNORE_QUOTA_LOCKED",
+        "IGNORE_INTERVAL_LOCKED",
+        "GRAPH_BACKOFF",
+        "APP_USAGE_HIGH",
+        "PAGE_BLOCKED",
+        "GLOBAL_HOUR_CAP",
+        "GLOBAL_DAY_CAP",
+        "PAGE_COOLDOWN",
+      ].includes(gate.code)
+    ) {
+      throw new Error(gate.error);
+    }
+    if (!caption || attempt === 11) {
+      if (gate.code === "CAPTION_DUP" || triedCaptions.length) {
+        throw new Error(
+          `Hết caption khả dụng trong kho (đã dùng / trùng trong cửa sổ anti-spam). ` +
+            `Đã thử ${triedCaptions.length} caption. Thêm dòng vào data/media/captions (.txt/.csv).` +
+            (gate.error ? ` — ${gate.error}` : "")
+        );
+      }
+      throw new Error(gate.error || "Không chọn được caption");
+    }
+    // CAPTION_DUP / MEDIA_DUP / KEYWORD → retry pick
+    mediaPath = null;
+  }
+
+  const dayIndex = (cfg.posts_today || 0) + 1;
   let movedPath = null;
   let result = null;
 
@@ -262,17 +329,22 @@ export async function runOnePost(pageRowId, opts = {}) {
       }
       result = await publishText(page.page_id, pageToken, caption);
     } else if (postType === "photo" || postType === "image") {
-      mediaPath = pickMedia(
-        cfg.media_folder,
-        "photo",
-        cfg.pick_mode,
-        slot
-      );
       if (!mediaPath) {
         throw new Error(
-          `Không có ảnh trong media_folder: ${cfg.media_folder || "(chưa cài)"}`
+          `Không có ảnh chưa dùng trong media_folder: ${cfg.media_folder || "(chưa cài)"}` +
+            (mediaSkipped ? ` (đã bỏ ${mediaSkipped} file trùng hash)` : "")
         );
       }
+      // final hash gate
+      const gate2 = assertCanPublish({
+        pageRowId,
+        pageId: page.page_id,
+        caption,
+        mediaPath,
+        ignore_quota: !!opts.ignore_quota,
+        ignore_interval: !!opts.ignore_interval,
+      });
+      if (!gate2.ok) throw new Error(gate2.error);
       result = await publishPhoto(
         page.page_id,
         pageToken,
@@ -280,17 +352,21 @@ export async function runOnePost(pageRowId, opts = {}) {
         caption
       );
     } else if (postType === "video") {
-      mediaPath = pickMedia(
-        cfg.media_folder,
-        "video",
-        cfg.pick_mode,
-        slot
-      );
       if (!mediaPath) {
         throw new Error(
-          `Không có video trong media_folder: ${cfg.media_folder || "(chưa cài)"}`
+          `Không có video chưa dùng: ${cfg.media_folder || "(chưa cài)"}` +
+            (mediaSkipped ? ` (đã bỏ ${mediaSkipped} file trùng hash)` : "")
         );
       }
+      const gate2 = assertCanPublish({
+        pageRowId,
+        pageId: page.page_id,
+        caption,
+        mediaPath,
+        ignore_quota: !!opts.ignore_quota,
+        ignore_interval: !!opts.ignore_interval,
+      });
+      if (!gate2.ok) throw new Error(gate2.error);
       result = await publishVideo(
         page.page_id,
         pageToken,
@@ -305,11 +381,16 @@ export async function runOnePost(pageRowId, opts = {}) {
       throw new Error(`Unknown post type in sequence: ${postType}`);
     }
 
-    // Move media only after Graph success
-    if (mediaPath && cfg.posted_folder) {
-      ensureDir(cfg.posted_folder);
-      movedPath = moveToPosted(mediaPath, cfg.posted_folder);
-    }
+    // Move media immediately after Graph OK + record hash forever
+    const fin = finalizeMediaAfterSuccess({
+      mediaPath,
+      postedFolder: cfg.posted_folder,
+      page_row_id: pageRowId,
+      page_id: page.page_id,
+      fb_post_id: result?.post_id,
+      caption,
+    });
+    movedPath = fin.movedPath;
 
     let commentText = null;
     let commentId = null;
@@ -328,7 +409,6 @@ export async function runOnePost(pageRowId, opts = {}) {
           );
           commentId = c.comment_id;
         } catch (ce) {
-          // Post succeeded; comment failed — log both, don't invent comment success
           commentText = `[comment failed] ${commentText}`;
           const logFailComment = logPost({
             page_row_id: pageRowId,
@@ -345,7 +425,6 @@ export async function runOnePost(pageRowId, opts = {}) {
             comment_text: commentText,
             comment_id: null,
           });
-          // still update counters
           savePagePostConfig(pageRowId, {
             ...cfg,
             next_slot_index: slot + 1,
@@ -360,6 +439,8 @@ export async function runOnePost(pageRowId, opts = {}) {
             log: logFailComment,
             day_index: dayIndex,
             post_type: postType,
+            media_moved_to: movedPath,
+            media_hash: fin.hash,
           };
         }
       }
@@ -396,8 +477,24 @@ export async function runOnePost(pageRowId, opts = {}) {
       day_index: dayIndex,
       post_type: postType,
       media_moved_to: movedPath,
+      media_hash: fin.hash,
     };
   } catch (e) {
+    // Only Graph API failures trigger backoff — not local validation (caption/media empty)
+    const isGraphFail =
+      !!e.fb ||
+      e.code === 4 ||
+      e.code === 17 ||
+      /graph|facebook|oauth|rate limit|spam|permission|#\d+/i.test(
+        String(e.message || "")
+      );
+    const isLocalValidation =
+      /caption|media|inbox|kho|quota|interval|cooldown|anti-spam|hết caption|không có ảnh|không có video/i.test(
+        String(e.message || "")
+      );
+    if (isGraphFail && !isLocalValidation) {
+      noteGraphFailure(e);
+    }
     const log = logPost({
       page_row_id: pageRowId,
       page_id: page.page_id,

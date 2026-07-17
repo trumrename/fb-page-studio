@@ -11,12 +11,7 @@ import {
   listScheduledPosts,
   validateScheduleUnix,
 } from "./publish.js";
-import {
-  pickMedia,
-  moveToPosted,
-  pickCaption,
-  ensureDir,
-} from "./mediaLibrary.js";
+import { pickCaption } from "./mediaLibrary.js";
 import { getPagePostConfig, savePagePostConfig } from "./poster.js";
 import {
   getActiveTimesForPageRow,
@@ -24,6 +19,15 @@ import {
   parseFixedTimes,
 } from "./activeTimes.js";
 import { appendPostCsv } from "./postLogCsv.js";
+import {
+  assertCanPublish,
+  pickUnusedMedia,
+  finalizeMediaAfterSuccess,
+  noteGraphFailure,
+  enforceBulkLimits,
+  ensureAntiSpamTables,
+  getAntiSpamSettings,
+} from "./antiSpam.js";
 
 function logScheduled(row) {
   const db = getDb();
@@ -59,6 +63,7 @@ function logScheduled(row) {
  * @param {object} opts { scheduled_publish_time, post_type?, caption?, force_type? }
  */
 export async function scheduleOnePost(pageRowId, opts = {}) {
+  ensureAntiSpamTables();
   const db = getDb();
   const page = db
     .prepare(
@@ -82,16 +87,60 @@ export async function scheduleOnePost(pageRowId, opts = {}) {
     opts.post_type || opts.force_type || sequence[slot % sequence.length]
   ).toLowerCase();
 
-  const caption =
-    opts.caption != null && String(opts.caption).trim()
-      ? String(opts.caption).trim()
-      : pickCaption(cfg.captions, slot, cfg.pick_mode || "random", cfg.captions_folder);
+  let caption = "";
+  let mediaPath = null;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    caption =
+      opts.caption != null && String(opts.caption).trim()
+        ? String(opts.caption).trim()
+        : pickCaption(
+            cfg.captions,
+            slot + attempt,
+            cfg.pick_mode || "random",
+            cfg.captions_folder
+          );
+    if (postType === "photo" || postType === "image" || postType === "video") {
+      const kind = postType === "video" ? "video" : "photo";
+      const picked = pickUnusedMedia(
+        cfg.media_folder,
+        kind,
+        cfg.pick_mode,
+        slot + attempt,
+        cfg.posted_folder
+      );
+      mediaPath = picked.path;
+    }
+    const gate = assertCanPublish({
+      pageRowId,
+      pageId: page.page_id,
+      caption,
+      mediaPath: postType === "text" ? null : mediaPath,
+      ignore_quota: false,
+      ignore_interval: false,
+      isSchedule: true,
+    });
+    if (gate.ok) break;
+    if (
+      [
+        "GRAPH_BACKOFF",
+        "APP_USAGE_HIGH",
+        "PAGE_BLOCKED",
+        "GLOBAL_HOUR_CAP",
+        "GLOBAL_DAY_CAP",
+        "PAGE_COOLDOWN",
+      ].includes(gate.code)
+    ) {
+      throw new Error(gate.error);
+    }
+    if (attempt === 7) throw new Error(gate.error);
+    mediaPath = null;
+  }
 
   const pageToken = decryptToken(page.page_token_enc);
   const schedule = { scheduled_publish_time: unix };
-  let mediaPath = null;
   let movedPath = null;
   let result = null;
+  let fin = { movedPath: null, hash: null };
 
   try {
     if (postType === "text") {
@@ -102,14 +151,12 @@ export async function scheduleOnePost(pageRowId, opts = {}) {
       }
       result = await publishText(page.page_id, pageToken, caption, schedule);
     } else if (postType === "photo" || postType === "image") {
-      mediaPath = pickMedia(cfg.media_folder, "photo", cfg.pick_mode, slot);
       if (!mediaPath) {
-        // fallback text if no photo
         if (caption && opts.allow_text_fallback !== false) {
           postType = "text";
           result = await publishText(page.page_id, pageToken, caption, schedule);
         } else {
-          throw new Error(`Không có ảnh trong: ${cfg.media_folder || "(trống)"}`);
+          throw new Error(`Không có ảnh chưa dùng trong: ${cfg.media_folder || "(trống)"}`);
         }
       } else {
         result = await publishPhoto(
@@ -121,9 +168,8 @@ export async function scheduleOnePost(pageRowId, opts = {}) {
         );
       }
     } else if (postType === "video") {
-      mediaPath = pickMedia(cfg.media_folder, "video", cfg.pick_mode, slot);
       if (!mediaPath) {
-        throw new Error(`Không có video trong: ${cfg.media_folder || "(trống)"}`);
+        throw new Error(`Không có video chưa dùng: ${cfg.media_folder || "(trống)"}`);
       }
       result = await publishVideo(
         page.page_id,
@@ -136,9 +182,26 @@ export async function scheduleOnePost(pageRowId, opts = {}) {
       throw new Error(`Loại bài không hỗ trợ hẹn giờ: ${postType}`);
     }
 
-    if (mediaPath && cfg.posted_folder) {
-      ensureDir(cfg.posted_folder);
-      movedPath = moveToPosted(mediaPath, cfg.posted_folder);
+    // Media: hash forever + move to posted immediately after FB accepts schedule
+    if (mediaPath && postType !== "text") {
+      fin = finalizeMediaAfterSuccess({
+        mediaPath,
+        postedFolder: cfg.posted_folder,
+        page_row_id: pageRowId,
+        page_id: page.page_id,
+        fb_post_id: result?.post_id,
+        caption,
+      });
+      movedPath = fin.movedPath;
+    } else if (caption) {
+      fin = finalizeMediaAfterSuccess({
+        mediaPath: null,
+        postedFolder: cfg.posted_folder,
+        page_row_id: pageRowId,
+        page_id: page.page_id,
+        fb_post_id: result?.post_id,
+        caption,
+      });
     }
 
     savePagePostConfig(pageRowId, {
@@ -172,9 +235,11 @@ export async function scheduleOnePost(pageRowId, opts = {}) {
       post: result,
       log,
       media_moved_to: movedPath,
+      media_hash: fin.hash,
       page: { id: page.id, page_id: page.page_id, name: page.name },
     };
   } catch (e) {
+    noteGraphFailure(e);
     const log = logScheduled({
       page_row_id: pageRowId,
       page_id: page.page_id,
@@ -348,14 +413,20 @@ export async function scheduleBulk(body = {}) {
     });
   }
 
+  // Anti-spam: hard bulk caps + jitter
+  const limited = enforceBulkLimits(plan, body);
+  const finalPlan = limited.plan;
+
   if (dryRun) {
     return {
       dry_run: true,
       mode,
       tz_offset_minutes: tz,
-      plan: plan.map((p) => ({
+      anti_spam_trimmed: limited.trimmed,
+      anti_spam_caps: limited.caps,
+      plan: finalPlan.map((p) => ({
         ...p,
-        slots: p.slots.map((d) => ({
+        slots: (p.slots || []).map((d) => ({
           iso: d.toISOString(),
           unix: Math.floor(d.getTime() / 1000),
           local_label: formatLocal(d, tz),
@@ -365,7 +436,7 @@ export async function scheduleBulk(body = {}) {
   }
 
   const results = [];
-  for (const p of plan) {
+  for (const p of finalPlan) {
     if (p.error || !p.slots.length) {
       results.push({
         page_row_id: p.page_row_id,
@@ -411,6 +482,8 @@ export async function scheduleBulk(body = {}) {
     dry_run: false,
     mode,
     tz_offset_minutes: tz,
+    anti_spam_trimmed: limited.trimmed,
+    anti_spam_caps: limited.caps,
     results,
     total_ok: results.reduce((n, r) => n + (r.scheduled_ok || 0), 0),
     total_fail: results.reduce((n, r) => n + (r.scheduled_fail || 0), 0),

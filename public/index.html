@@ -18,10 +18,12 @@
         </div>
       </a>
       <div class="nav-label">Workspace</div>
-      <a class="nav-item active" href="/"><span class="ico">▣</span> Pages & Insights</a>
+      <a class="nav-item" href="/app.html"><span class="ico">▶</span> Vận hành (App)</a>
+      <a class="nav-item active" href="/index.html"><span class="ico">▣</span> Pages & Insights</a>
       <a class="nav-item" href="/posting.html"><span class="ico">✦</span> Publish & Schedule</a>
+      <a class="nav-item" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
       <div class="nav-label">Quick</div>
-      <a class="nav-item" href="/auth/facebook"><span class="ico">+</span> Connect Facebook</a>
+      <a class="nav-item" href="/auth/facebook?external=1" target="_blank" rel="noopener"><span class="ico">+</span> Connect Facebook</a>
       <a class="nav-item" href="/api/posting/logs/csv"><span class="ico">↓</span> Post logs CSV</a>
       <div class="nav-label">System</div>
       <a class="nav-item" href="#" id="navUpdate" onclick="document.getElementById('btnUpdateApp')?.click();return false"><span class="ico">↑</span> Cập nhật phiên bản</a>
@@ -49,7 +51,7 @@
           <button class="btn-ghost" id="btnExportXlsx" type="button">Excel</button>
           <button class="btn-ghost" id="btnExportCsv" type="button">CSV</button>
           <a class="btn btn-primary" href="/posting.html">Publish →</a>
-          <a class="btn btn-ghost" href="/auth/facebook">+ Connect</a>
+          <a class="btn btn-ghost" id="btnConnect" href="/auth/facebook?external=1" target="_blank" rel="noopener">+ Connect</a>
         </div>
       </header>
 

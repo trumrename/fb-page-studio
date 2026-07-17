@@ -42,6 +42,11 @@ export function appendPostCsv(row) {
     return escape(row[h]);
   }).join(",");
   fs.appendFileSync(LOG_FILE, line + "\r\n", "utf8");
+
+  // Mirror into detailed report CSV + Excel (async, non-blocking)
+  import("./reportExport.js")
+    .then((m) => m.appendFromPostLog(row))
+    .catch((e) => console.warn("[report mirror]", e.message));
 }
 
 export function getPostLogCsvPath() {

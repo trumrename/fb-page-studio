@@ -175,7 +175,7 @@ function migrate(database) {
 export function cleanupOldOauthStates() {
   getDb()
     .prepare(
-      `DELETE FROM oauth_states WHERE created_at < datetime('now', '-1 hour')`
+      `DELETE FROM oauth_states WHERE created_at < datetime('now', '-2 hour')`
     )
     .run();
 }

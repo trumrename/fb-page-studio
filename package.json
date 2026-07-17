@@ -1,19 +1,25 @@
 {
   "name": "fb-page-studio",
-  "version": "1.0.0",
-  "description": "FB Page Studio — Official Graph API multi-account Page manager + publish + schedule",
+  "version": "1.1.0",
+  "description": "FB Page Studio — Desktop app · Graph API multi-account Page manager",
+  "author": "trumrename",
   "type": "module",
-  "main": "src/server.js",
+  "main": "electron/main.cjs",
   "githubRepo": "trumrename/fb-page-studio",
-  "updateAsset": "FB-Page-Studio.exe",
+  "updateAsset": "FB-Page-Studio-Desktop.exe",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "desktop": "cross-env OPEN_BROWSER=0 electron .",
+    "desktop:dev": "cross-env OPEN_BROWSER=0 electron .",
     "stop": "node scripts/stop-port.js",
     "restart": "node scripts/stop-port.js && node src/server.js",
     "init-db": "node src/db/init.js",
     "build:exe": "node scripts/build-exe.mjs",
-    "release:zip": "node scripts/build-exe.mjs --zip"
+    "release:zip": "node scripts/build-exe.mjs --zip",
+    "build:desktop": "electron-builder --win portable --x64",
+    "build:desktop:setup": "electron-builder --win nsis portable --x64",
+    "postinstall": "electron-builder install-app-deps"
   },
   "engines": {
     "node": ">=18"
@@ -26,6 +32,9 @@
     "nanoid": "^5.1.0"
   },
   "devDependencies": {
-    "caxa": "^3.0.1"
+    "caxa": "^3.0.1",
+    "cross-env": "^7.0.3",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
   }
 }

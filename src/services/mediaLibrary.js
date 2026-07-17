@@ -166,18 +166,26 @@ function parseCaptionsCsv(text) {
  * Merge captions from disk folder/file + optional inline list.
  * pickMode: random (default for disk pool) | sequential
  */
+/**
+ * @param {string[]} [exclude] captions to skip (already tried / blocked as dup)
+ */
 export function pickCaption(
   captions,
   slotIndex = 0,
   pickMode = "random",
-  captionsFolder = ""
+  captionsFolder = "",
+  exclude = []
 ) {
   const fromDisk = loadCaptionsFromDisk(captionsFolder);
   const inline = Array.isArray(captions)
     ? captions.map((c) => String(c).trim()).filter(Boolean)
     : [];
   // Disk first (kho), then inline extras
-  const list = [...fromDisk, ...inline.filter((c) => !fromDisk.includes(c))];
+  let list = [...fromDisk, ...inline.filter((c) => !fromDisk.includes(c))];
+  if (exclude?.length) {
+    const ban = new Set(exclude.map((c) => String(c).trim().toLowerCase()));
+    list = list.filter((c) => !ban.has(String(c).trim().toLowerCase()));
+  }
   if (!list.length) return "";
   const mode = pickMode === "sequential" ? "sequential" : "random";
   if (mode === "random") {

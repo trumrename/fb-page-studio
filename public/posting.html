@@ -20,6 +20,7 @@
       <div class="nav-label">Workspace</div>
       <a class="nav-item" href="/"><span class="ico">▣</span> Pages & Insights</a>
       <a class="nav-item active" href="/posting.html"><span class="ico">✦</span> Publish & Schedule</a>
+      <a class="nav-item" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
       <div class="nav-label">Exports</div>
       <a class="nav-item" href="/api/posting/logs/csv"><span class="ico">↓</span> Post logs CSV</a>
       <div class="nav-label">System</div>
@@ -451,10 +452,14 @@
         <div id="oneActiveBox" class="muted" style="margin-top:.5rem"></div>
 
         <p class="muted" style="margin-top:1rem">Hôm nay: ${c.posts_today || 0} · last: ${esc(c.last_post_at || "—")} · slot: ${c.next_slot_index || 0}</p>
-        <div class="actions">
-          <button type="button" class="btn-primary" id="btnSave">Lưu config</button>
-          <button type="button" class="btn-ok" id="btnRun">Đăng ngay</button>
-          <button type="button" class="btn-ghost" id="btnRunForce">Đăng (force)</button>
+
+        <div style="margin-top:1rem;padding:1rem;border-radius:12px;border:1px solid rgba(61,214,140,.4);background:rgba(61,214,140,.1)">
+          <div style="font-weight:700;color:#8fd9a8;margin-bottom:.5rem">ĐĂNG NGAY (page này)</div>
+          <div class="actions" style="margin:0">
+            <button type="button" class="btn-ok btn-lg" id="btnRun">▶ Đăng 1 bài ngay</button>
+            <button type="button" class="btn-ghost" id="btnRunForce">Đăng (force — nếu anti-spam cho phép)</button>
+            <button type="button" class="btn-primary" id="btnSave">Lưu config</button>
+          </div>
         </div>
       `;
       $("btnSave").onclick = saveConfig;

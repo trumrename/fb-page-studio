@@ -8,13 +8,16 @@ import { getDb } from "./db/index.js";
 import authRoutes from "./routes/auth.js";
 import apiRoutes from "./routes/api.js";
 import postingRoutes from "./routes/posting.js";
+import jobsRoutes from "./routes/jobs.js";
 import { runSchedulerTick } from "./services/poster.js";
+import { ensureAntiSpamTables } from "./services/antiSpam.js";
 
 const app = express();
 const publicDir = getPublicDir();
 
-// Init DB + default media folders
+// Init DB + default media folders + anti-spam
 getDb();
+ensureAntiSpamTables();
 const dataRoot = config.dataDir || path.dirname(config.databasePath);
 fs.mkdirSync(path.join(dataRoot, "media", "inbox"), { recursive: true });
 fs.mkdirSync(path.join(dataRoot, "media", "posted"), { recursive: true });
@@ -67,21 +70,27 @@ if (!fs.existsSync(exampleBeside)) {
 }
 
 app.use(express.json({ limit: "10mb" }));
-app.use(express.static(publicDir));
 
-app.use("/auth", authRoutes);
-app.use("/api", apiRoutes);
-app.use("/api/posting", postingRoutes);
+// App console is the main entry (before static index.html)
+app.get("/", (_req, res) => {
+  res.redirect(302, "/app.html");
+});
 
-app.get("/api", (_req, res) => {
+app.get("/api/meta", (_req, res) => {
   res.json({
     name: "fb-page-studio",
     version: config.version,
-    phase: "2 — feed posting + schedule + portable exe",
+    phase: "app-console + jobs + reports",
     packaged: isPackaged(),
     note: "Story flag optional. Official Graph API only.",
   });
 });
+
+app.use("/auth", authRoutes);
+app.use("/api", apiRoutes);
+app.use("/api/posting", postingRoutes);
+app.use("/api/jobs", jobsRoutes);
+app.use(express.static(publicDir));
 
 // Scheduler: every 60s check enabled pages
 const SCHEDULER_MS = Number(process.env.SCHEDULER_INTERVAL_MS || 60000);
@@ -120,9 +129,9 @@ function openBrowser(url) {
 const server = app.listen(config.port, () => {
   const local = `http://localhost:${config.port}`;
   console.log(`\n  FB Page Studio  v${config.version}`);
-  console.log(`  UI             →  ${local}`);
+  console.log(`  APP CONSOLE    →  ${local}/app.html`);
   console.log(`  Public base    →  ${config.appBaseUrl}`);
-  console.log(`  Posting        →  ${local}/posting.html`);
+  console.log(`  Reports        →  ${path.join(dataRoot, "exports")}`);
   console.log(`  Data folder    →  ${dataRoot}`);
   console.log(`  .env           →  ${getEnvPath()}`);
   console.log(`  Media inbox    →  ${path.join(dataRoot, "media", "inbox")}`);
@@ -132,8 +141,13 @@ const server = app.listen(config.port, () => {
     `  App configured →  ${config.facebook.appId ? "yes" : "NO — set .env"}\n`
   );
 
-  if (process.env.OPEN_BROWSER !== "0") {
-    openBrowser(local);
+  // Desktop (Electron) never opens external browser
+  if (
+    process.env.OPEN_BROWSER !== "0" &&
+    !process.env.ELECTRON_RUN &&
+    !process.versions?.electron
+  ) {
+    openBrowser(`${local}/app.html`);
   }
 });
 

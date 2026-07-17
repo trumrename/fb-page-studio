@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B1B3A"/>
+      <stop offset="50%" stop-color="#1877F2"/>
+      <stop offset="100%" stop-color="#6EA8FF"/>
+    </linearGradient>
+    <filter id="s" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#g)"/>
+  <circle cx="400" cy="120" r="90" fill="rgba(255,255,255,0.08)"/>
+  <text x="256" y="295" text-anchor="middle" font-family="Segoe UI, Arial, Helvetica, sans-serif"
+        font-size="188" font-weight="800" fill="#FFFFFF" filter="url(#s)">FB</text>
+  <!-- page + publish arrow -->
+  <rect x="148" y="348" width="150" height="88" rx="16" fill="rgba(255,255,255,0.18)" stroke="rgba(255,255,255,0.45)" stroke-width="4"/>
+  <rect x="168" y="370" width="90" height="10" rx="5" fill="rgba(255,255,255,0.55)"/>
+  <rect x="168" y="392" width="70" height="10" rx="5" fill="rgba(255,255,255,0.35)"/>
+  <path d="M330 370 L400 392 L330 414 Z" fill="#FFFFFF"/>
+</svg>

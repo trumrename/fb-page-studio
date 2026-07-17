@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Anti-spam · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/">
+        <div class="brand-mark">FB</div>
+        <div class="brand-text">
+          <strong>Page Studio</strong>
+          <span>Graph API · Official</span>
+        </div>
+      </a>
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="/"><span class="ico">▣</span> Pages & Insights</a>
+      <a class="nav-item" href="/posting.html"><span class="ico">✦</span> Publish & Schedule</a>
+      <a class="nav-item active" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
+      <div class="nav-foot">
+        <div class="meta">Media hash 1 lần · Global cap<br/>Caption dup · Backoff · Jitter</div>
+      </div>
+    </aside>
+
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <h1>Anti-spam & Safety</h1>
+            <div class="sub">Tùy chỉnh + preset khuyến nghị</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" class="btn-ok btn-sm" id="btnSafe">Preset Recommended</button>
+          <button type="button" class="btn-warn btn-sm" id="btnStrict">Preset Strict</button>
+          <button type="button" class="btn-ghost btn-sm" id="btnLoose">Preset Loose</button>
+          <button type="button" class="btn-primary" id="btnSave">Lưu settings</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="flash" id="flash"></div>
+
+        <div class="stats" id="liveStats">
+          <div class="stat"><div class="n" id="stHour">—</div><div class="l">Bài / giờ (global)</div></div>
+          <div class="stat"><div class="n" id="stDay">—</div><div class="l">Bài / 24h (global)</div></div>
+          <div class="stat"><div class="n" id="stMedia">—</div><div class="l">Media hash đã dùng</div></div>
+          <div class="stat"><div class="n" id="stCap">—</div><div class="l">Caption đã track</div></div>
+          <div class="stat"><div class="n" id="stBack">—</div><div class="l">Backoff (giây)</div></div>
+        </div>
+
+        <div class="panel section-gap" style="margin-top:0">
+          <h2 class="panel-hd">Gợi ý an toàn</h2>
+          <div class="panel-body" id="tips" class="muted"></div>
+        </div>
+
+        <div class="panel section-gap">
+          <h2 class="panel-hd">Cấu hình (tùy chỉnh được)</h2>
+          <div class="panel-body" id="form">
+            <p class="muted">Loading…</p>
+          </div>
+        </div>
+
+        <div class="panel section-gap">
+          <h2 class="panel-hd">Events gần đây</h2>
+          <div class="panel-body">
+            <table>
+              <thead><tr><th>Time</th><th>Kind</th><th>Detail</th></tr></thead>
+              <tbody id="events"></tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="/js/shell.js"></script>
+  <script src="/js/update.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    async function api(path, opts) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+    function flash(msg, ok) {
+      const el = $("flash");
+      el.className = "flash show " + (ok ? "ok" : "err");
+      el.textContent = msg;
+    }
+    function esc(s) {
+      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;");
+    }
+    function num(id, v) {
+      return `<input type="number" id="${id}" value="${esc(v)}" />`;
+    }
+    function chk(id, v, label) {
+      return `<label><input type="checkbox" id="${id}" ${v ? "checked" : ""}/> ${label}</label>`;
+    }
+
+    let settings = null;
+
+    function renderForm(s) {
+      settings = s;
+      $("form").innerHTML = `
+        <div class="checks">
+          ${chk("enabled", s.enabled, "Bật anti-spam")}
+          ${chk("block_duplicate_caption", s.block_duplicate_caption, "Chặn caption trùng")}
+          ${chk("block_duplicate_media", s.block_duplicate_media, "Chặn media trùng (hash)")}
+          ${chk("media_once_forever", s.media_once_forever, "1 ảnh/video = 1 lần đời (mọi page)")}
+          ${chk("allow_ignore_quota", s.allow_ignore_quota, "Cho phép Force bỏ quota (KHÔNG khuyến nghị)")}
+          ${chk("allow_ignore_interval", s.allow_ignore_interval, "Cho phép Force bỏ interval")}
+        </div>
+        <div class="row3">
+          <div><label>Max bài / giờ (global)</label>${num("max_posts_per_hour_global", s.max_posts_per_hour_global)}</div>
+          <div><label>Max bài / 24h (global)</label>${num("max_posts_per_day_global", s.max_posts_per_day_global)}</div>
+          <div><label>Caption dup window (giờ)</label>${num("caption_dup_window_hours", s.caption_dup_window_hours)}</div>
+        </div>
+        <div class="row3">
+          <div><label>Page cooldown (phút)</label>${num("page_cooldown_minutes", s.page_cooldown_minutes)}</div>
+          <div><label>Interval sàn page (phút)</label>${num("min_interval_minutes_floor", s.min_interval_minutes_floor)}</div>
+          <div><label>Cap max_posts/day page</label>${num("min_max_posts_per_day_cap", s.min_max_posts_per_day_cap)}</div>
+        </div>
+        <div class="row3">
+          <div><label>Jitter min (phút)</label>${num("jitter_minutes_min", s.jitter_minutes_min)}</div>
+          <div><label>Jitter max (phút)</label>${num("jitter_minutes_max", s.jitter_minutes_max)}</div>
+          <div><label>Pause khi App usage ≥ %</label>${num("pause_on_app_usage_pct", s.pause_on_app_usage_pct)}</div>
+        </div>
+        <div class="row3">
+          <div><label>Bulk max pages</label>${num("bulk_max_pages", s.bulk_max_pages)}</div>
+          <div><label>Bulk max slots / page</label>${num("bulk_max_slots_per_page", s.bulk_max_slots_per_page)}</div>
+          <div><label>Bulk max total slots</label>${num("bulk_max_total", s.bulk_max_total)}</div>
+        </div>
+        <div class="row2">
+          <div><label>Backoff base (giây)</label>${num("graph_backoff_base_sec", s.graph_backoff_base_sec)}</div>
+          <div><label>Backoff max (giây)</label>${num("graph_backoff_max_sec", s.graph_backoff_max_sec)}</div>
+        </div>
+        <label>Từ khóa caption chặn (mỗi dòng / cách phẩy)</label>
+        <textarea id="blocked_keywords">${esc((s.blocked_keywords || []).join("\n"))}</textarea>
+        <label>Page block/cooldown list (page row id hoặc page_id FB, mỗi dòng)</label>
+        <textarea id="blocked_page_ids">${esc((s.blocked_page_ids || []).join("\n"))}</textarea>
+        <p class="muted" style="margin-top:1rem">
+          <b>Media rule cứng:</b> hash SHA-256 file → đăng OK 1 lần → chuyển ngay folder <code>posted</code> · hash lưu DB · copy lại file vẫn bị chặn.
+        </p>
+      `;
+    }
+
+    function collect() {
+      return {
+        enabled: $("enabled").checked ? 1 : 0,
+        block_duplicate_caption: $("block_duplicate_caption").checked ? 1 : 0,
+        block_duplicate_media: $("block_duplicate_media").checked ? 1 : 0,
+        media_once_forever: $("media_once_forever").checked ? 1 : 0,
+        allow_ignore_quota: $("allow_ignore_quota").checked ? 1 : 0,
+        allow_ignore_interval: $("allow_ignore_interval").checked ? 1 : 0,
+        max_posts_per_hour_global: Number($("max_posts_per_hour_global").value),
+        max_posts_per_day_global: Number($("max_posts_per_day_global").value),
+        caption_dup_window_hours: Number($("caption_dup_window_hours").value),
+        page_cooldown_minutes: Number($("page_cooldown_minutes").value),
+        min_interval_minutes_floor: Number($("min_interval_minutes_floor").value),
+        min_max_posts_per_day_cap: Number($("min_max_posts_per_day_cap").value),
+        jitter_minutes_min: Number($("jitter_minutes_min").value),
+        jitter_minutes_max: Number($("jitter_minutes_max").value),
+        pause_on_app_usage_pct: Number($("pause_on_app_usage_pct").value),
+        bulk_max_pages: Number($("bulk_max_pages").value),
+        bulk_max_slots_per_page: Number($("bulk_max_slots_per_page").value),
+        bulk_max_total: Number($("bulk_max_total").value),
+        graph_backoff_base_sec: Number($("graph_backoff_base_sec").value),
+        graph_backoff_max_sec: Number($("graph_backoff_max_sec").value),
+        blocked_keywords: $("blocked_keywords").value,
+        blocked_page_ids: $("blocked_page_ids").value,
+      };
+    }
+
+    async function load() {
+      const data = await api("/api/anti-spam");
+      $("stHour").textContent = `${data.posts_last_hour}/${data.settings.max_posts_per_hour_global}`;
+      $("stDay").textContent = `${data.posts_last_24h}/${data.settings.max_posts_per_day_global}`;
+      $("stMedia").textContent = data.media_hashes;
+      $("stCap").textContent = data.captions_tracked;
+      $("stBack").textContent = data.backoff?.active ? data.backoff.seconds_left : "0";
+      $("tips").innerHTML = (data.recommendations || []).map((t) => `· ${esc(t)}`).join("<br/>");
+      renderForm(data.settings);
+      const ev = await api("/api/anti-spam/events?limit=30");
+      const tb = $("events");
+      if (!ev.events?.length) {
+        tb.innerHTML = `<tr><td colspan="3" class="muted">Chưa có event</td></tr>`;
+      } else {
+        tb.innerHTML = ev.events.map((e) =>
+          `<tr><td>${esc(e.created_at)}</td><td>${esc(e.kind)}</td><td>${esc(e.detail)}</td></tr>`
+        ).join("");
+      }
+    }
+
+    $("btnSave").onclick = async () => {
+      try {
+        await api("/api/anti-spam", { method: "PUT", body: JSON.stringify(collect()) });
+        flash("Đã lưu anti-spam settings", true);
+        await load();
+      } catch (e) {
+        flash(e.message, false);
+      }
+    };
+    async function preset(name) {
+      try {
+        await api("/api/anti-spam/preset", { method: "POST", body: JSON.stringify({ name }) });
+        flash(`Đã áp preset: ${name}`, true);
+        await load();
+      } catch (e) {
+        flash(e.message, false);
+      }
+    }
+    $("btnSafe").onclick = () => preset("safe");
+    $("btnStrict").onclick = () => preset("strict");
+    $("btnLoose").onclick = () => preset("loose");
+
+    load().catch((e) => flash(e.message, false));
+  </script>
+</body>
+</html>
