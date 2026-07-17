@@ -10,3 +10,10 @@ _apply_update.bat
 .DS_Store
 *.log
 .grok/
+keys/license-private.pem
+keys/issued/
+dist-desktop/
+dist-desktop-*/
+FB-Page-Studio-App/
+_test-server.*
+_clear_backoff.mjs

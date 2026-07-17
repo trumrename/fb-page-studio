@@ -33,6 +33,7 @@ import {
   clampPageLimits,
   ensureAntiSpamTables,
 } from "./antiSpam.js";
+import { assertCanPublish as assertLicenseActive } from "./license.js";
 
 function todayKey() {
   const d = new Date();
@@ -211,6 +212,7 @@ function logPost(row) {
  */
 export async function runOnePost(pageRowId, opts = {}) {
   ensureAntiSpamTables();
+  assertLicenseActive();
   const db = getDb();
   const page = db
     .prepare(

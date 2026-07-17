@@ -21,6 +21,7 @@
       <a class="nav-item" href="/"><span class="ico">▣</span> Pages & Insights</a>
       <a class="nav-item active" href="/posting.html"><span class="ico">✦</span> Publish & Schedule</a>
       <a class="nav-item" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
+      <a class="nav-item" href="/license.html"><span class="ico">🔑</span> License</a>
       <div class="nav-label">Exports</div>
       <a class="nav-item" href="/api/posting/logs/csv"><span class="ico">↓</span> Post logs CSV</a>
       <div class="nav-label">System</div>
@@ -165,6 +166,121 @@
               <button type="button" class="btn-ok btn-sm" id="btnActiveSelected">⏱ Giờ tích cực (đã tick)</button>
             </div>
             <div id="bulkResult" class="muted" style="margin-top:.85rem"></div>
+          </div>
+        </section>
+
+        <section class="panel section-gap">
+          <h2 class="panel-hd">
+            <span>Rotation so-le · Admin × Page × Nhóm</span>
+            <span class="hint">tuần tự 1 bài · gap cùng page</span>
+          </h2>
+          <div class="panel-body">
+            <p class="muted" style="margin-top:0">
+              Thứ tự: <b>bài # → pageIndex → adminIndex → nhóm so-le</b>
+              (nhóm ngắn skip, nhóm dài chạy tiếp).
+              <b>Cùng page + cùng admin:</b> giờ trong khung + gap random.
+              <b>Khác admin/nhóm:</b> không chờ phút (API ~350ms).
+              <br/>Mặc định: <b>tự nhóm theo Meta App</b> (account Connect App 1 → nhóm App 1, Connect App 2 → nhóm App 2). So le App1↔App2.
+            </p>
+
+            <div class="row3">
+              <div>
+                <label>Mode giờ</label>
+                <select id="rotMode">
+                  <option value="windows">Khung giờ (sáng/tối…)</option>
+                  <option value="fixed_gap">Fixed: giờ đầu + gap</option>
+                </select>
+              </div>
+              <div>
+                <label>Số ngày tới</label>
+                <input type="number" id="rotDays" min="1" max="14" value="1" />
+              </div>
+              <div>
+                <label>Loại bài</label>
+                <select id="rotPostType">
+                  <option value="auto">auto</option>
+                  <option value="photo">photo</option>
+                  <option value="text">text</option>
+                  <option value="video">video</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="rotWindowsBox">
+              <label style="margin-top:.65rem;display:block">Khung giờ (mỗi dòng: tên | HH:mm | HH:mm | số bài)</label>
+              <textarea id="rotWindows" rows="3" placeholder="Sáng | 07:30 | 11:30 | 2&#10;Tối | 18:00 | 21:30 | 2"></textarea>
+              <p class="muted" style="margin:.35rem 0 0;font-size:.85rem">VD 4 bài/ngày: 2 sáng + 2 tối. Gap cùng page vẫn áp dụng giữa các bài.</p>
+            </div>
+
+            <div id="rotFixedBox" style="display:none">
+              <div class="row3" style="margin-top:.35rem">
+                <div>
+                  <label>Bài / page / ngày</label>
+                  <input type="number" id="rotPerDay" min="1" max="12" value="2" />
+                </div>
+                <div>
+                  <label>Giờ đầu (từ)</label>
+                  <input type="text" id="rotFirstStart" value="08:00" placeholder="08:00" />
+                </div>
+                <div>
+                  <label>Giờ đầu (đến · random)</label>
+                  <input type="text" id="rotFirstEnd" value="10:00" placeholder="10:00" />
+                </div>
+              </div>
+            </div>
+
+            <div class="row3" style="margin-top:.35rem">
+              <div>
+                <label>Gap cùng page (giờ min)</label>
+                <input type="number" id="rotGapMin" min="0.25" max="24" step="0.25" value="1.75" />
+              </div>
+              <div>
+                <label>Gap cùng page (giờ max)</label>
+                <input type="number" id="rotGapMax" min="0.25" max="48" step="0.25" value="2.5" />
+              </div>
+              <div>
+                <label>Jitter phút (min–max)</label>
+                <div class="row2">
+                  <input type="number" id="rotJitMin" min="0" value="3" />
+                  <input type="number" id="rotJitMax" min="0" value="35" />
+                </div>
+              </div>
+            </div>
+
+            <label class="checks" style="margin-top:.65rem;display:block">
+              <input type="checkbox" id="rotAutoMeta" checked /> Tự nhóm theo Meta App (App 1 / App 2) — khuyên dùng
+            </label>
+            <div class="row2" style="margin-top:.35rem" id="rotManualGroups">
+              <div>
+                <label>Nhóm tay 1 — account id (bỏ qua nếu bật tự nhóm)</label>
+                <input type="text" id="rotG1" placeholder="1,2,3" />
+              </div>
+              <div>
+                <label>Nhóm tay 2 — account id</label>
+                <input type="text" id="rotG2" placeholder="4,5" />
+              </div>
+            </div>
+            <p class="muted" style="margin:.35rem 0 0;font-size:.85rem">
+              Connect: <a href="/auth/facebook?external=1&app=app1" target="_blank">App 1</a> ·
+              <a href="/auth/facebook?external=1&app=app2" target="_blank">App 2</a>
+              — account hiện badge app bên Pages.
+            </p>
+            <div id="rotMatrix" class="muted" style="margin-top:.5rem;font-size:.85rem"></div>
+
+            <label class="checks" style="margin-top:.65rem;display:block">
+              <input type="checkbox" id="rotOnlyEnabled" /> Chỉ page đang ON (enabled)
+            </label>
+            <label class="checks" style="display:block">
+              <input type="checkbox" id="rotUseTicked" /> Chỉ page đang tick bên trái (page_row_ids)
+            </label>
+
+            <div class="actions">
+              <button type="button" class="btn-ghost" id="btnRotLoad">Tải cài đặt</button>
+              <button type="button" class="btn-ghost" id="btnRotSave">Lưu cài đặt</button>
+              <button type="button" class="btn-ghost" id="btnRotPreview">Xem thứ tự / giờ</button>
+              <button type="button" class="btn-warn" id="btnRotRun">Hẹn giờ theo rotation</button>
+            </div>
+            <div id="rotResult" class="muted" style="margin-top:.85rem"></div>
           </div>
         </section>
 
@@ -683,7 +799,211 @@
         `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     })();
 
-    loadPages().then(loadLogs).catch((e) => flash(e.message, false));
+    /* ── Rotation so-le ── */
+    function parseIdsCsv(s) {
+      return String(s || "")
+        .split(/[,\s]+/)
+        .map((x) => Number(x))
+        .filter((n) => n > 0);
+    }
+
+    function parseWindowsText(text) {
+      return String(text || "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const parts = line.split("|").map((p) => p.trim());
+          if (parts.length < 4) return null;
+          return {
+            name: parts[0] || "Khung",
+            start: parts[1],
+            end: parts[2],
+            posts: Number(parts[3]) || 0,
+          };
+        })
+        .filter(Boolean);
+    }
+
+    function windowsToText(windows) {
+      return (windows || [])
+        .map((w) => `${w.name} | ${w.start} | ${w.end} | ${w.posts}`)
+        .join("\n");
+    }
+
+    function rotToggleMode() {
+      const m = $("rotMode").value;
+      $("rotWindowsBox").style.display = m === "windows" ? "block" : "none";
+      $("rotFixedBox").style.display = m === "fixed_gap" ? "block" : "none";
+    }
+
+    function collectRotationBody(extra = {}) {
+      const autoMeta = $("rotAutoMeta")?.checked !== false;
+      const g1 = parseIdsCsv($("rotG1").value);
+      const g2 = parseIdsCsv($("rotG2").value);
+      const groups = [];
+      if (!autoMeta) {
+        if (g1.length) groups.push({ id: "g1", name: "Nhóm 1", account_ids: g1 });
+        if (g2.length) groups.push({ id: "g2", name: "Nhóm 2", account_ids: g2 });
+      }
+      const body = {
+        mode: $("rotMode").value,
+        days_ahead: Number($("rotDays").value) || 1,
+        post_type: $("rotPostType").value,
+        same_page_gap_hours_min: Number($("rotGapMin").value) || 1.75,
+        same_page_gap_hours_max: Number($("rotGapMax").value) || 2.5,
+        jitter_minutes_min: Number($("rotJitMin").value) || 0,
+        jitter_minutes_max: Number($("rotJitMax").value) || 30,
+        only_enabled_pages: $("rotOnlyEnabled").checked,
+        auto_groups_by_meta_app: autoMeta,
+        groups: autoMeta ? [] : groups,
+        windows: parseWindowsText($("rotWindows").value),
+        fixed_gap: {
+          first_start: $("rotFirstStart").value.trim() || "08:00",
+          first_end: $("rotFirstEnd").value.trim() || "10:00",
+          gap_hours_min: Number($("rotGapMin").value) || 2,
+          gap_hours_max: Number($("rotGapMax").value) || 2.5,
+        },
+        posts_per_page_per_day: Number($("rotPerDay").value) || 2,
+        page_row_ids: $("rotUseTicked").checked ? selectedPageIds() : [],
+        ...extra,
+      };
+      return body;
+    }
+
+    function applyRotationSettings(s) {
+      if (!s) return;
+      $("rotMode").value = s.mode === "fixed_gap" ? "fixed_gap" : "windows";
+      $("rotDays").value = s.days_ahead ?? 1;
+      $("rotPostType").value = s.post_type || "auto";
+      $("rotGapMin").value = s.same_page_gap_hours_min ?? 1.75;
+      $("rotGapMax").value = s.same_page_gap_hours_max ?? 2.5;
+      $("rotJitMin").value = s.jitter_minutes_min ?? 3;
+      $("rotJitMax").value = s.jitter_minutes_max ?? 35;
+      $("rotOnlyEnabled").checked = !!s.only_enabled_pages;
+      $("rotPerDay").value = s.posts_per_page_per_day ?? 2;
+      if ($("rotAutoMeta")) {
+        $("rotAutoMeta").checked = s.auto_groups_by_meta_app !== false;
+      }
+      if (s.fixed_gap) {
+        $("rotFirstStart").value = s.fixed_gap.first_start || "08:00";
+        $("rotFirstEnd").value = s.fixed_gap.first_end || "10:00";
+      }
+      if (s.windows?.length) $("rotWindows").value = windowsToText(s.windows);
+      else if (!$("rotWindows").value.trim()) {
+        $("rotWindows").value = "Sáng | 07:30 | 11:30 | 1\nTối | 18:00 | 21:30 | 1";
+      }
+      const g = s.groups || [];
+      $("rotG1").value = (g[0]?.account_ids || []).join(",");
+      $("rotG2").value = (g[1]?.account_ids || []).join(",");
+      rotToggleMode();
+    }
+
+    function renderRotResult(r, isRun) {
+      const box = $("rotResult");
+      const sum = r.summary || {};
+      let html = `<b>${isRun ? "Đã tạo job hẹn giờ" : "Preview rotation"}</b><br/>`;
+      html += `Admin ${sum.accounts || "?"} · Nhóm ${sum.groups || "?"} · max page/admin ${sum.max_pages || "?"} · `;
+      html += `bài/page/ngày ${sum.posts_per_page_per_day || "?"} · slot hợp lệ <b>${sum.total_final ?? (r.slots || []).length}</b>`;
+      if (sum.anti_spam_trimmed) html += ` · <span class="fail">anti-spam đã cắt bulk</span>`;
+      html += `<br/><span class="muted">${esc(sum.order_logic || "")}</span><br/>`;
+      html += `<span class="muted">${esc(sum.wait_logic || "")}</span><br/>`;
+      if (r.job?.id) {
+        html += `<div class="ok" style="margin:.4rem 0">Job <b>${esc(r.job.id)}</b> · ${esc(r.job.title || "")} · theo dõi progress ở App console</div>`;
+      }
+      const prev = r.preview_order || (r.slots || []).slice(0, 24).map((s) => ({
+        order: s.order,
+        label: `${s.group_name} · ${s.account_name} · P${s.page_index} · bài${s.post_round} · ${s.local_label}`,
+      }));
+      if (prev.length) {
+        html += `<div style="margin-top:.5rem;max-height:240px;overflow:auto;font-size:.85rem">`;
+        html += prev.map((p) => `${p.order}. ${esc(p.label)}`).join("<br/>");
+        if ((r.slots || []).length > prev.length) html += `<br/>… +${(r.slots || []).length - prev.length} slot`;
+        html += `</div>`;
+      }
+      if (r.skipped?.length) {
+        html += `<div class="fail" style="margin-top:.4rem">Skipped: ${r.skipped.length} (vd: ${esc(r.skipped[0]?.reason || "")})</div>`;
+      }
+      box.innerHTML = html;
+    }
+
+    async function loadRotation() {
+      try {
+        const [set, matrix] = await Promise.all([
+          api("/api/jobs/rotation/settings"),
+          api("/api/jobs/rotation/matrix"),
+        ]);
+        applyRotationSettings(set.settings);
+        const lines = (matrix.accounts || []).map(
+          (a) =>
+            `· id=<b>${a.id}</b> <span class="badge live">${esc(a.meta_app_name || a.meta_app_key || "App 1")}</span> ${esc(a.name)} · ${a.page_count} page` +
+            (a.pages?.length
+              ? ` [${a.pages.map((p) => esc(p.page_name)).join(", ")}]`
+              : "")
+        );
+        const gLines = (matrix.groups || []).map(
+          (g) =>
+            `· <b>${esc(g.name)}</b> (${esc(g.meta_app_key || g.id)}) · ${g.admin_count} admin · max ${g.max_pages} page/admin · ids [${(g.account_ids || []).join(",")}]`
+        );
+        $("rotMatrix").innerHTML =
+          (gLines.length
+            ? `<b>Nhóm so-le (tự theo Meta App):</b><br/>${gLines.join("<br/>")}<br/><br/>`
+            : "") +
+          (lines.length
+            ? `<b>Admin trong DB:</b><br/>${lines.join("<br/>")}`
+            : "Chưa có admin — Connect App 1 / App 2 trước.");
+      } catch (e) {
+        $("rotMatrix").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+      }
+    }
+
+    $("rotMode").onchange = rotToggleMode;
+    $("btnRotLoad").onclick = () => loadRotation().then(() => flash("Đã tải rotation", true)).catch((e) => flash(e.message, false));
+    $("btnRotSave").onclick = async () => {
+      try {
+        const body = collectRotationBody();
+        await api("/api/jobs/rotation/settings", { method: "POST", body: JSON.stringify(body) });
+        flash("Đã lưu rotation settings", true);
+      } catch (e) {
+        flash(e.message, false);
+      }
+    };
+    $("btnRotPreview").onclick = async () => {
+      $("rotResult").innerHTML = "Đang lập kế hoạch…";
+      try {
+        const r = await api("/api/jobs/rotation/plan", {
+          method: "POST",
+          body: JSON.stringify(collectRotationBody()),
+        });
+        renderRotResult(r, false);
+        flash(`Preview · ${r.summary?.total_final || 0} slot`, true);
+      } catch (e) {
+        flash(e.message, false);
+        $("rotResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+      }
+    };
+    $("btnRotRun").onclick = async () => {
+      const body = collectRotationBody({ save: true });
+      if (!confirm("Hẹn giờ FB theo thứ tự rotation so-le?\n(Gọi Graph tuần tự, không đăng song song)")) return;
+      $("rotResult").innerHTML = "Đang tạo job…";
+      try {
+        const r = await api("/api/jobs/rotation/run", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        renderRotResult(r, true);
+        flash(`Rotation job · ${r.job?.progress?.total || "?"} task`, true);
+        await loadLogs();
+      } catch (e) {
+        flash(e.message, false);
+        $("rotResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+      }
+    };
+
+    loadPages()
+      .then(loadLogs)
+      .then(loadRotation)
+      .catch((e) => flash(e.message, false));
   </script>
 </body>
 </html>

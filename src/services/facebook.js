@@ -11,15 +11,18 @@ import { noteGraphResponse } from "./rateLimit.js";
  * - Do NOT force auth_type=rerequest on first login (breaks 2FA / "could not validate").
  * - Use display=page so full 2FA works in system browser.
  * @param {string} state
- * @param {{ rerequest?: boolean }} [opts]
+ * @param {{ rerequest?: boolean, app?: { appId, redirectUri, scopes } }} [opts]
  */
 export function buildLoginUrl(state, opts = {}) {
-  const { appId, redirectUri, scopes } = config.facebook;
+  const app = opts.app || config.facebook;
+  const appId = app.appId || app.client_id;
+  const redirectUri = app.redirectUri || app.redirect_uri;
+  const scopes = app.scopes || config.facebook.scopes;
   const params = new URLSearchParams({
     client_id: appId,
     redirect_uri: redirectUri,
     state,
-    scope: scopes.join(","),
+    scope: Array.isArray(scopes) ? scopes.join(",") : String(scopes || ""),
     response_type: "code",
     // Full page in real browser — supports password + 2FA + device check
     display: "page",
@@ -51,22 +54,32 @@ async function graphGet(path, accessToken, query = {}) {
   return data;
 }
 
-/** Exchange OAuth code → short-lived user token */
-export async function exchangeCodeForToken(code) {
+/**
+ * Exchange OAuth code → short-lived user token
+ * @param {string} code
+ * @param {{ appId?, appSecret?, redirectUri? }} [appCreds]
+ */
+export async function exchangeCodeForToken(code, appCreds = null) {
+  const app = appCreds || config.facebook;
   return graphGet("/oauth/access_token", null, {
-    client_id: config.facebook.appId,
-    client_secret: config.facebook.appSecret,
-    redirect_uri: config.facebook.redirectUri,
+    client_id: app.appId || app.client_id,
+    client_secret: app.appSecret || app.client_secret || app.app_secret,
+    redirect_uri: app.redirectUri || app.redirect_uri,
     code,
   });
 }
 
-/** Short-lived → long-lived user token (~60 days) */
-export async function exchangeLongLivedUserToken(shortLivedToken) {
+/**
+ * Short-lived → long-lived user token (~60 days)
+ * @param {string} shortLivedToken
+ * @param {{ appId?, appSecret? }} [appCreds]
+ */
+export async function exchangeLongLivedUserToken(shortLivedToken, appCreds = null) {
+  const app = appCreds || config.facebook;
   return graphGet("/oauth/access_token", null, {
     grant_type: "fb_exchange_token",
-    client_id: config.facebook.appId,
-    client_secret: config.facebook.appSecret,
+    client_id: app.appId || app.client_id,
+    client_secret: app.appSecret || app.client_secret || app.app_secret,
     fb_exchange_token: shortLivedToken,
   });
 }

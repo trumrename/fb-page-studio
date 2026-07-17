@@ -22,8 +22,10 @@
       <a class="nav-item active" href="/index.html"><span class="ico">▣</span> Pages & Insights</a>
       <a class="nav-item" href="/posting.html"><span class="ico">✦</span> Publish & Schedule</a>
       <a class="nav-item" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
+      <a class="nav-item" href="/license.html"><span class="ico">🔑</span> License</a>
       <div class="nav-label">Quick</div>
-      <a class="nav-item" href="/auth/facebook?external=1" target="_blank" rel="noopener"><span class="ico">+</span> Connect Facebook</a>
+      <a class="nav-item" href="/auth/facebook?external=1&app=app1" target="_blank" rel="noopener"><span class="ico">+</span> Connect App 1</a>
+      <a class="nav-item" href="/auth/facebook?external=1&app=app2" target="_blank" rel="noopener"><span class="ico">+</span> Connect App 2</a>
       <a class="nav-item" href="/api/posting/logs/csv"><span class="ico">↓</span> Post logs CSV</a>
       <div class="nav-label">System</div>
       <a class="nav-item" href="#" id="navUpdate" onclick="document.getElementById('btnUpdateApp')?.click();return false"><span class="ico">↑</span> Cập nhật phiên bản</a>
@@ -51,7 +53,8 @@
           <button class="btn-ghost" id="btnExportXlsx" type="button">Excel</button>
           <button class="btn-ghost" id="btnExportCsv" type="button">CSV</button>
           <a class="btn btn-primary" href="/posting.html">Publish →</a>
-          <a class="btn btn-ghost" id="btnConnect" href="/auth/facebook?external=1" target="_blank" rel="noopener">+ Connect</a>
+          <a class="btn btn-ghost" id="btnConnect" href="/auth/facebook?external=1&app=app1" target="_blank" rel="noopener">+ App 1</a>
+          <a class="btn btn-ghost" id="btnConnect2" href="/auth/facebook?external=1&app=app2" target="_blank" rel="noopener">+ App 2</a>
         </div>
       </header>
 
@@ -82,8 +85,9 @@
           <section class="panel">
             <h2 class="panel-hd">Accounts <span id="accCount" class="badge">0</span></h2>
             <div class="panel-body tight scroll" id="accountList">
-              <div class="empty">Chưa có account.<br/>Bấm <b>Connect</b>.</div>
+              <div class="empty">Chưa có account.<br/>Bấm <b>+ App 1</b> hoặc <b>+ App 2</b>.</div>
             </div>
+            <div id="metaAppsHint" class="muted" style="padding:.65rem 1rem;font-size:.8rem;border-top:1px solid rgba(255,255,255,.06)"></div>
           </section>
 
           <section class="panel">
@@ -200,23 +204,60 @@
         "Usage từ Meta x-app-usage · Sync details bỏ qua page fresh <12h.";
     }
 
+    async function loadMetaAppsHint() {
+      try {
+        const r = await api("/auth/apps");
+        const apps = r.apps || [];
+        const lines = apps.map((a) =>
+          a.configured
+            ? `✓ <b>${escapeHtml(a.name)}</b> (${escapeHtml(a.key)}) · ID ${escapeHtml(a.app_id || "?")}`
+            : `✗ <b>${escapeHtml(a.name)}</b> — chưa cấu hình .env`
+        );
+        const hint = $("metaAppsHint");
+        if (hint) {
+          hint.innerHTML =
+            `<b>Meta Apps:</b> ` +
+            (lines.length ? lines.join(" · ") : "Chưa có") +
+            `<br/><span class="muted">Connect App 1 / App 2 → account gắn đúng app · rotation so-le theo nhóm app.</span>`;
+        }
+        const b2 = $("btnConnect2");
+        if (b2) {
+          const app2 = apps.find((a) => a.key === "app2");
+          if (app2 && !app2.configured) {
+            b2.title = "Thêm FB_APP_ID_2 + FB_APP_SECRET_2 vào .env";
+            b2.style.opacity = "0.55";
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     async function loadAccounts() {
       const { accounts } = await api("/api/accounts");
       $("accCount").textContent = accounts.length;
       const el = $("accountList");
       if (!accounts.length) {
-        el.innerHTML = `<div class="empty">Chưa có account.<br/>Bấm <b>Connect</b>.</div>`;
+        el.innerHTML = `<div class="empty">Chưa có account.<br/>Bấm <b>+ App 1</b> hoặc <b>+ App 2</b>.</div>`;
         return;
       }
-      el.innerHTML = accounts.map((a) => `
+      el.innerHTML = accounts.map((a) => {
+        const appLabel = a.meta_app_name || a.meta_app_key || "App 1";
+        const appKey = a.meta_app_key || "app1";
+        return `
         <div class="account ${selectedAccountId === a.id ? "active" : ""}" data-id="${a.id}">
           <img src="${a.picture_url || ""}" alt="" onerror="this.style.opacity=.3" />
           <div>
             <div class="name">${escapeHtml(a.name || a.fb_user_id)}</div>
-            <div class="sub">${a.page_count} pages · <span class="badge ${a.status === "error" ? "err" : "on"}">${a.status}</span></div>
+            <div class="sub">
+              <span class="badge live">${escapeHtml(appLabel)}</span>
+              · ${a.page_count} pages ·
+              <span class="badge ${a.status === "error" ? "err" : "on"}">${a.status}</span>
+              <span class="muted"> · ${escapeHtml(appKey)}</span>
+            </div>
           </div>
-        </div>
-      `).join("");
+        </div>`;
+      }).join("");
       el.querySelectorAll(".account").forEach((node) => {
         node.addEventListener("click", () => {
           selectedAccountId = Number(node.dataset.id);
@@ -422,7 +463,7 @@
     };
 
     async function refreshAll() {
-      await Promise.all([loadStats(), loadAccounts(), loadPages()]);
+      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint()]);
     }
 
     showFlash();

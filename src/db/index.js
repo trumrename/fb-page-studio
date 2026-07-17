@@ -125,6 +125,9 @@ function migrate(database) {
     );
   }
 
+  // Multi Meta App: tag each account with meta_app_key (app1 / app2)
+  migrateMetaAppColumns(database);
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS page_post_config (
       page_row_id INTEGER PRIMARY KEY,
@@ -170,6 +173,92 @@ function migrate(database) {
     CREATE INDEX IF NOT EXISTS idx_post_logs_page ON post_logs(page_row_id);
     CREATE INDEX IF NOT EXISTS idx_post_logs_created ON post_logs(created_at);
   `);
+}
+
+/**
+ * Add meta_app_key to accounts + oauth_states.
+ * Rebuild fb_accounts so UNIQUE is (fb_user_id, meta_app_key) — same FB user can login App1 & App2.
+ */
+function migrateMetaAppColumns(database) {
+  const accCols = database
+    .prepare(`PRAGMA table_info(fb_accounts)`)
+    .all()
+    .map((c) => c.name);
+
+  if (!accCols.includes("meta_app_key")) {
+    database.exec(
+      `ALTER TABLE fb_accounts ADD COLUMN meta_app_key TEXT NOT NULL DEFAULT 'app1'`
+    );
+  }
+  if (!accCols.includes("meta_app_id")) {
+    database.exec(`ALTER TABLE fb_accounts ADD COLUMN meta_app_id TEXT`);
+  }
+
+  const oauthCols = database
+    .prepare(`PRAGMA table_info(oauth_states)`)
+    .all()
+    .map((c) => c.name);
+  if (!oauthCols.includes("meta_app_key")) {
+    database.exec(
+      `ALTER TABLE oauth_states ADD COLUMN meta_app_key TEXT DEFAULT 'app1'`
+    );
+  }
+
+  // Rebuild unique once: flag file / check index
+  const flag = database
+    .prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='_meta_app_unique_v1'`
+    )
+    .get();
+  if (flag) return;
+
+  try {
+    database.pragma("foreign_keys = OFF");
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS fb_accounts_meta_mig (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fb_user_id TEXT NOT NULL,
+        meta_app_key TEXT NOT NULL DEFAULT 'app1',
+        meta_app_id TEXT,
+        name TEXT,
+        email TEXT,
+        picture_url TEXT,
+        user_token_enc TEXT NOT NULL,
+        user_token_expires_at TEXT,
+        scopes TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        last_sync_at TEXT,
+        last_error TEXT,
+        page_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(fb_user_id, meta_app_key)
+      );
+
+      INSERT OR IGNORE INTO fb_accounts_meta_mig (
+        id, fb_user_id, meta_app_key, meta_app_id, name, email, picture_url,
+        user_token_enc, user_token_expires_at, scopes, status, last_sync_at,
+        last_error, page_count, created_at, updated_at
+      )
+      SELECT
+        id, fb_user_id,
+        COALESCE(NULLIF(meta_app_key, ''), 'app1'),
+        meta_app_id, name, email, picture_url,
+        user_token_enc, user_token_expires_at, scopes, status, last_sync_at,
+        last_error, page_count, created_at, updated_at
+      FROM fb_accounts;
+
+      DROP TABLE fb_accounts;
+      ALTER TABLE fb_accounts_meta_mig RENAME TO fb_accounts;
+      CREATE INDEX IF NOT EXISTS idx_accounts_status ON fb_accounts(status);
+      CREATE INDEX IF NOT EXISTS idx_accounts_meta_app ON fb_accounts(meta_app_key);
+      CREATE TABLE _meta_app_unique_v1 (x INTEGER);
+    `);
+  } catch (e) {
+    console.warn("[db] meta_app unique migrate:", e.message);
+  } finally {
+    database.pragma("foreign_keys = ON");
+  }
 }
 
 export function cleanupOldOauthStates() {

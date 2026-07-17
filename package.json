@@ -1,7 +1,7 @@
 {
   "name": "fb-page-studio",
-  "version": "1.1.0",
-  "description": "FB Page Studio — Desktop app · Graph API multi-account Page manager",
+  "version": "1.2.0",
+  "description": "FB Page Studio — Multi Meta App · Rotation so-le · License keys · Graph API",
   "author": "trumrename",
   "type": "module",
   "main": "electron/main.cjs",

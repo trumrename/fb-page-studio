@@ -6,6 +6,7 @@ import {
   getMe,
   getAllPages,
 } from "./facebook.js";
+import { checkQuota } from "./license.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -19,9 +20,23 @@ function expiresAtFromSeconds(expiresIn) {
 /**
  * Full connect flow after OAuth callback code.
  * Upserts account + replaces page list (scale-friendly transaction).
+ * @param {string} code
+ * @param {{ metaAppKey?: string, app?: object }} [opts] — which Meta App issued the code
  */
-export async function connectFromOAuthCode(code) {
-  const short = await exchangeCodeForToken(code);
+export async function connectFromOAuthCode(code, opts = {}) {
+  const metaAppKey = String(opts.metaAppKey || opts.meta_app_key || "app1");
+  const app = opts.app || {};
+  // Prefer explicit app credentials from metaApps
+  const creds =
+    app.appId && app.appSecret
+      ? {
+          appId: app.appId,
+          appSecret: app.appSecret,
+          redirectUri: app.redirectUri,
+        }
+      : null;
+
+  const short = await exchangeCodeForToken(code, creds);
   if (!short.access_token) {
     throw new Error("No access_token from code exchange");
   }
@@ -30,7 +45,7 @@ export async function connectFromOAuthCode(code) {
   let expiresAt = expiresAtFromSeconds(short.expires_in);
 
   try {
-    const long = await exchangeLongLivedUserToken(short.access_token);
+    const long = await exchangeLongLivedUserToken(short.access_token, creds);
     if (long.access_token) {
       userToken = long.access_token;
       expiresAt = expiresAtFromSeconds(long.expires_in);
@@ -46,8 +61,23 @@ export async function connectFromOAuthCode(code) {
 
   const db = getDb();
   const existing = db
-    .prepare(`SELECT id FROM fb_accounts WHERE fb_user_id = ?`)
-    .get(me.id);
+    .prepare(
+      `SELECT id FROM fb_accounts WHERE fb_user_id = ? AND meta_app_key = ?`
+    )
+    .get(me.id, metaAppKey);
+
+  // License gate: new accounts only
+  if (!existing) {
+    const n = db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM fb_accounts WHERE status != 'deleted'`
+      )
+      .get().c;
+    const q = checkQuota("account", n);
+    if (!q.ok) {
+      throw new Error(q.error || "License không cho thêm account");
+    }
+  }
 
   let accountId;
   if (existing) {
@@ -56,6 +86,7 @@ export async function connectFromOAuthCode(code) {
       `UPDATE fb_accounts SET
         name = ?, email = ?, picture_url = ?,
         user_token_enc = ?, user_token_expires_at = ?,
+        meta_app_key = ?, meta_app_id = ?,
         status = 'active', last_error = NULL, updated_at = datetime('now')
        WHERE id = ?`
     ).run(
@@ -64,14 +95,17 @@ export async function connectFromOAuthCode(code) {
       picture,
       encryptToken(userToken),
       expiresAt,
+      metaAppKey,
+      app.appId || null,
       accountId
     );
   } else {
     const info = db
       .prepare(
         `INSERT INTO fb_accounts
-          (fb_user_id, name, email, picture_url, user_token_enc, user_token_expires_at, status)
-         VALUES (?, ?, ?, ?, ?, ?, 'active')`
+          (fb_user_id, name, email, picture_url, user_token_enc, user_token_expires_at,
+           status, meta_app_key, meta_app_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`
       )
       .run(
         me.id,
@@ -79,7 +113,9 @@ export async function connectFromOAuthCode(code) {
         me.email || null,
         picture,
         encryptToken(userToken),
-        expiresAt
+        expiresAt,
+        metaAppKey,
+        app.appId || null
       );
     accountId = info.lastInsertRowid;
   }
@@ -89,6 +125,7 @@ export async function connectFromOAuthCode(code) {
   return {
     account: getAccountPublic(accountId),
     pages: pages.map(publicPage),
+    meta_app_key: metaAppKey,
   };
 }
 
@@ -171,20 +208,34 @@ export function listAccounts() {
   return getDb()
     .prepare(
       `SELECT id, fb_user_id, name, email, picture_url, user_token_expires_at,
-              status, last_sync_at, last_error, page_count, created_at, updated_at
-       FROM fb_accounts ORDER BY id DESC`
+              status, last_sync_at, last_error, page_count, created_at, updated_at,
+              meta_app_key, meta_app_id
+       FROM fb_accounts ORDER BY meta_app_key, id DESC`
     )
-    .all();
+    .all()
+    .map(enrichAccountAppLabel);
 }
 
 export function getAccountPublic(id) {
-  return getDb()
+  const row = getDb()
     .prepare(
       `SELECT id, fb_user_id, name, email, picture_url, user_token_expires_at,
-              status, last_sync_at, last_error, page_count, created_at, updated_at
+              status, last_sync_at, last_error, page_count, created_at, updated_at,
+              meta_app_key, meta_app_id
        FROM fb_accounts WHERE id = ?`
     )
     .get(id);
+  return row ? enrichAccountAppLabel(row) : null;
+}
+
+function enrichAccountAppLabel(row) {
+  if (!row) return row;
+  const key = row.meta_app_key || "app1";
+  return {
+    ...row,
+    meta_app_key: key,
+    meta_app_name: key === "app2" ? "App 2" : key === "app1" ? "App 1" : key,
+  };
 }
 
 export function listPages({ accountId, q, limit = 500, offset = 0 } = {}) {
@@ -200,7 +251,8 @@ export function listPages({ accountId, q, limit = 500, offset = 0 } = {}) {
            p.business_id, p.business_name,
            p.roles_json, p.assigned_users_json, p.insights_json,
            p.enrich_error, p.enriched_at,
-           a.name AS account_name, a.fb_user_id AS account_fb_user_id
+           a.name AS account_name, a.fb_user_id AS account_fb_user_id,
+           a.meta_app_key AS account_meta_app_key, a.meta_app_id AS account_meta_app_id
     FROM fb_pages p
     JOIN fb_accounts a ON a.id = p.account_id
     WHERE p.status = 'active'
@@ -226,7 +278,8 @@ export function listPages({ accountId, q, limit = 500, offset = 0 } = {}) {
 export function getPagePublic(pageRowId) {
   const r = getDb()
     .prepare(
-      `SELECT p.*, a.name AS account_name, a.fb_user_id AS account_fb_user_id
+      `SELECT p.*, a.name AS account_name, a.fb_user_id AS account_fb_user_id,
+              a.meta_app_key AS account_meta_app_key, a.meta_app_id AS account_meta_app_id
        FROM fb_pages p
        JOIN fb_accounts a ON a.id = p.account_id
        WHERE p.id = ?`
@@ -250,6 +303,13 @@ function formatPageRow(r) {
     updated_at: r.updated_at,
     account_name: r.account_name,
     account_fb_user_id: r.account_fb_user_id,
+    meta_app_key: r.account_meta_app_key || "app1",
+    meta_app_name:
+      r.account_meta_app_key === "app2"
+        ? "App 2"
+        : !r.account_meta_app_key || r.account_meta_app_key === "app1"
+          ? "App 1"
+          : r.account_meta_app_key,
     followers_count: r.followers_count ?? null,
     fan_count: r.fan_count ?? null,
     verification_status: r.verification_status || null,

@@ -10,6 +10,16 @@ import {
 } from "../services/jobRunner.js";
 import { scheduleBulk } from "../services/schedule.js";
 import { getReportPaths } from "../services/reportExport.js";
+import {
+  loadRotationSettings,
+  saveRotationSettings,
+  buildRotationPlan,
+  planToScheduleSlots,
+  loadAccountPageMatrix,
+  resolveGroups,
+  DEFAULT_ROTATION,
+} from "../services/rotationPlan.js";
+import { listAccounts } from "../services/accounts.js";
 
 const router = Router();
 
@@ -48,6 +58,121 @@ router.get("/reports/xlsx", (_req, res) => {
     return res.status(404).json({ error: "Chưa có file Excel báo cáo" });
   }
   res.download(p.xlsx, "dang_bai_chi_tiet.xlsx");
+});
+
+/**
+ * GET /api/jobs/rotation/settings
+ * POST /api/jobs/rotation/settings  body = partial settings
+ * GET /api/jobs/rotation/matrix     accounts + pages for group UI
+ * POST /api/jobs/rotation/plan      dry-run plan (optional body overrides)
+ * POST /api/jobs/rotation/run       build plan + start schedule job
+ */
+router.get("/rotation/settings", (_req, res) => {
+  res.json({
+    settings: loadRotationSettings(),
+    defaults: DEFAULT_ROTATION,
+  });
+});
+
+router.post("/rotation/settings", (req, res) => {
+  try {
+    const settings = saveRotationSettings(req.body || {});
+    res.json({ ok: true, settings });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.get("/rotation/matrix", (_req, res) => {
+  try {
+    const settings = loadRotationSettings();
+    const matrix = loadAccountPageMatrix(settings);
+    const groups = resolveGroups(settings, matrix);
+    let accounts = [];
+    try {
+      accounts = listAccounts();
+    } catch {
+      accounts = matrix.map((a) => ({
+        id: a.account_id,
+        name: a.account_name,
+        page_count: a.pages.length,
+        meta_app_key: a.meta_app_key,
+      }));
+    }
+    res.json({
+      accounts: matrix.map((a) => ({
+        id: a.account_id,
+        name: a.account_name,
+        fb_user_id: a.fb_user_id,
+        page_count: a.pages.length,
+        meta_app_key: a.meta_app_key || "app1",
+        meta_app_name: a.meta_app_name || "App 1",
+        pages: a.pages,
+      })),
+      groups: groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        meta_app_key: g.meta_app_key || g.id,
+        admin_count: g.admin_count,
+        max_pages: g.max_pages,
+        account_ids: g.admins.map((x) => x.account_id),
+      })),
+      auto_groups_by_meta_app: settings.auto_groups_by_meta_app !== false,
+      all_accounts: accounts,
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post("/rotation/plan", (req, res) => {
+  try {
+    const body = req.body || {};
+    // optional: persist when save=1
+    if (body.save) {
+      const { save, dry_run, run, ...rest } = body;
+      saveRotationSettings(rest);
+    }
+    const plan = buildRotationPlan(body);
+    res.json({ ok: true, dry_run: true, ...plan });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/rotation/run", (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.save !== false) {
+      const { save, dry_run, run, ...rest } = body;
+      if (Object.keys(rest).length) saveRotationSettings(rest);
+    }
+    const plan = buildRotationPlan(body);
+    const postType =
+      body.post_type || plan.settings?.post_type || "auto";
+    const slots = planToScheduleSlots(plan, postType);
+    if (!slots.length) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Không có slot hợp lệ (kiểm tra page/account, khung giờ, anti-spam bulk cap)",
+        plan,
+      });
+    }
+    const job = startBulkScheduleJob({
+      slots,
+      title: `Rotation so-le · ${slots.length} slot · ${plan.summary?.groups || 1} nhóm`,
+    });
+    res.json({
+      ok: true,
+      job,
+      plan_summary: plan.summary,
+      preview_order: plan.preview_order,
+      reports: getReportPaths(),
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
 });
 
 /**

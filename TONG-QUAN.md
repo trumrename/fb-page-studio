@@ -5,11 +5,10 @@
 | | |
 |--|--|
 | **Tên** | FB Page Studio |
-| **Phiên bản** | 1.1.0 |
+| **Phiên bản** | **1.2.0** |
 | **Loại** | Desktop Windows (Electron) + server nội bộ |
 | **GitHub** | https://github.com/trumrename/fb-page-studio |
-| **Exe desktop** | `dist-desktop\FB-Page-Studio-Desktop.exe` |
-| **Docs** | `SETUP.md` · `HUONG-DAN.md` · `GITHUB.md` |
+| **Docs** | `SETUP.md` · `HUONG-DAN.md` · `GITHUB.md` · `TIEN-DO.md` · `CHECK-BUG.md` · `LICENSE-KEYS.md` |
 
 ---
 
@@ -18,227 +17,166 @@
 | Làm được | Không làm |
 |----------|-----------|
 | Multi-account OAuth official | Auto-login / cookie developers.facebook.com |
-| List page, followers, +7 ngày | Bịa data admin/BM/quốc gia khi API không có |
+| **Multi Meta App** (App1 + App2) | 1 nick = free spam vô hạn |
+| List page, followers, +7 ngày | Bịa data admin/BM khi API không có |
 | Đăng feed text / ảnh / video | Story đăng API (chỉ cờ flag) |
-| Hẹn giờ FB (`scheduled_publish_time`) | Spam đa luồng song song |
-| Caption random từ `.txt`/`.csv` | Scrap UI Facebook |
+| Hẹn giờ FB + **Rotation so-le** | Spam đa luồng song song |
+| Caption random `.txt`/`.csv` | Scrap UI Facebook |
 | Anti-spam + báo cáo CSV/Excel | Vượt limit / né Meta |
+| **License key** (trial / NV / thương mại) | DRM bất khả xâm phạm (desktop offline) |
 
 ---
 
-## 2. Kiến trúc 1 app
+## 2. Kiến trúc
 
 ```
 ┌─────────────────────────────────────────────┐
-│  FB Page Studio Desktop (cửa sổ + logo)     │
-│  Electron shell                             │
+│  FB Page Studio Desktop (Electron + logo)   │
 └──────────────────┬──────────────────────────┘
-                   │  UI nội bộ (không cần Chrome)
                    ▼
 ┌─────────────────────────────────────────────┐
-│  Express server (localhost:3847)            │
-│  · OAuth  · Pages  · Publish  · Jobs        │
-│  · Anti-spam  · Reports  · Scheduler 60s    │
+│  Express :3847                              │
+│  OAuth · Pages · Publish · Jobs             │
+│  Rotation · Multi Meta App · License        │
+│  Anti-spam · Reports · Scheduler 60s        │
 └──────────────────┬──────────────────────────┘
-                   │  Graph API (HTTPS)
                    ▼
-            Facebook / Meta
+            Graph API (HTTPS)
 ```
 
-- **1 process** · **1 DB** · nhiều account · nhiều page  
-- Đăng bài **tuần tự** (an toàn rate), UI hiện **% tiến trình** từng page/task  
+- **1 process** · **1 DB** · nhiều account · nhiều page · gắn `meta_app_key`
+- Đăng / hẹn giờ **tuần tự** (~350 ms giữa task)
+- **1 Meta App Dev** (không page) có thể giữ nhiều App ID; nick page Connect riêng từng app
 
 ---
 
 ## 3. Module chức năng
 
-### 3.1 Accounts & Pages
-- Connect Facebook (OAuth cửa sổ login chuẩn Meta)
-- Lưu **long-lived user token** + **page token** (mã hóa SQLite)
-- Sync list: `/me/accounts` (phân trang)
-- Sync details: followers, tăng follow 7 ngày (insights)
-- Export danh sách page: Excel (nhiều sheet theo ngày) / CSV
-- Hiển thị App API usage %
+### 3.1 Multi Meta App + Accounts
+- Connect **App 1** / **App 2** (`/auth/facebook?app=app1|app2`)
+- `.env`: `FB_APP_ID` + `FB_APP_ID_2` / secret / tên
+- Account lưu `meta_app_key` + `meta_app_id` — login **nhận đúng app**
+- Cùng nick FB có thể Connect cả 2 app (2 dòng account)
 
-### 3.2 Publish (đăng ngay)
-- Loại: **text · photo · video** (sequence lặp)
-- Media: `data/media/inbox` → sau OK → `data/media/posted`
-- Caption: kho file **random** (`.txt` dòng / `.csv` cột caption)
-- Optional: auto comment sau đăng (template + link list)
-- Config **từng page**: max/ngày, interval, bật scheduler local
+### 3.2 Pages & Insights
+- Sync list `/me/accounts`, followers, +7d
+- Export Excel/CSV
+- App API usage %
 
-### 3.3 Hẹn giờ Facebook
-- Graph: `published=false` + `scheduled_publish_time` (10 phút – 30 ngày)
-- Bulk nhiều page
-- Mode **giờ ưa thích** từng page (Meta đã deprecate `page_fans_online` → user lưu giờ)
-- Mode **giờ cố định** / start + interval
-- Jitter chống pattern cứng
+### 3.3 Publish
+- text / photo / video · media inbox → posted
+- Caption random · config per page · interval / max ngày
 
-### 3.4 App Console — Vận hành
-- Chọn nhiều page → **job**
-- Progress: **% tổng · % từng page · từng nhiệm vụ**
-- Toast **OK / FAIL** + panel thông báo
-- 1 job = hàng đợi tuần tự an toàn
+### 3.4 Hẹn giờ + **Rotation so-le**
+- Bulk active_times / fixed
+- **Rotation** (`posting.html`):
+  - Tự nhóm theo Meta App (App1 ↔ App2 so le)
+  - Vòng: `bài# → pageIndex → adminIndex → group`
+  - Cùng page: khung giờ + gap random + jitter
+  - Nhóm ngắn skip; nhóm dài chạy tiếp
+  - API: `/api/jobs/rotation/*`
 
-### 3.5 Anti-spam / Safety (tùy chỉnh + preset)
-| Rule | Mặc định Recommended |
-|------|----------------------|
-| 1 media hash = 1 lần đời (mọi page) | ON → move posted ngay |
-| Caption trùng (cửa sổ giờ) | 48h |
-| Global max bài/giờ | 12 |
-| Global max bài/24h | 40 |
-| Page cooldown | 90 phút |
-| Interval sàn page | ≥ 60 phút |
-| Cap max/ngày page | ≤ 8 |
-| Bulk hard limit | 15 page · 10 slot · 40 total |
-| Force bỏ quota | OFF |
-| Pause App usage ≥ | 45% |
-| Backoff Graph lỗi spam/rate | base 90s → x2 |
+### 3.5 Anti-spam (Recommended mặc định)
+| Rule | Giá trị |
+|------|---------|
+| Global / giờ | ~12 |
+| Global / ngày | ~40 |
+| Page cooldown | ~90 phút |
+| Bulk | ≤15 page · ≤40 slot |
+| Media hash 1 lần đời | ON |
+| Force ignore quota | OFF (production) |
 
-Preset: **Recommended · Strict · Loose**
+### 3.6 Jobs & báo cáo
+- Progress % · toast · CSV/Excel `data/exports/dang_bai_chi_tiet.*`
 
-### 3.6 Báo cáo
-Mỗi lần đăng/hẹn (OK hoặc FAIL) ghi:
-
-```
-data/exports/dang_bai_chi_tiet.csv
-data/exports/dang_bai_chi_tiet.xlsx
-```
-
-Cột chính: ngày giờ · success · tên page · page_id · loại · link bài · post_id · caption · media · lỗi · message…
+### 3.7 License key
+- Trial 7 ngày (mặc định) · giới hạn account/page
+- Key ký **Ed25519** (private key chỉ bạn giữ)
+- Loại: `trial` · `employee` · `commercial` · `lifetime`
+- Gắn máy optional (`machine_id`)
+- UI: `/license.html`
+- Vendor: `node scripts/gen-license.mjs …` → xem `LICENSE-KEYS.md`
+- **Lưu ý:** desktop offline **không** chống crack 100%; key + trial + giới hạn = lớp thương mại / nội bộ
 
 ---
 
-## 4. Giao diện (menu)
+## 4. Giao diện
 
-| Màn | URL / entry | Việc |
-|-----|-------------|------|
-| **Vận hành (App)** | `/app.html` | Job, progress %, toast, báo cáo |
-| **Pages / Connect** | `/index.html` | OAuth, sync, export page |
-| **Cấu hình đăng** | `/posting.html` | Config page, caption, hẹn lẻ |
-| **Anti-spam** | `/antispam.html` | Limit, preset, keyword |
-
-Desktop mở thẳng **Vận hành** trong cửa sổ app + logo.
+| Màn | URL |
+|-----|-----|
+| Vận hành | `/app.html` |
+| Pages / Connect | `/index.html` |
+| Publish + Rotation | `/posting.html` |
+| Anti-spam | `/antispam.html` |
+| **License** | `/license.html` |
 
 ---
 
-## 5. Dữ liệu & folder
+## 5. Dữ liệu
 
 ```
-[project hoặc folder cạnh exe]
-  .env
-  data/
-    app.db                 # tokens + config + logs + anti-spam
-    media/
-      inbox/               # chờ đăng
-      posted/              # đã đăng (hash 1 lần)
-      captions/            # .txt / .csv
-    exports/
-      dang_bai_chi_tiet.csv
-      dang_bai_chi_tiet.xlsx
-      pages_history.xlsx   # export list page
-      post_logs.csv        # log kỹ thuật
-  assets/ · build/         # logo icon
-  dist-desktop/            # FB-Page-Studio-Desktop.exe
+.env
+data/
+  app.db
+  license.json          # key đã kích hoạt (local)
+  .first_run            # mốc trial
+  rotation_settings.json
+  media/inbox|posted|captions
+  exports/
+keys/                   # vendor only
+  license-private.pem   # KHÔNG commit / không ship
+  license-public.pem
+  issued/               # key đã cấp
 ```
 
 ---
 
-## 6. Bảo mật & compliance
+## 6. Bảo mật
 
-- Token mã hóa local (`TOKEN_ENCRYPTION_KEY`)
-- **Không** commit `.env` / `data/` lên Git
-- OAuth user tự login — không bot pass
-- Tôn trọng rate Meta + anti-spam app
-- Multi-account: mỗi nick phải có role App (Dev mode) hoặc App Live + review
-
----
-
-## 7. Giới hạn kỹ thuật (biết trước)
-
-| Hạng mục | Trạng thái |
-|----------|------------|
-| Story đăng + sticker link | Chưa (flag only) |
-| Giờ “fans online” từ Graph | Deprecated → giờ ưa thích user |
-| List admin NPE đầy đủ như UI | Không đủ API → đã gỡ |
-| Đa luồng publish song song | Không (cố ý, an toàn hơn) |
-| OAuth | Cần HTTPS (ngrok) khi Live |
+- Token mã hóa local
+- Không commit `.env` / `data/` / private key
+- OAuth user login chuẩn
+- License signed; public key trong app
 
 ---
 
-## 8. Stack kỹ thuật
+## 7. Giới hạn kỹ thuật
 
-| Lớp | Công nghệ |
-|-----|-----------|
-| Desktop | Electron 33 + icon Windows |
-| Backend | Node.js 18+ · Express |
-| DB | better-sqlite3 |
-| FB API | Graph v21 · OAuth · Page token |
-| Export | ExcelJS · CSV UTF-8 BOM |
-| Build desktop | electron-builder → portable exe |
-| Build portable server (cũ) | caxa → `dist/FB-Page-Studio.exe` |
+| Hạng mục | Ghi chú |
+|----------|---------|
+| Story API | Chưa |
+| Parallel publish | Không (cố ý) |
+| App 2 | Cần `FB_APP_ID_2` trên Meta |
+| Anti-crack tuyệt đối | Không khả thi offline 100% |
 
 ---
 
-## 9. Flow dùng chuẩn
+## 8. Stack
+
+Electron · Node 18+ · Express · better-sqlite3 · Graph v21 · ExcelJS · electron-builder
+
+---
+
+## 9. Flow chuẩn
 
 ```
-1. Setup Meta App + .env + ngrok (SETUP.md)
-2. Mở Desktop exe
-3. Connect từng nick FB (OAuth)
-4. Sync list / details
-5. Chuẩn bị inbox + captions
-6. Anti-spam: Recommended (hoặc Strict)
-7. Cấu hình từng page (4 bài/ngày, interval 3h…)
-8. Vận hành: tick page → Đăng / Hẹn giờ
-9. Xem % · toast · CSV/Excel
+1. Meta App 1 (+ App 2) · .env · ngrok
+2. Mở app · License (trial hoặc nhập key)
+3. Connect App1 / App2 (nick giữ page)
+4. Sync · inbox · captions · anti-spam Recommended
+5. Rotation preview → hẹn giờ / đăng tuần tự
+6. Xem CSV báo cáo
 ```
 
 ---
 
-## 10. Gợi ý vận hành nhiều page
+## 10. Gợi ý vận hành
 
-| Nhu cầu | Gợi ý |
-|---------|--------|
-| 1 page · 4 bài/ngày (2 sáng 2 tối) | Interval ≥ 3h · max 4/ngày |
-| Nhiều page cùng buổi | Cùng đợt, app xếp hàng vài giây–phút |
-| 20–50 page | Anti-spam Strict · đừng bật ON hết |
-| An toàn media | 1 file 1 lần · không copy lại hash |
-| Global | ≤ 12 bài/giờ cả app (Recommended) |
+| | |
+|--|--|
+| Page / nick | 2–3 |
+| App / batch đăng | ~8–12 page |
+| Meta App | 1 Dev cầm nhiều app; pool nick page tách theo app |
+| 1 máy | 1–2 Meta App trong tool |
 
----
-
-## 11. Lệnh nhanh
-
-```powershell
-cd C:\Users\NCpc\fb-page-poster
-
-npm run desktop              # dev cửa sổ app
-npm run build:desktop        # build FB-Page-Studio-Desktop.exe
-npm start                    # chỉ server (mở browser)
-npm run build:exe            # bản caxa (mở browser)
-```
-
----
-
-## 12. Tài liệu liên quan
-
-| File | Nội dung |
-|------|----------|
-| **TONG-QUAN.md** | File này — big picture |
-| **SETUP.md** | Cài Meta · ngrok · .env · lần đầu |
-| **HUONG-DAN.md** | Dùng hàng ngày · limit · lỗi |
-| **GITHUB.md** | Push repo · Release · update |
-| **README.md** | Overview ngắn + dev |
-
----
-
-## 13. Tóm tắt 5 dòng
-
-1. **1 app desktop** logo + cửa sổ riêng, multi-account/page.  
-2. **Graph API official** — OAuth, đăng feed, hẹn giờ FB.  
-3. **Caption random + media 1 lần** + anti-spam siết.  
-4. **Job có % tiến trình**, toast OK/FAIL, **CSV + Excel** chi tiết.  
-5. **Không** cookie bot / scrap UI / spam đa luồng.
-
-*— FB Page Studio · Official Graph path · Local data, cloud Facebook publish —*
+Chi tiết tiến độ: **`TIEN-DO.md`** · checklist bug: **`CHECK-BUG.md`**.

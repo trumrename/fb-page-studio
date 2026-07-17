@@ -9,8 +9,10 @@ import authRoutes from "./routes/auth.js";
 import apiRoutes from "./routes/api.js";
 import postingRoutes from "./routes/posting.js";
 import jobsRoutes from "./routes/jobs.js";
+import licenseRoutes from "./routes/license.js";
 import { runSchedulerTick } from "./services/poster.js";
 import { ensureAntiSpamTables } from "./services/antiSpam.js";
+import { getLicenseStatus } from "./services/license.js";
 
 const app = express();
 const publicDir = getPublicDir();
@@ -56,7 +58,13 @@ if (!fs.existsSync(exampleBeside)) {
       "APP_BASE_URL=http://localhost:3847",
       "FB_APP_ID=",
       "FB_APP_SECRET=",
+      "FB_APP_NAME=App 1",
       "FB_REDIRECT_URI=http://localhost:3847/auth/facebook/callback",
+      "# App 2 (optional — Connect /auth/facebook?app=app2)",
+      "FB_APP_ID_2=",
+      "FB_APP_SECRET_2=",
+      "FB_APP_NAME_2=App 2",
+      "# FB_REDIRECT_URI_2=  (empty = same as App 1; register URI on BOTH Meta apps)",
       "FB_GRAPH_VERSION=v21.0",
       "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
       "TOKEN_ENCRYPTION_KEY=change-me-to-a-long-random-string-32+",
@@ -77,16 +85,24 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/api/meta", (_req, res) => {
+  const lic = getLicenseStatus();
   res.json({
     name: "fb-page-studio",
     version: config.version,
-    phase: "app-console + jobs + reports",
+    phase: "multi-app + rotation + license",
     packaged: isPackaged(),
     note: "Story flag optional. Official Graph API only.",
+    license: {
+      mode: lic.mode,
+      active: lic.active,
+      label: lic.label,
+      expires_at: lic.expires_at || null,
+    },
   });
 });
 
 app.use("/auth", authRoutes);
+app.use("/api/license", licenseRoutes);
 app.use("/api", apiRoutes);
 app.use("/api/posting", postingRoutes);
 app.use("/api/jobs", jobsRoutes);

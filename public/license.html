@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>License · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/">
+        <div class="brand-mark">FB</div>
+        <div class="brand-text">
+          <strong>Page Studio</strong>
+          <span>License key</span>
+        </div>
+      </a>
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="/app.html"><span class="ico">▶</span> Vận hành</a>
+      <a class="nav-item" href="/index.html"><span class="ico">▣</span> Pages</a>
+      <a class="nav-item" href="/posting.html"><span class="ico">✦</span> Publish</a>
+      <a class="nav-item" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
+      <a class="nav-item active" href="/license.html"><span class="ico">🔑</span> License</a>
+    </aside>
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <h1>License / Kích hoạt</h1>
+            <div class="sub">Key thương mại · nhân viên · trial</div>
+          </div>
+        </div>
+      </header>
+      <main class="content">
+        <div class="flash" id="flash"></div>
+        <section class="panel">
+          <h2 class="panel-hd"><span>Trạng thái</span></h2>
+          <div class="panel-body" id="statusBox">Loading…</div>
+        </section>
+        <section class="panel section-gap">
+          <h2 class="panel-hd"><span>Nhập license key</span></h2>
+          <div class="panel-body">
+            <p class="muted" style="margin-top:0">
+              Dán key do admin phát hành (Ed25519 signed). Key có thể gắn máy (machine_id) hoặc dùng mọi máy.
+            </p>
+            <label>License key</label>
+            <textarea id="keyIn" rows="4" placeholder="eyJ...payload....signature"></textarea>
+            <div class="actions">
+              <button type="button" class="btn-ok" id="btnAct">Kích hoạt</button>
+              <button type="button" class="btn-ghost" id="btnCheck">Kiểm tra (không lưu)</button>
+              <button type="button" class="btn-danger btn-sm" id="btnClear">Xóa key local</button>
+            </div>
+            <div id="actResult" class="muted" style="margin-top:.75rem"></div>
+          </div>
+        </section>
+        <section class="panel section-gap">
+          <h2 class="panel-hd"><span>Machine ID (gửi admin nếu key bind máy)</span></h2>
+          <div class="panel-body">
+            <code id="mid" style="word-break:break-all">—</code>
+            <p class="muted" style="margin:.5rem 0 0;font-size:.85rem">
+              Trial mặc định: 7 ngày · tối đa 2 account · 6 page (cấu hình env). Hết trial / không key → không đăng bài.
+            </p>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="/js/shell.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    async function api(path, opts) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+    function flash(msg, ok) {
+      const el = $("flash");
+      el.className = "flash show " + (ok ? "ok" : "err");
+      el.textContent = msg;
+    }
+    function esc(s) {
+      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;");
+    }
+    async function load() {
+      const st = await api("/api/license/status");
+      const mid = await api("/api/license/machine");
+      $("mid").textContent = mid.machine_id || st.machine_id || "—";
+      const lim = st.limits || {};
+      $("statusBox").innerHTML = `
+        <p><b>Mode:</b> <span class="badge ${st.active ? "on" : "err"}">${esc(st.label || st.mode)}</span>
+        · active=${st.active}</p>
+        <p><b>Holder:</b> ${esc(st.holder || st.claims?.holder || "—")}</p>
+        <p><b>Hết hạn:</b> ${esc(st.expires_at || "không / trial")}</p>
+        <p><b>Giới hạn:</b> account ≤ ${lim.max_accounts || "∞"} · page ≤ ${lim.max_pages || "∞"}</p>
+        <p class="muted">${esc(st.message || st.error || "")}</p>
+      `;
+    }
+    $("btnAct").onclick = async () => {
+      try {
+        const r = await api("/api/license/activate", {
+          method: "POST",
+          body: JSON.stringify({ key: $("keyIn").value }),
+        });
+        $("actResult").innerHTML = `<span class="ok">✓ Đã kích hoạt · ${esc(r.status?.label)}</span>`;
+        flash("Kích hoạt OK", true);
+        await load();
+      } catch (e) {
+        $("actResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+        flash(e.message, false);
+      }
+    };
+    $("btnCheck").onclick = async () => {
+      try {
+        const r = await api("/api/license/verify", {
+          method: "POST",
+          body: JSON.stringify({ key: $("keyIn").value }),
+        });
+        $("actResult").innerHTML = r.ok
+          ? `<span class="ok">Key hợp lệ · type=${esc(r.claims?.type)} · ${esc(r.claims?.holder || "")}</span>`
+          : `<span class="fail">${esc(r.error)}</span>`;
+      } catch (e) {
+        flash(e.message, false);
+      }
+    };
+    $("btnClear").onclick = async () => {
+      if (!confirm("Xóa key local?")) return;
+      await api("/api/license/clear", { method: "POST", body: "{}" });
+      flash("Đã xóa key", true);
+      await load();
+    };
+    load().catch((e) => flash(e.message, false));
+  </script>
+</body>
+</html>

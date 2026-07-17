@@ -1,62 +1,65 @@
 # Đưa FB Page Studio lên GitHub + bản .exe
 
-## 1. Tạo repo GitHub
+**Repo hiện tại:** https://github.com/trumrename/fb-page-studio  
+**Version:** xem `package.json` (1.2.0+)
 
-1. Vào https://github.com/new  
-2. Tên gợi ý: `fb-page-studio` (Public hoặc Private)  
-3. **Không** tick “Add README” nếu đã có code local  
-
-## 2. Push code (máy bạn)
+## 1. Push code
 
 ```powershell
-cd C:\Users\NCpc\fb-page-poster
-
-git init
-git add .
-git commit -m "FB Page Studio v1.0.0 — portable exe + update"
-git branch -M main
-git remote add origin https://github.com/YOUR_USER/fb-page-studio.git
-git push -u origin main
+cd D:\fb-page-poster
+git add -A
+git status
+git commit -m "v1.2.0 multi-app rotation license docs"
+git push origin main
 ```
 
-> **Không** commit file `.env` (đã có trong `.gitignore`). Secrets chỉ nằm local / cạnh file exe.
+> **Không** commit: `.env`, `data/`, `keys/license-private.pem`, `keys/issued/`, token, dist nặng.
 
-## 3. Build 1 file .exe
+## 2. Test trước release
 
 ```powershell
-cd C:\Users\NCpc\fb-page-poster
+node scripts/test-requirements.mjs
+# + CHECK-BUG.md
+```
+
+## 3. Build desktop
+
+```powershell
 npm install
+npm run build:desktop
+# → dist-desktop/FB-Page-Studio-Desktop.exe (tên theo electron-builder.yml)
+```
+
+Hoặc portable server cũ:
+
+```powershell
 npm run build:exe
-# hoặc kèm zip:
-npm run release:zip
 ```
 
-Kết quả:
+## 4. GitHub Release
 
-```
-dist/FB-Page-Studio.exe
-dist/.env.example
-dist/README-CHAY-APP.txt
-```
+1. Releases → **Draft a new release**  
+2. Tag: `v1.2.0` (= version package.json)  
+3. Title: `FB Page Studio v1.2.0`  
+4. Upload exe — tên asset khớp `updateAsset` trong package.json  
+5. Changelog ngắn: multi-app, rotation, license  
 
-## 4. Tạo GitHub Release (bản phát hành)
+## 5. Cập nhật trong app
 
-1. Repo → **Releases** → **Draft a new release**  
-2. Tag: `v1.0.0` (trùng `package.json` version)  
-3. Title: `FB Page Studio v1.0.0`  
-4. Upload **`FB-Page-Studio.exe`**  
-   - **Tên file asset phải đúng:** `FB-Page-Studio.exe`  
-5. Publish release  
-
-## 5. Cấu hình app để nút Cập nhật hoạt động
-
-Trong file `.env` cạnh `FB-Page-Studio.exe`:
+`.env` cạnh exe:
 
 ```env
-GITHUB_REPO=YOUR_USER/fb-page-studio
+GITHUB_REPO=trumrename/fb-page-studio
 ```
 
-Trong UI: bấm **v1.0.0** (top bar) hoặc menu **Cập nhật phiên bản**.
+UI: **Cập nhật phiên bản**.
+
+## 6. License khi ship
+
+- User trial 7 ngày (hoặc cấp key)  
+- Bạn giữ `keys/license-private.pem` offline  
+- Hướng dẫn: `LICENSE-KEYS.md`  
+
 
 App sẽ:
 

@@ -28,6 +28,7 @@ import {
   ensureAntiSpamTables,
   getAntiSpamSettings,
 } from "./antiSpam.js";
+import { assertCanPublish as assertLicenseActive } from "./license.js";
 
 function logScheduled(row) {
   const db = getDb();
@@ -64,6 +65,7 @@ function logScheduled(row) {
  */
 export async function scheduleOnePost(pageRowId, opts = {}) {
   ensureAntiSpamTables();
+  assertLicenseActive();
   const db = getDb();
   const page = db
     .prepare(
