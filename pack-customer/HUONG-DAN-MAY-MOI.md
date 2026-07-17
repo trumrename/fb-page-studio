@@ -183,7 +183,21 @@ Facebook → https://xxxx.ngrok… → ngrok → app :3847
 
 ### 5.3. Cài Ngrok trên Windows
 
-**Cách 1 — Tải file (dễ)**
+**Cách 0 — File `.bat` tự động (khuyên dùng)**
+
+1. Lấy token: https://dashboard.ngrok.com/get-started/your-authtoken  
+2. Mở file **`CAI-NGROK.bat`** (cùng folder app / trong zip) bằng Notepad  
+3. Sửa dòng:
+
+```bat
+set "NGROK_TOKEN=DAN_TOKEN_NGROK_VAO_DAY"
+```
+
+thành token thật, **Lưu**  
+4. Chạy **`CAI-NGROK.bat`** (chuột phải → Run as administrator nếu cần)  
+5. Script sẽ: tải `ngrok.exe` (nếu chưa có) → lưu token → hỏi rồi bật tunnel `127.0.0.1:3847`  
+
+**Cách 1 — Tải file thủ công**
 
 1. https://ngrok.com/download  
 2. Chọn **Windows** → Download  
