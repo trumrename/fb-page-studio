@@ -63,6 +63,10 @@
             <p class="muted" style="margin:.5rem 0 0;font-size:.85rem">
               Trial mặc định: 7 ngày · tối đa 2 account · 6 page (cấu hình env). Hết trial / không key → không đăng bài.
             </p>
+            <p class="muted" style="margin:.5rem 0 0;font-size:.85rem">
+              <b>Cập nhật app:</b> key đã nhập được <b>giữ nguyên</b> (file <code>data/license.json</code>, không nằm trong .exe).
+              Key <b>vĩnh viễn</b> hoặc <b>còn hạn</b> → mở lại app sau update vẫn active. Chỉ hết hạn theo ngày trên key mới mất quyền.
+            </p>
           </div>
         </section>
       </main>
@@ -98,7 +102,8 @@
         <p><b>Mode:</b> <span class="badge ${st.active ? "on" : "err"}">${esc(st.label || st.mode)}</span>
         · active=${st.active}</p>
         <p><b>Holder:</b> ${esc(st.holder || st.claims?.holder || "—")}</p>
-        <p><b>Hết hạn:</b> ${esc(st.expires_at || "không / trial")}</p>
+        <p><b>Hết hạn:</b> ${st.is_lifetime ? "<b>Vĩnh viễn</b>" : esc(st.expires_at || "—")}</p>
+        <p><b>Sau update app:</b> ${st.preserve_across_updates !== false && st.source === "key" ? "giữ key (data/license.json)" : "—"}</p>
         <p><b>Giới hạn:</b> account ≤ ${lim.max_accounts || "∞"} · page ≤ ${lim.max_pages || "∞"}</p>
         <p class="muted">${esc(st.message || st.error || "")}</p>
       `;

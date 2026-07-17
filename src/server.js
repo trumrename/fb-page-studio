@@ -12,7 +12,10 @@ import jobsRoutes from "./routes/jobs.js";
 import licenseRoutes from "./routes/license.js";
 import { runSchedulerTick } from "./services/poster.js";
 import { ensureAntiSpamTables } from "./services/antiSpam.js";
-import { getLicenseStatus } from "./services/license.js";
+import {
+  getLicenseStatus,
+  ensureLicenseAfterUpdate,
+} from "./services/license.js";
 
 const app = express();
 const publicDir = getPublicDir();
@@ -20,6 +23,12 @@ const publicDir = getPublicDir();
 // Init DB + default media folders + anti-spam
 getDb();
 ensureAntiSpamTables();
+// Re-load license after update (data/license.json survives .exe replace)
+try {
+  ensureLicenseAfterUpdate();
+} catch (e) {
+  console.warn("[license] ensure after update:", e.message);
+}
 const dataRoot = config.dataDir || path.dirname(config.databasePath);
 fs.mkdirSync(path.join(dataRoot, "media", "inbox"), { recursive: true });
 fs.mkdirSync(path.join(dataRoot, "media", "posted"), { recursive: true });

@@ -59,6 +59,20 @@ File key lưu: `keys/issued/*.txt` (gitignored).
 
 ---
 
+## Giữ key sau khi cập nhật app
+
+| | |
+|--|--|
+| Key lưu ở đâu? | `data/license.json` (+ `license.backup.json` cạnh exe) |
+| Update app làm gì? | **Chỉ thay file .exe** — **không** xóa `data/`, `.env`, license |
+| Key vĩnh viễn (`type=lifetime` hoặc không có `expires_at`) | Còn mãi, qua mọi version (cùng public key) |
+| Key có ngày hết hạn | Còn hiệu lực đến `expires_at`; sau đó cần key mới |
+| Public key trong app | **Không đổi** giữa các bản release — nếu đổi, key cũ vỡ |
+
+User **không** cần nhập lại key sau update nếu key còn hạn / vĩnh viễn.
+
+---
+
 ## Trial mặc định (chưa có key)
 
 | | |

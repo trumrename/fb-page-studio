@@ -85,10 +85,22 @@ export function verifyLicenseKey(keyString) {
       return { ok: false, error: "Payload key không đọc được" };
     }
 
-    if (claims.expires_at) {
+    // Lifetime / no date = never expires. Dated keys only fail after expires_at.
+    const isLifetime =
+      claims.type === "lifetime" ||
+      claims.lifetime === true ||
+      claims.expires_at == null ||
+      claims.expires_at === "" ||
+      String(claims.expires_at).toLowerCase() === "never";
+    if (!isLifetime && claims.expires_at) {
       const exp = new Date(claims.expires_at).getTime();
       if (Number.isFinite(exp) && Date.now() > exp) {
-        return { ok: false, error: `Key hết hạn (${claims.expires_at})`, claims };
+        return {
+          ok: false,
+          error: `Key hết hạn (${claims.expires_at})`,
+          claims,
+          expired: true,
+        };
       }
     }
 
@@ -131,9 +143,65 @@ export function saveLicense(keyString, claims) {
     claims,
     activated_at: new Date().toISOString(),
     machine_id: getMachineId(),
+    /** Survives app auto-update (stored under data/, not inside .exe) */
+    preserve_across_updates: true,
   };
   fs.writeFileSync(f, JSON.stringify(data, null, 2), "utf8");
+  // Mirror next to data parent for recovery if data/ path shifts slightly
+  try {
+    const mirror = path.join(
+      path.dirname(path.dirname(f)),
+      "license.backup.json"
+    );
+    fs.writeFileSync(mirror, JSON.stringify(data, null, 2), "utf8");
+  } catch {
+    /* ignore */
+  }
   return data;
+}
+
+/** Absolute path of active license file (for update docs / status) */
+export function getLicenseFilePath() {
+  return LICENSE_FILE();
+}
+
+/**
+ * Ensure license still valid after app update / restart.
+ * Does NOT re-prompt if key on disk is still valid (lifetime or not expired).
+ * Tries license.backup.json if license.json missing.
+ */
+export function ensureLicenseAfterUpdate() {
+  const primary = LICENSE_FILE();
+  const backup = path.join(
+    path.dirname(path.dirname(primary)),
+    "license.backup.json"
+  );
+
+  if (!fs.existsSync(primary) && fs.existsSync(backup)) {
+    try {
+      fs.mkdirSync(path.dirname(primary), { recursive: true });
+      fs.copyFileSync(backup, primary);
+      console.log("[license] Restored license.json from license.backup.json");
+    } catch (e) {
+      console.warn("[license] restore backup failed:", e.message);
+    }
+  }
+
+  const st = getLicenseStatus();
+  if (st.active && st.source === "key") {
+    const exp =
+      st.claims?.type === "lifetime" || !st.expires_at
+        ? "vĩnh viễn"
+        : st.expires_at;
+    console.log(
+      `[license] Key còn hiệu lực sau update · ${st.label} · hết hạn: ${exp}`
+    );
+  } else if (st.mode === "invalid" && st.error) {
+    console.warn(`[license] Key trên máy không còn hợp lệ: ${st.error}`);
+  } else if (st.mode === "trial") {
+    console.log(`[license] Trial · còn ~${st.trial?.days_left ?? "?"} ngày`);
+  }
+  return st;
 }
 
 export function clearLicense() {
@@ -169,6 +237,11 @@ export function getLicenseStatus() {
     const v = verifyLicenseKey(stored.key);
     if (v.ok) {
       const c = v.claims || {};
+      const isLifetime =
+        c.type === "lifetime" ||
+        c.lifetime === true ||
+        !c.expires_at ||
+        String(c.expires_at).toLowerCase() === "never";
       return {
         active: true,
         mode: c.type || "licensed",
@@ -180,22 +253,29 @@ export function getLicenseStatus() {
           max_accounts: Number(c.max_accounts) || 0, // 0 = unlimited
           max_pages: Number(c.max_pages) || 0,
         },
-        expires_at: c.expires_at || null,
+        expires_at: isLifetime ? null : c.expires_at || null,
+        is_lifetime: isLifetime,
         holder: c.holder || c.email || c.name || null,
-        message: "License hợp lệ",
+        message: isLifetime
+          ? "License hợp lệ · vĩnh viễn (giữ sau mỗi lần update app)"
+          : "License hợp lệ · còn hạn (giữ sau mỗi lần update app)",
+        preserve_across_updates: true,
+        license_file: LICENSE_FILE(),
       };
     }
-    // invalid stored key → fall through to trial
+    // Expired / invalid — keep file on disk, do not wipe on app update
     return {
       active: false,
-      mode: "invalid",
+      mode: v.expired ? "expired_key" : "invalid",
       source: "key",
       error: v.error,
+      claims: v.claims || stored.claims || null,
       machine_id,
-      label: "Key không hợp lệ",
+      label: v.expired ? "Key hết hạn" : "Key không hợp lệ",
       limits: trialLimits(),
-      message: v.error || "Key lỗi — đang dùng trial/hạn chế",
+      message: v.error || "Key lỗi — nhập key mới",
       trial: buildTrialInfo(),
+      preserve_across_updates: true,
     };
   }
 

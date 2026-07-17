@@ -260,12 +260,24 @@ export async function applyUpdate({ restart = true } = {}) {
 
   await downloadFile(check.asset.download_url, destNew);
 
-  // Batch: wait for process exit, swap files, relaunch
+  // Snapshot license next to exe (extra safety — data/ is never deleted by update)
+  try {
+    const dataLic = path.join(exeDir, "data", "license.json");
+    const bakLic = path.join(exeDir, "license.backup.json");
+    if (fs.existsSync(dataLic)) {
+      fs.copyFileSync(dataLic, bakLic);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Batch: ONLY replace .exe — never touch data/, .env, license.json
   const bat = [
     "@echo off",
     "setlocal",
     `cd /d "${exeDir}"`,
     "echo Updating FB Page Studio...",
+    "echo Giữ nguyên data, .env, license key (khong xoa thu muc data).",
     "timeout /t 2 /nobreak >nul",
     `:retry`,
     `if exist "${targetName}" (`,
@@ -277,6 +289,11 @@ export async function applyUpdate({ restart = true } = {}) {
     `  )`,
     `)`,
     `move /y "${path.basename(destNew)}" "${targetName}"`,
+    `if exist "license.backup.json" if not exist "data\\license.json" (`,
+    `  if not exist "data" mkdir "data"`,
+    `  copy /y "license.backup.json" "data\\license.json" >nul`,
+    `  echo Restored license.json from backup`,
+    `)`,
     `start "" "${targetName}"`,
     `del /f /q "%~f0"`,
     "endlocal",
@@ -289,12 +306,13 @@ export async function applyUpdate({ restart = true } = {}) {
     ok: true,
     updated: true,
     message: restart
-      ? "Đã tải bản mới — đang thay file và khởi động lại…"
-      : "Đã tải bản mới (.new). Gọi restart để áp dụng.",
+      ? "Đã tải bản mới — đang thay .exe và khởi động lại. License key / data được giữ nguyên."
+      : "Đã tải bản mới (.new). License & data không bị xóa.",
     from: check.current_version,
     to: check.latest_version,
     dest: destNew,
     bat: batPath,
+    preserves: ["data/", ".env", "license.json", "license.backup.json"],
   };
 
   if (restart) {
