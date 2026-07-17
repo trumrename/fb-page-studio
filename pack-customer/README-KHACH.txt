@@ -2,6 +2,12 @@ FB Page Studio — GÓI MÁY KHÁCH
 ================================
 Phiên bản gói: xem file VERSION.txt (đồng bộ khi build)
 
+QUAN TRONG — TAI TREN GITHUB:
+-----------------------------
+DUNG:  Assets → FB-Page-Studio-v1.2.x-Windows.zip  HOAC  FB-Page-Studio-Desktop.exe
+SAI:   "Source code (zip)" / "Source code (tar.gz)"
+       = ma nguon lap trinh, KHONG phai ban cai, co the thay file cu/hong, KHONG co app.exe
+
 1) CÀI ĐẶT NHANH
 ----------------
 - Copy cả thư mục này sang máy khách (hoặc chỉ file .exe + .env).
