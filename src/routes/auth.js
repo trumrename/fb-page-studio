@@ -220,9 +220,11 @@ p{color:#b8f0d0;line-height:1.5}a{color:#9ec1ff}
   <p><span class="badge">${escapeHtml(app.name)} · ${escapeHtml(app.key)}</span></p>
   <p>Account #${result.account.id} · <b>${result.pages.length}</b> page(s).</p>
   <p>Tài khoản đã gắn đúng <b>${escapeHtml(app.name)}</b> — rotation so-le dùng nhóm app này.</p>
-  <p><a href="${localUi}">Mở Pages trong app →</a></p>
+  <p><a class="btn" href="${localUi}" style="display:inline-block;margin:.5rem .5rem 0 0;padding:.65rem 1rem;background:#1877f2;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">← Quay về Pages trong app</a>
+  <a class="btn" href="http://127.0.0.1:${config.port}/app.html" style="display:inline-block;margin:.5rem 0 0;padding:.65rem 1rem;background:#2a2f3a;color:#e8eaed;border-radius:8px;text-decoration:none;font-weight:700">Vận hành</a></p>
+  <p style="font-size:.85rem;opacity:.85">Không cần tắt app — bấm nút quay về.</p>
 </div>
-<script>setTimeout(function(){ location.href=${JSON.stringify(localUi)}; }, 900);</script>
+<script>/* optional auto: setTimeout(function(){ location.href=${JSON.stringify(localUi)}; }, 2500); */</script>
 </body></html>`);
   } catch (e) {
     console.error("[auth/callback]", e);

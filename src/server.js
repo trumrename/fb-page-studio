@@ -79,6 +79,8 @@ if (!fs.existsSync(exampleBeside)) {
       "TOKEN_ENCRYPTION_KEY=change-me-to-a-long-random-string-32+",
       "GITHUB_REPO=trumrename/fb-page-studio",
       "UPDATE_ASSET=FB-Page-Studio-Desktop.exe",
+      "# Optional: full path to browser for OAuth (default: Chrome then Edge)",
+      "# BROWSER_PATH=C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe",
       "",
     ].join("\n");
     fs.writeFileSync(exampleBeside, sample, "utf8");

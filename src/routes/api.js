@@ -43,8 +43,29 @@ import {
   listRecentBlocks,
   ensureAntiSpamTables,
 } from "../services/antiSpam.js";
+import { pickFolder } from "../services/folderPicker.js";
 
 const router = Router();
+
+/**
+ * POST /api/system/pick-folder
+ * Body: { title?, initial_dir? }
+ * Opens native Windows folder dialog → absolute path
+ */
+router.post("/system/pick-folder", async (req, res) => {
+  try {
+    const folder = await pickFolder({
+      title: req.body?.title || "Chọn thư mục",
+      initialDir: req.body?.initial_dir || req.body?.initialDir || "",
+    });
+    if (!folder) {
+      return res.json({ ok: false, cancelled: true, path: null });
+    }
+    res.json({ ok: true, path: folder });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
 
 /** GET /api/health */
 router.get("/health", (_req, res) => {

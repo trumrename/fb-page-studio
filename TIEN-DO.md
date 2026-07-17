@@ -1,6 +1,6 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-17** · Code: **1.2.0**  
+> Cập nhật: **2026-07-17** · Code: **1.2.1**  
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`  
 > **GitHub:** `trumrename/fb-page-studio` — **push chỉ khi user OK**
@@ -63,6 +63,13 @@ node scripts/sync-customer-pack.mjs
 - [x] `scripts/sync-customer-pack.mjs`
 - [x] `AGENTS.md` — **hỏi trước khi push GH**
 - [x] Cập nhật TONG-QUAN / TIEN-DO / CHECK-BUG
+
+### F. UX v1.2.1
+- [x] Chọn folder kho caption + kho ảnh/video (Windows dialog)
+- [x] Tải CSV/Excel không rời app + nút quay về log
+- [x] Job: Tạm dừng / Tiếp tục / Dừng
+- [x] Connect mở Chrome ưu tiên (session login)
+- [x] Portable update path + sqlite ABI fix
 
 ---
 

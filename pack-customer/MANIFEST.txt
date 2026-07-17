@@ -1,6 +1,10 @@
 Nội dung gói khách (không secret):
+ - .env
  - .env.example
+ - data
+ - desktop-startup.log
  - FB-Page-Studio-Desktop.exe
+ - MANIFEST.txt
  - media-sample
  - README-KHACH.txt
  - VERSION.txt

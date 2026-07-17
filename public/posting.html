@@ -23,7 +23,8 @@
       <a class="nav-item" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
       <a class="nav-item" href="/license.html"><span class="ico">🔑</span> License</a>
       <div class="nav-label">Exports</div>
-      <a class="nav-item" href="/api/posting/logs/csv"><span class="ico">↓</span> Post logs CSV</a>
+      <a class="nav-item" href="/app.html#logs"><span class="ico">≡</span> Xem log đăng bài</a>
+      <a class="nav-item" href="#" data-dl="/api/posting/logs/csv" data-name="post_logs.csv"><span class="ico">↓</span> Tải CSV (không rời app)</a>
       <div class="nav-label">System</div>
       <a class="nav-item" href="#" onclick="document.getElementById('btnUpdateApp')?.click();return false"><span class="ico">↑</span> Cập nhật phiên bản</a>
       <div class="nav-foot">
@@ -45,7 +46,8 @@
         </div>
         <div class="topbar-actions">
           <a class="btn btn-ghost" href="/">← Pages</a>
-          <a class="btn btn-ghost" href="/api/posting/logs/csv">Logs CSV</a>
+          <a class="btn btn-ghost" href="/app.html">← Vận hành</a>
+          <button type="button" class="btn-ghost" data-dl="/api/posting/logs/csv" data-name="post_logs.csv">↓ Logs CSV</button>
         </div>
       </header>
 
@@ -284,8 +286,15 @@
           </div>
         </section>
 
-        <section class="panel section-gap">
-          <h2 class="panel-hd">Activity log</h2>
+        <section class="panel section-gap" id="activityLog">
+          <h2 class="panel-hd">
+            <span>Activity log (đã đăng?)</span>
+            <span class="hint">
+              <button type="button" class="btn-ghost btn-sm" id="btnRefreshActLog">Làm mới</button>
+              <a class="btn-ghost btn-sm" href="/posting.html" style="text-decoration:none">← Quay về cấu hình</a>
+              <a class="btn-ghost btn-sm" href="/app.html" style="text-decoration:none">← Vận hành</a>
+            </span>
+          </h2>
           <div class="panel-body" style="padding:0">
             <div class="table-wrap" style="max-height:320px">
               <table>
@@ -518,13 +527,28 @@
           <option value="random" ${c.pick_mode !== "sequential" ? "selected" : ""}>random</option>
           <option value="sequential" ${c.pick_mode === "sequential" ? "selected" : ""}>sequential</option>
         </select>
-        <label>Media folder</label>
-        <input type="text" id="media_folder" value="${esc(c.media_folder)}" />
-        <label>Posted folder</label>
-        <input type="text" id="posted_folder" value="${esc(c.posted_folder)}" />
-        <p class="muted">Media: <b>${(data.media && data.media.photos) || 0}</b> ảnh · <b>${(data.media && data.media.videos) || 0}</b> video</p>
-        <label>Kho caption (.txt / .csv)</label>
-        <input type="text" id="captions_folder" value="${esc(c.captions_folder || "")}" />
+        <label>Kho ảnh / video (folder chứa file media)</label>
+        <div class="row2" style="align-items:end;gap:.4rem">
+          <div style="flex:1">
+            <input type="text" id="media_folder" value="${esc(c.media_folder)}" placeholder="D:\\media\\inbox" />
+          </div>
+          <button type="button" class="btn-ghost btn-sm" id="btnPickMedia">📂 Chọn ổ/folder</button>
+        </div>
+        <label>Folder sau khi đăng (posted)</label>
+        <div class="row2" style="align-items:end;gap:.4rem">
+          <div style="flex:1">
+            <input type="text" id="posted_folder" value="${esc(c.posted_folder)}" placeholder="D:\\media\\posted" />
+          </div>
+          <button type="button" class="btn-ghost btn-sm" id="btnPickPosted">📂 Chọn folder</button>
+        </div>
+        <p class="muted">Media: <b>${(data.media && data.media.photos) || 0}</b> ảnh · <b>${(data.media && data.media.videos) || 0}</b> video — ảnh+video chung 1 folder (lọc theo đuôi file).</p>
+        <label>Kho tiêu đề / caption (.txt / .csv)</label>
+        <div class="row2" style="align-items:end;gap:.4rem">
+          <div style="flex:1">
+            <input type="text" id="captions_folder" value="${esc(c.captions_folder || "")}" placeholder="D:\\captions" />
+          </div>
+          <button type="button" class="btn-ghost btn-sm" id="btnPickCaptions">📂 Chọn folder</button>
+        </div>
         <p class="muted">
           Pool: <b>${(data.captions_pool && data.captions_pool.from_disk) || 0}</b> file
           · <b>${(data.captions_pool && data.captions_pool.from_inline) || 0}</b> inline
@@ -587,6 +611,29 @@
         const src = document.getElementById(`active-${id}`);
         $("oneActiveBox").innerHTML = src ? src.innerHTML : "";
       };
+      async function pickInto(inputId, title) {
+        try {
+          const cur = $(inputId)?.value || "";
+          const r = await api("/api/system/pick-folder", {
+            method: "POST",
+            body: JSON.stringify({ title, initial_dir: cur }),
+          });
+          if (r.ok && r.path) {
+            $(inputId).value = r.path;
+            flash("Đã chọn: " + r.path, true);
+          } else if (r.cancelled) {
+            flash("Đã hủy chọn folder", true);
+          }
+        } catch (e) {
+          flash(e.message, false);
+        }
+      }
+      $("btnPickMedia").onclick = () =>
+        pickInto("media_folder", "Chọn kho ảnh / video (inbox)");
+      $("btnPickPosted").onclick = () =>
+        pickInto("posted_folder", "Chọn folder đã đăng (posted)");
+      $("btnPickCaptions").onclick = () =>
+        pickInto("captions_folder", "Chọn kho tiêu đề / caption (.txt .csv)");
       const d = new Date(Date.now() + 2 * 60 * 60 * 1000);
       const pad = (n) => String(n).padStart(2, "0");
       $("oneScheduleAt").value =
@@ -999,6 +1046,31 @@
         $("rotResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
       }
     };
+
+    async function downloadFile(url, filename) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Tải thất bại");
+        const blob = await res.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename || "download";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        flash("Đã tải " + filename, true);
+      } catch (e) {
+        flash(e.message, false);
+      }
+    }
+    document.querySelectorAll("[data-dl]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        downloadFile(el.getAttribute("data-dl"), el.getAttribute("data-name"));
+      });
+    });
+    $("btnRefreshActLog")?.addEventListener("click", () => loadLogs());
 
     loadPages()
       .then(loadLogs)

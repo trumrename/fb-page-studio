@@ -26,7 +26,8 @@
       <div class="nav-label">Quick</div>
       <a class="nav-item" href="/auth/facebook?external=1&app=app1" target="_blank" rel="noopener"><span class="ico">+</span> Connect App 1</a>
       <a class="nav-item" href="/auth/facebook?external=1&app=app2" target="_blank" rel="noopener"><span class="ico">+</span> Connect App 2</a>
-      <a class="nav-item" href="/api/posting/logs/csv"><span class="ico">↓</span> Post logs CSV</a>
+      <a class="nav-item" href="/app.html#logs"><span class="ico">≡</span> Xem log đăng bài</a>
+      <a class="nav-item" href="/app.html"><span class="ico">←</span> Quay về vận hành</a>
       <div class="nav-label">System</div>
       <a class="nav-item" href="#" id="navUpdate" onclick="document.getElementById('btnUpdateApp')?.click();return false"><span class="ico">↑</span> Cập nhật phiên bản</a>
       <div class="nav-foot">
@@ -53,8 +54,8 @@
           <button class="btn-ghost" id="btnExportXlsx" type="button">Excel</button>
           <button class="btn-ghost" id="btnExportCsv" type="button">CSV</button>
           <a class="btn btn-primary" href="/posting.html">Publish →</a>
-          <a class="btn btn-ghost" id="btnConnect" href="/auth/facebook?external=1&app=app1" target="_blank" rel="noopener">+ App 1</a>
-          <a class="btn btn-ghost" id="btnConnect2" href="/auth/facebook?external=1&app=app2" target="_blank" rel="noopener">+ App 2</a>
+          <a class="btn btn-ghost" id="btnConnect" href="/auth/facebook?external=1&app=app1" target="_blank" rel="noopener" title="Mở Chrome (nếu có) — dùng session Facebook đã login">+ App 1</a>
+          <a class="btn btn-ghost" id="btnConnect2" href="/auth/facebook?external=1&app=app2" target="_blank" rel="noopener" title="Mở Chrome (nếu có) — dùng session Facebook đã login">+ App 2</a>
         </div>
       </header>
 
@@ -218,7 +219,7 @@
           hint.innerHTML =
             `<b>Meta Apps:</b> ` +
             (lines.length ? lines.join(" · ") : "Chưa có") +
-            `<br/><span class="muted">Connect App 1 / App 2 → account gắn đúng app · rotation so-le theo nhóm app.</span>`;
+            `<br/><span class="muted">Connect App 1 / App 2 → mở <b>Chrome</b> (ưu tiên, tái dùng tab đã login FB) · gắn đúng Meta App.</span>`;
         }
         const b2 = $("btnConnect2");
         if (b2) {

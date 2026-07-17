@@ -136,6 +136,56 @@ function loadAppIcon() {
   return img.isEmpty() ? undefined : img;
 }
 
+/**
+ * Open OAuth / external URL in a real browser that keeps Facebook login cookies.
+ * Prefer Chrome (user usually has tabs logged in) → Edge → Firefox → system default.
+ * Opening chrome.exe with a URL reuses the running Chrome instance + profile.
+ */
+function openInPreferredBrowser(url) {
+  const candidates = [];
+  if (process.env.BROWSER_PATH) candidates.push(process.env.BROWSER_PATH);
+  if (process.env.FB_BROWSER_PATH) candidates.push(process.env.FB_BROWSER_PATH);
+
+  const local = process.env.LOCALAPPDATA || "";
+  const pf = process.env.ProgramFiles || "C:\\Program Files";
+  const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+
+  // Prefer Chrome first (Facebook sessions often live here)
+  candidates.push(
+    path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(local, "Google", "Chrome Beta", "Application", "chrome.exe"),
+    // Edge
+    path.join(pf86, "Microsoft", "Edge", "Application", "msedge.exe"),
+    path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
+    // Firefox
+    path.join(pf, "Mozilla Firefox", "firefox.exe"),
+    path.join(pf86, "Mozilla Firefox", "firefox.exe")
+  );
+
+  for (const exe of candidates) {
+    if (!exe || !fs.existsSync(exe)) continue;
+    try {
+      // New tab in existing browser process when possible
+      spawn(exe, [url], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
+      }).unref();
+      log("openInPreferredBrowser", exe, url.slice(0, 80));
+      return true;
+    } catch (e) {
+      log("openInPreferredBrowser fail", exe, e.message);
+    }
+  }
+
+  // Fallback: Windows default association
+  shell.openExternal(url).catch((e) => log("openExternal fail", e.message));
+  log("openInPreferredBrowser fallback shell.openExternal");
+  return false;
+}
+
 function waitForServer(port, timeoutMs = 60000) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
@@ -274,9 +324,9 @@ function createWindow() {
     );
   });
 
-  // Always open OAuth / Facebook in system browser (full 2FA)
+  // OAuth / Facebook → Chrome (or Edge) so existing login tabs/session are reused
   mainWindow.webContents.setWindowOpenHandler(({ url: u }) => {
-    shell.openExternal(u);
+    openInPreferredBrowser(u);
     return { action: "deny" };
   });
 
@@ -285,11 +335,12 @@ function createWindow() {
       const u = new URL(navUrl);
       const isLocal =
         u.hostname === "127.0.0.1" || u.hostname === "localhost";
-      // Connect flow → system browser so password + 2FA complete in one place
+      // Connect flow → preferred browser (Chrome first) for password + 2FA + logged-in session
       if (isLocal && u.pathname.startsWith("/auth/facebook")) {
         e.preventDefault();
-        shell.openExternal(
-          `http://127.0.0.1:${PORT}/auth/facebook?external=1`
+        const appQ = u.searchParams.get("app") || "app1";
+        openInPreferredBrowser(
+          `http://127.0.0.1:${PORT}/auth/facebook?external=1&app=${encodeURIComponent(appQ)}`
         );
         return;
       }
@@ -302,7 +353,7 @@ function createWindow() {
         u.pathname.includes("/auth/facebook")
       ) {
         e.preventDefault();
-        shell.openExternal(navUrl);
+        openInPreferredBrowser(navUrl);
       }
     } catch {
       /* ignore */

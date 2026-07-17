@@ -138,6 +138,10 @@ export function startJob({ type, title, tasks }) {
     started_at: null,
     finished_at: null,
     error: null,
+    /** soft stop after current task */
+    stop_requested: false,
+    /** pause between tasks until resume */
+    paused: false,
     tasks: (tasks || []).map((t, i) => ({
       id: `${id}-t${i + 1}`,
       index: i + 1,
@@ -166,6 +170,57 @@ export function startJob({ type, title, tasks }) {
   return publicJob(job);
 }
 
+/** Request stop after current Graph call finishes */
+export function stopJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return null;
+  if (!["running", "paused", "queued"].includes(job.status)) {
+    return publicJob(job);
+  }
+  job.stop_requested = true;
+  job.paused = false;
+  notify(job, "warn", "Dừng job", "Sẽ dừng sau task hiện tại…");
+  recompute(job);
+  emit(job);
+  return publicJob(job);
+}
+
+export function pauseJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return null;
+  if (job.status !== "running") return publicJob(job);
+  job.paused = true;
+  job.status = "paused";
+  notify(job, "warn", "Tạm dừng", "Job tạm dừng giữa các task. Bấm Tiếp tục để chạy.");
+  recompute(job);
+  emit(job);
+  return publicJob(job);
+}
+
+export function resumeJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return null;
+  if (!job.paused && job.status !== "paused") return publicJob(job);
+  job.paused = false;
+  if (job.status === "paused") job.status = "running";
+  notify(job, "info", "Tiếp tục", "Job tiếp tục chạy.");
+  recompute(job);
+  emit(job);
+  return publicJob(job);
+}
+
+async function waitWhilePaused(job) {
+  while (job.paused && !job.stop_requested) {
+    job.status = "paused";
+    recompute(job);
+    emit(job);
+    await sleep(400);
+  }
+  if (!job.stop_requested && job.status === "paused") {
+    job.status = "running";
+  }
+}
+
 function notify(job, level, title, body) {
   const n = {
     id: nanoid(6),
@@ -188,6 +243,27 @@ async function runJob(jobId) {
   emit(job);
 
   for (const task of job.tasks) {
+    if (job.stop_requested) {
+      if (task.status === "pending") {
+        task.status = "skipped";
+        task.percent = 100;
+        task.message = "Đã dừng — bỏ qua";
+        task.finished_at = nowIso();
+      }
+      continue;
+    }
+
+    await waitWhilePaused(job);
+    if (job.stop_requested) {
+      if (task.status === "pending") {
+        task.status = "skipped";
+        task.percent = 100;
+        task.message = "Đã dừng — bỏ qua";
+        task.finished_at = nowIso();
+      }
+      continue;
+    }
+
     task.status = "running";
     task.percent = 10;
     task.message = "Đang chạy…";
@@ -244,6 +320,30 @@ async function runJob(jobId) {
 
     // gentle pace between tasks
     await sleep(350);
+  }
+
+  // Mark remaining pending as skipped if stopped mid-run
+  for (const task of job.tasks) {
+    if (task.status === "pending") {
+      task.status = "skipped";
+      task.percent = 100;
+      task.message = "Đã dừng — bỏ qua";
+      task.finished_at = nowIso();
+    }
+  }
+
+  if (job.stop_requested) {
+    job.status = "stopped";
+    job.finished_at = nowIso();
+    recompute(job);
+    notify(
+      job,
+      "warn",
+      `Job dừng · ${job.title}`,
+      `OK ${job.progress.ok} · FAIL ${job.progress.fail} · SKIP ${job.progress.skipped}`
+    );
+    emit(job);
+    return;
   }
 
   job.status =

@@ -63,8 +63,9 @@
       <a class="nav-item" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
       <a class="nav-item" href="/license.html"><span class="ico">🔑</span> License</a>
       <div class="nav-label">Báo cáo</div>
-      <a class="nav-item" href="/api/jobs/reports/csv"><span class="ico">↓</span> Tải CSV chi tiết</a>
-      <a class="nav-item" href="/api/jobs/reports/xlsx"><span class="ico">↓</span> Tải Excel chi tiết</a>
+      <a class="nav-item" href="#" id="navCsv" data-dl="/api/jobs/reports/csv" data-name="dang_bai_chi_tiet.csv"><span class="ico">↓</span> Tải CSV chi tiết</a>
+      <a class="nav-item" href="#" id="navXlsx" data-dl="/api/jobs/reports/xlsx" data-name="dang_bai_chi_tiet.xlsx"><span class="ico">↓</span> Tải Excel chi tiết</a>
+      <a class="nav-item" href="/app.html#logs"><span class="ico">≡</span> Xem log trong app</a>
       <div class="nav-foot">
         <div class="meta" id="reportPath">Báo cáo: data/exports/</div>
       </div>
@@ -81,8 +82,8 @@
         </div>
         <div class="topbar-actions">
           <a class="btn btn-ghost btn-sm" href="/index.html">Connect FB</a>
-          <a class="btn btn-ghost btn-sm" href="/api/jobs/reports/csv">CSV</a>
-          <a class="btn btn-ghost btn-sm" href="/api/jobs/reports/xlsx">Excel</a>
+          <button type="button" class="btn-ghost btn-sm" data-dl="/api/jobs/reports/csv" data-name="dang_bai_chi_tiet.csv">CSV</button>
+          <button type="button" class="btn-ghost btn-sm" data-dl="/api/jobs/reports/xlsx" data-name="dang_bai_chi_tiet.xlsx">Excel</button>
         </div>
       </header>
 
@@ -165,6 +166,11 @@
               </div>
               <div class="progress-big" id="jobBar"><i id="jobBarFill"></i></div>
               <p class="muted" id="jobCurrent" style="margin:.65rem 0">—</p>
+              <div class="actions" id="jobControls" style="margin:.5rem 0;display:none">
+                <button type="button" class="btn-warn btn-sm" id="btnJobPause">⏸ Tạm dừng</button>
+                <button type="button" class="btn-ok btn-sm" id="btnJobResume" style="display:none">▶ Tiếp tục</button>
+                <button type="button" class="btn-danger btn-sm" id="btnJobStop">⏹ Dừng</button>
+              </div>
 
               <h3 style="font-size:.85rem;margin:1rem 0 .5rem;color:var(--muted)">Theo page</h3>
               <div id="pageProgress"><p class="muted">Chọn page và bấm chạy.</p></div>
@@ -185,10 +191,14 @@
           </div>
         </section>
 
-        <section class="panel section-gap">
+        <section class="panel section-gap" id="logs">
           <h2 class="panel-hd">
-            <span>Báo cáo gần đây (DB log)</span>
-            <a class="hint" href="/api/jobs/reports/xlsx" style="color:#9ec1ff">Tải Excel đầy đủ →</a>
+            <span>Báo cáo gần đây (đã đăng?)</span>
+            <span class="hint">
+              <button type="button" class="btn-ghost btn-sm" id="btnRefreshLogs">Làm mới</button>
+              <button type="button" class="btn-ghost btn-sm" data-dl="/api/jobs/reports/xlsx" data-name="dang_bai_chi_tiet.xlsx">↓ Excel</button>
+              <a class="btn-ghost btn-sm" href="/app.html" style="text-decoration:none">← Quay về vận hành</a>
+            </span>
           </h2>
           <div class="panel-body" style="padding:0">
             <div class="table-wrap" style="max-height:280px">
@@ -269,18 +279,87 @@
       `).join("");
     }
 
+    async function downloadFile(url, filename) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Tải thất bại " + res.status);
+        const blob = await res.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename || "download";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(a.href);
+        toast("success", "Đã tải", filename);
+      } catch (e) {
+        toast("error", "Tải file", e.message);
+      }
+    }
+
+    document.querySelectorAll("[data-dl]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        downloadFile(el.getAttribute("data-dl"), el.getAttribute("data-name"));
+      });
+    });
+
+    $("btnJobPause")?.addEventListener("click", async () => {
+      if (!currentJobId) return;
+      try {
+        const r = await api("/api/jobs/" + currentJobId + "/pause", { method: "POST", body: "{}" });
+        renderJob(r.job);
+        toast("warn", "Tạm dừng", "Job sẽ dừng giữa các task");
+      } catch (e) {
+        toast("error", "Pause", e.message);
+      }
+    });
+    $("btnJobResume")?.addEventListener("click", async () => {
+      if (!currentJobId) return;
+      try {
+        const r = await api("/api/jobs/" + currentJobId + "/resume", { method: "POST", body: "{}" });
+        renderJob(r.job);
+        toast("success", "Tiếp tục", "Job chạy tiếp");
+      } catch (e) {
+        toast("error", "Resume", e.message);
+      }
+    });
+    $("btnJobStop")?.addEventListener("click", async () => {
+      if (!currentJobId) return;
+      if (!confirm("Dừng job? Task đang chạy sẽ xong, các task còn lại bỏ qua.")) return;
+      try {
+        const r = await api("/api/jobs/" + currentJobId + "/stop", { method: "POST", body: "{}" });
+        renderJob(r.job);
+        toast("warn", "Dừng", "Đã yêu cầu dừng job");
+      } catch (e) {
+        toast("error", "Stop", e.message);
+      }
+    });
+    $("btnRefreshLogs")?.addEventListener("click", () => loadLogs());
+
     function renderJob(job) {
       if (!job) return;
       const p = job.progress || {};
       $("jobTitle").textContent = job.title || job.id;
       $("jobPct").textContent = (p.percent || 0) + "%";
-      $("jobStats").textContent = ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · ${p.done || 0}/${p.total || 0}`;
+      $("jobStats").textContent = ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}`;
       $("jobStatus").textContent = job.status;
-      $("jobStatus").className = "badge " + (job.status === "ok" ? "on" : job.status === "fail" ? "err" : "live");
+      $("jobStatus").className = "badge " + (job.status === "ok" ? "on" : job.status === "fail" || job.status === "stopped" ? "err" : "live");
       $("jobBarFill").style.width = (p.percent || 0) + "%";
       const bar = $("jobBar");
-      bar.className = "progress-big " + (job.status === "ok" ? "ok" : job.status === "fail" ? "fail" : "");
-      $("jobCurrent").textContent = p.current_label || "—";
+      bar.className = "progress-big " + (job.status === "ok" ? "ok" : job.status === "fail" || job.status === "stopped" ? "fail" : "");
+      $("jobCurrent").textContent = p.current_label || (job.status === "paused" ? "⏸ Đang tạm dừng…" : "—");
+      const ctl = $("jobControls");
+      if (ctl) {
+        const active = ["running", "paused", "queued"].includes(job.status);
+        ctl.style.display = active || job.status === "stopped" ? "flex" : "none";
+        const pause = $("btnJobPause");
+        const resume = $("btnJobResume");
+        const stop = $("btnJobStop");
+        if (pause) pause.style.display = job.status === "running" ? "inline-block" : "none";
+        if (resume) resume.style.display = job.status === "paused" ? "inline-block" : "none";
+        if (stop) stop.style.display = active ? "inline-block" : "none";
+      }
 
       // pages
       const pp = $("pageProgress");
@@ -337,7 +416,7 @@
         $("reportPath").textContent = "Đã ghi: " + job.report_files.map((f) => f.split(/[/\\]/).pop()).join(", ");
       }
 
-      if (["ok", "fail", "partial"].includes(job.status)) {
+      if (["ok", "fail", "partial", "stopped"].includes(job.status)) {
         clearInterval(pollTimer);
         pollTimer = null;
         loadLogs();

@@ -5,7 +5,7 @@
 | | |
 |--|--|
 | **Tên** | FB Page Studio |
-| **Phiên bản** | **1.2.0** (code main; release exe upload khi bạn OK) |
+| **Phiên bản** | **1.2.1** |
 | **Máy DEV (gốc)** | `D:\fb-page-poster\` |
 | **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` |
 | **Ghi chú DEV** | `D:\fb-page-poster\pack-dev\README-DEV.md` |

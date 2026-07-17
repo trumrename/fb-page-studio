@@ -7,6 +7,9 @@ import {
   listJobs,
   getJob,
   subscribeJob,
+  stopJob,
+  pauseJob,
+  resumeJob,
 } from "../services/jobRunner.js";
 import { scheduleBulk } from "../services/schedule.js";
 import { getReportPaths } from "../services/reportExport.js";
@@ -271,6 +274,27 @@ router.post("/run-one", (req, res) => {
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
+});
+
+/** POST /api/jobs/:id/stop — dừng sau task hiện tại */
+router.post("/:id/stop", (req, res) => {
+  const job = stopJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json({ ok: true, job });
+});
+
+/** POST /api/jobs/:id/pause */
+router.post("/:id/pause", (req, res) => {
+  const job = pauseJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json({ ok: true, job });
+});
+
+/** POST /api/jobs/:id/resume */
+router.post("/:id/resume", (req, res) => {
+  const job = resumeJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json({ ok: true, job });
 });
 
 /** GET /api/jobs/:id */
