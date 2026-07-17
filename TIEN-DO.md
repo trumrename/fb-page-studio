@@ -37,6 +37,14 @@
 - [x] Vendor: `scripts/gen-license.mjs` · `LICENSE-KEYS.md`
 - [x] Private key **gitignored** (`keys/license-private.pem`)
 
+### D. Auto-update thông báo (v1.2.x)
+- [x] Check GitHub Releases khi mở app + mỗi 4 giờ
+- [x] Banner **Có phiên bản mới** + nút **Cập nhật ngay**
+- [x] Nút topbar đổi `vX↑` (warn pulse)
+- [x] Default `GITHUB_REPO=trumrename/fb-page-studio`
+- [x] Khớp asset Desktop.exe / legacy .exe
+- [ ] Upload .exe vào mỗi GitHub Release (bạn build khi ship)
+
 ---
 
 ## Chưa làm / phụ thuộc bạn

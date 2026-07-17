@@ -23,11 +23,43 @@ function parseRepo(repo) {
 export function getUpdateConfig() {
   const pkg = getPackageJson();
   return {
-    current_version: pkg.version || "0.0.0",
-    github_repo: process.env.GITHUB_REPO || pkg.githubRepo || config.githubRepo || "",
-    asset_name: process.env.UPDATE_ASSET || pkg.updateAsset || "FB-Page-Studio.exe",
+    current_version: pkg.version || config.version || "0.0.0",
+    // Default repo so portable builds work without user editing .env
+    github_repo:
+      process.env.GITHUB_REPO ||
+      pkg.githubRepo ||
+      config.githubRepo ||
+      "trumrename/fb-page-studio",
+    asset_name:
+      process.env.UPDATE_ASSET ||
+      pkg.updateAsset ||
+      "FB-Page-Studio-Desktop.exe",
     packaged: isPackaged(),
   };
+}
+
+/** Prefer portable desktop exe, then legacy names, then any .exe */
+export function pickReleaseAsset(assets, preferredName) {
+  const list = Array.isArray(assets) ? assets : [];
+  if (!list.length) return null;
+  const byName = (n) => list.find((a) => a.name === n);
+  const prefer = [
+    preferredName,
+    "FB-Page-Studio-Desktop.exe",
+    "FB-Page-Studio.exe",
+    "FB Page Studio.exe",
+  ].filter(Boolean);
+  for (const n of prefer) {
+    const hit = byName(n);
+    if (hit) return hit;
+  }
+  const fuzzy = list.find(
+    (a) =>
+      /\.exe$/i.test(a.name || "") &&
+      /page.?studio|fb.?page/i.test(a.name || "")
+  );
+  if (fuzzy) return fuzzy;
+  return list.find((a) => /\.exe$/i.test(a.name || "")) || null;
 }
 
 function semverParts(v) {
@@ -174,10 +206,7 @@ export async function checkForUpdate() {
   const tag = release.tag_name || release.name || "";
   const remoteVersion = String(tag).replace(/^v/i, "");
   const assets = release.assets || [];
-  const asset =
-    assets.find((a) => a.name === cfg.asset_name) ||
-    assets.find((a) => /\.exe$/i.test(a.name)) ||
-    null;
+  const asset = pickReleaseAsset(assets, cfg.asset_name);
 
   const newer = isNewerVersion(remoteVersion, cfg.current_version);
 
@@ -198,8 +227,10 @@ export async function checkForUpdate() {
           download_url: asset.browser_download_url,
         }
       : null,
+    missing_asset: newer && !asset,
     github_repo: `${parsed.owner}/${parsed.name}`,
     packaged: cfg.packaged,
+    check_at: new Date().toISOString(),
   };
 }
 

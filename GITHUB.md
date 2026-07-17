@@ -44,15 +44,28 @@ npm run build:exe
 4. Upload exe — tên asset khớp `updateAsset` trong package.json  
 5. Changelog ngắn: multi-app, rotation, license  
 
-## 5. Cập nhật trong app
+## 5. Cập nhật trong app (tự thông báo)
 
-`.env` cạnh exe:
+App **tự check** GitHub Releases khi mở + mỗi 4 giờ:
+
+- Banner vàng: **Có phiên bản mới** → **Cập nhật ngay**
+- Nút topbar `v1.2.0↑ v1.2.1` (nhấp nháy) → bấm = tải + restart
+
+`.env` cạnh exe (optional — đã có default trong code):
 
 ```env
 GITHUB_REPO=trumrename/fb-page-studio
+UPDATE_ASSET=FB-Page-Studio-Desktop.exe
 ```
 
-UI: **Cập nhật phiên bản**.
+**Release bắt buộc có file .exe** tên `FB-Page-Studio-Desktop.exe` (hoặc bất kỳ `.exe` Page Studio).  
+Nếu chỉ tạo tag không upload exe → app báo có bản mới nhưng không auto-cài (mở link GitHub).
+
+```powershell
+npm run build:desktop
+# Upload dist-desktop-oauth\FB-Page-Studio-Desktop.exe vào Release
+gh release upload v1.2.1 "dist-desktop-oauth\FB-Page-Studio-Desktop.exe" --clobber
+```
 
 ## 6. License khi ship
 

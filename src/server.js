@@ -68,7 +68,8 @@ if (!fs.existsSync(exampleBeside)) {
       "FB_GRAPH_VERSION=v21.0",
       "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
       "TOKEN_ENCRYPTION_KEY=change-me-to-a-long-random-string-32+",
-      "GITHUB_REPO=your-github-user/fb-page-studio",
+      "GITHUB_REPO=trumrename/fb-page-studio",
+      "UPDATE_ASSET=FB-Page-Studio-Desktop.exe",
       "",
     ].join("\n");
     fs.writeFileSync(exampleBeside, sample, "utf8");
@@ -107,6 +108,24 @@ app.use("/api", apiRoutes);
 app.use("/api/posting", postingRoutes);
 app.use("/api/jobs", jobsRoutes);
 app.use(express.static(publicDir));
+
+// Startup: log if GitHub has a newer release (non-blocking)
+import("./services/updater.js")
+  .then(({ checkForUpdate }) => checkForUpdate())
+  .then((r) => {
+    if (r?.ok && r.has_update) {
+      console.log(
+        `[update] Có bản mới v${r.latest_version} (hiện v${r.current_version})` +
+          (r.asset ? ` · ${r.asset.name}` : " · ⚠ release chưa có .exe") +
+          (r.release_url ? ` · ${r.release_url}` : "")
+      );
+    } else if (r?.ok) {
+      console.log(`[update] Đang là bản mới nhất v${r.current_version}`);
+    } else if (r?.error) {
+      console.warn(`[update] Check: ${r.error}`);
+    }
+  })
+  .catch((e) => console.warn("[update]", e.message));
 
 // Scheduler: every 60s check enabled pages
 const SCHEDULER_MS = Number(process.env.SCHEDULER_INTERVAL_MS || 60000);
