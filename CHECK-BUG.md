@@ -1,7 +1,7 @@
 # CHECK-BUG — Checklist kiểm thử FB Page Studio
 
 > Trước mỗi ship / release. Đánh `[x]` khi OK.  
-> **Phiên bản code:** 1.2.2
+> **Phiên bản code:** 1.2.3
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`
 
@@ -64,6 +64,8 @@ npm test
 - [ ] Không tạo lịch mới ở quá khứ; bài hẹn cũ chỉ đổi trạng thái sau khi Facebook xác nhận
 - [ ] Job hiển thị % và thông báo rõ thành công/lỗi
 - [ ] Media/caption lấy đúng folder từng Page và cập nhật số lượng khi job chạy
+- [ ] Media random và không chọn file nằm sát các lần chọn gần nhất khi kho đủ lớn
+- [ ] Caption vòng đầu đúng thứ tự; hết kho thì trộn đủ caption và chạy vòng tiếp
 
 ## 5.1. Báo cáo / follower
 

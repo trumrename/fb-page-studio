@@ -5,7 +5,7 @@
 | | |
 |--|--|
 | **Tên** | FB Page Studio |
-| **Phiên bản** | **1.2.2** |
+| **Phiên bản** | **1.2.3** |
 | **Máy DEV (gốc)** | `D:\fb-page-poster\` |
 | **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` |
 | **Ghi chú DEV** | `D:\fb-page-poster\pack-dev\README-DEV.md` |

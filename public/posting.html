@@ -692,10 +692,8 @@
         <label>Sequence</label>
         <input type="text" id="sequence" value="${esc(seq)}" placeholder="photo, video, text" />
         <label>Pick mode</label>
-        <select id="pick_mode">
-          <option value="random" ${c.pick_mode !== "sequential" ? "selected" : ""}>random</option>
-          <option value="sequential" ${c.pick_mode === "sequential" ? "selected" : ""}>sequential</option>
-        </select>
+        <input type="hidden" id="pick_mode" value="random" />
+        <p class="muted">Media: random, tránh các file gần lần chọn trước · Caption: lần lượt đến hết, sau đó trộn và xoay vòng.</p>
         <label>Kho ảnh / video (folder chứa file media)</label>
         <div class="row2" style="align-items:end;gap:.4rem">
           <div style="flex:1">

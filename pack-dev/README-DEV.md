@@ -43,7 +43,7 @@ npm run build:desktop        # build exe
 node scripts/sync-customer-pack.mjs   # đổ exe + file an toàn sang pack-customer
 ```
 
-## Trạng thái bản v1.2.2
+## Trạng thái bản v1.2.3
 
 - Workspace UI đã tách rõ theo quy trình vận hành.
 - Rotation hỗ trợ từng App và hai App so le; job tuần tự, có tiến trình và thông báo.
@@ -52,6 +52,7 @@ node scripts/sync-customer-pack.mjs   # đổ exe + file an toàn sang pack-cust
 - Báo cáo ngày nằm trong `data\exports\daily`: Page theo App, lịch sử đăng và follower 1/3/7/30 ngày.
 - Tác vụ cuối ngày chạy theo giờ Việt Nam lúc 23:59.
 - Khi follower trống, kiểm tra token có `pages_show_list`, `pages_read_engagement` và quyền Page tương ứng.
+- Media chọn random có khoảng cách với các lần chọn gần nhất; caption đi lần lượt hết kho rồi trộn cho vòng sau.
 
 ## Quy tắc với AI / khi fix
 

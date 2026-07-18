@@ -1,6 +1,6 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-18** · Code: **1.2.2**
+> Cập nhật: **2026-07-18** · Code: **1.2.3**
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`  
 > **GitHub:** `trumrename/fb-page-studio` — **push chỉ khi user OK**
@@ -83,6 +83,13 @@ node scripts/sync-customer-pack.mjs
 - [x] Theo dõi follower từng Page, tăng/giảm 1 · 3 · 7 · 30 ngày
 - [x] Refresh follower trước báo cáo Page cuối ngày; ghi rõ Page thiếu quyền Facebook
 - [x] Bộ kiểm thử tự động: **129/129 đạt** trước build phát hành
+
+### H. Tài nguyên đăng v1.2.3
+- [x] Media luôn chọn random và tránh các file nằm gần ba lần chọn gần nhất trong cùng kho
+- [x] Caption chạy lần lượt hết vòng đầu; các vòng sau trộn thứ tự rồi tiếp tục xoay vòng
+- [x] Áp dụng chung cho đăng trực tiếp, chạy ngay, rotation và hẹn giờ
+- [x] Bỏ lựa chọn random/sequential gây hiểu nhầm trên giao diện Page
+- [x] Bộ kiểm thử tự động: **133/133 đạt**
 
 ---
 

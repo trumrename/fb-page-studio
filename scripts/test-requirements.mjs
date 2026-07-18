@@ -5,6 +5,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { pickCaption } from "../src/services/mediaLibrary.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(root);
@@ -86,6 +87,14 @@ check("publishing serializes work per Page", pageLock.includes("withPageOperatio
 check("no parallel Promise.all posts in runner", !/Promise\.all\([^)]*runOnePost/.test(jr));
 check("job runner live resource snapshot", jr.includes("refreshResources") && jr.includes("job.resources"));
 check("job history persists across App restart", jr.includes("jobs-state.json") && jr.includes("restoreJobs") && jr.includes('job.status = "interrupted"'));
+check("media uses random spaced policy", read("src/services/antiSpam.js").includes("pickRandomMediaSpaced") && poster.includes('"random_spaced"') && schedule.includes('"random_spaced"'));
+check("caption uses sequential then shuffled cycles", read("src/services/mediaLibrary.js").includes("stableShuffle") && poster.includes('"sequential_shuffle"') && schedule.includes('"sequential_shuffle"'));
+
+const captionSample = ["Caption A", "Caption B", "Caption C", "Caption D"];
+const firstCaptionCycle = captionSample.map((_, i) => pickCaption(captionSample, i, "sequential_shuffle"));
+const secondCaptionCycle = captionSample.map((_, i) => pickCaption(captionSample, i + captionSample.length, "sequential_shuffle"));
+check("caption first cycle preserves order", firstCaptionCycle.join("|") === captionSample.join("|"));
+check("caption next cycle is a full shuffled permutation", new Set(secondCaptionCycle).size === captionSample.length && secondCaptionCycle.some((x, i) => x !== captionSample[i]));
 
 const server = read("src/server.js");
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));

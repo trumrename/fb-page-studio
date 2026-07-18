@@ -42,7 +42,7 @@ if (!fs.existsSync(sampleCap)) {
     sampleCap,
     [
       "# Mỗi dòng = 1 caption. Dòng bắt đầu # bị bỏ qua.",
-      "# Tool random 1 dòng khi đăng (pick_mode=random).",
+      "# Tool lấy caption lần lượt đến hết, sau đó trộn và xoay vòng.",
       "Good morning! New update today.",
       "Don't miss this one.",
       "Full vibe on the page today.",

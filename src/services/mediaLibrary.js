@@ -182,16 +182,50 @@ export function pickCaption(
     : [];
   // Disk first (kho), then inline extras
   let list = [...fromDisk, ...inline.filter((c) => !fromDisk.includes(c))];
-  if (exclude?.length) {
-    const ban = new Set(exclude.map((c) => String(c).trim().toLowerCase()));
-    list = list.filter((c) => !ban.has(String(c).trim().toLowerCase()));
-  }
   if (!list.length) return "";
-  const mode = pickMode === "sequential" ? "sequential" : "random";
-  if (mode === "random") {
-    return list[Math.floor(Math.random() * list.length)];
+
+  // Caption policy is intentionally fixed:
+  // - cycle 0: preserve the source order from beginning to end;
+  // - later cycles: use a stable shuffled order, so restart/retry does not
+  //   unexpectedly change the caption assigned to a slot.
+  const index = Math.max(0, Number(slotIndex) || 0);
+  const cycle = Math.floor(index / list.length);
+  const offset = index % list.length;
+  const ordered = cycle === 0 ? [...list] : stableShuffle(list, cycle);
+  const ban = new Set((exclude || []).map((c) => String(c).trim().toLowerCase()));
+  for (let step = 0; step < ordered.length; step++) {
+    const candidate = ordered[(offset + step) % ordered.length];
+    if (!ban.has(String(candidate).trim().toLowerCase())) return candidate;
   }
-  return list[slotIndex % list.length];
+  return "";
+}
+
+function stableShuffle(list, cycle) {
+  const out = [...list];
+  let seed = 2166136261 ^ cycle;
+  for (const item of list) {
+    for (const ch of String(item)) {
+      seed ^= ch.charCodeAt(0);
+      seed = Math.imul(seed, 16777619) >>> 0;
+    }
+  }
+  const random = () => {
+    seed += 0x6d2b79f5;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  // A shuffled cycle should not accidentally be identical to the source
+  // order when there is enough choice.
+  if (out.length > 1 && out.every((x, i) => x === list[i])) {
+    out.push(out.shift());
+  }
+  return out;
 }
 
 export function captionPoolStats(captionsFolder, inlineCaptions = []) {

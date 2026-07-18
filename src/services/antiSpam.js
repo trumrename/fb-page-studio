@@ -17,8 +17,9 @@ import {
   ensureDir,
   moveToPosted,
   listMediaFiles as listMediaFilesSync,
-  pickMedia as pickMediaSync,
 } from "./mediaLibrary.js";
+
+const recentMediaByPool = new Map();
 
 /** Recommended defaults (safe-ish for multi-page organic) */
 export const SAFE_PRESET = {
@@ -641,7 +642,7 @@ export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder)
   if (!files.length) return { path: null, skipped: 0 };
 
   if (!s.enabled || !s.block_duplicate_media) {
-    return { path: pickMediaSync(folder, kind, pickMode, slotIndex), skipped: 0 };
+    return { path: pickRandomMediaSpaced(files, folder, kind), skipped: 0 };
   }
 
   let skipped = 0;
@@ -668,13 +669,28 @@ export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder)
     }
   }
   if (!usable.length) return { path: null, skipped };
-  if (pickMode === "random") {
-    return {
-      path: usable[Math.floor(Math.random() * usable.length)],
-      skipped,
-    };
-  }
-  return { path: usable[slotIndex % usable.length], skipped };
+  return { path: pickRandomMediaSpaced(usable, folder, kind), skipped };
+}
+
+function pickRandomMediaSpaced(files, folder, kind) {
+  if (!files.length) return null;
+  const key = `${path.resolve(folder || ".").toLowerCase()}|${kind}`;
+  const recent = recentMediaByPool.get(key) || [];
+  const names = files.map((f) => path.basename(f));
+  const combined = [...new Set([...names, ...recent])].sort((a, b) => a.localeCompare(b));
+  const recentIndexes = recent.map((name) => combined.indexOf(name)).filter((i) => i >= 0);
+
+  // Prefer files at least three sorted positions away from recent picks.
+  // With a small pool, gracefully fall back to every available file.
+  let candidates = files.filter((f) => {
+    const idx = combined.indexOf(path.basename(f));
+    return recentIndexes.every((oldIdx) => Math.abs(idx - oldIdx) > 2);
+  });
+  if (!candidates.length) candidates = files;
+
+  const picked = candidates[Math.floor(Math.random() * candidates.length)];
+  recentMediaByPool.set(key, [path.basename(picked), ...recent].slice(0, 3));
+  return picked;
 }
 
 /** Apply floor to page config interval / daily max */

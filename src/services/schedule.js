@@ -100,7 +100,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         : pickCaption(
             cfg.captions,
             slot + attempt,
-            cfg.pick_mode || "random",
+            "sequential_shuffle",
             cfg.captions_folder
           );
     if (postType === "photo" || postType === "image" || postType === "video") {
@@ -108,7 +108,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       const picked = pickUnusedMedia(
         cfg.media_folder,
         kind,
-        cfg.pick_mode,
+        "random_spaced",
         slot + attempt,
         cfg.posted_folder
       );

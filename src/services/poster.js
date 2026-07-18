@@ -262,7 +262,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     caption = pickCaption(
       cfg.captions,
       slot + attempt,
-      attempt === 0 ? cfg.pick_mode || "random" : "sequential",
+      "sequential_shuffle",
       cfg.captions_folder,
       triedCaptions
     );
@@ -272,7 +272,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       const picked = pickUnusedMedia(
         cfg.media_folder,
         kind,
-        cfg.pick_mode,
+        "random_spaced",
         slot + attempt,
         cfg.posted_folder
       );

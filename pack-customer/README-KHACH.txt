@@ -43,7 +43,7 @@ SAI:   "Source code (zip)" / "Source code (tar.gz)"
 - Machine ID: trong app → License (gửi admin nếu key gắn máy)
 - Báo lỗi: version trên nút topbar (v1.x.x) + mô tả
 
-6) CÁC KHU VỰC CHÍNH (v1.2.2)
+6) CÁC KHU VỰC CHÍNH (v1.2.3)
 --------------------------------
 - Tổng quan: tình trạng app, lịch và cảnh báo.
 - Kết nối: phân biệt App, Admin/Profile và danh sách Page.
@@ -55,5 +55,8 @@ SAI:   "Source code (zip)" / "Source code (tar.gz)"
 File báo cáo được lưu trong data\exports\daily. Tool tự chốt lịch sử ngày lúc
 23:59 giờ Việt Nam. Nếu một Page không có follower, cần cấp lại quyền Facebook
 Page cho tài khoản đã Connect; tool không tự điền số giả.
+
+Quy tắc tài nguyên: media được chọn ngẫu nhiên và tránh các file gần lần chọn
+trước; caption chạy lần lượt đến hết kho, sau đó trộn và xoay vòng tiếp.
 
 Admin / chủ tool: xem pack-dev\README-DEV.md trên máy dev.
