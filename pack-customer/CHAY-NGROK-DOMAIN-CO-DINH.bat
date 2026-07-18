@@ -40,7 +40,9 @@ if errorlevel 1 (
     powershell -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing 'https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip' -OutFile '%TEMP%\ngrok-v3-windows-amd64.zip'; Expand-Archive -LiteralPath '%TEMP%\ngrok-v3-windows-amd64.zip' -DestinationPath '%~dp0ngrok' -Force; exit 0 } catch { Write-Host $_.Exception.Message; exit 1 }"
     if errorlevel 1 goto :download_error
     if not exist "%~dp0ngrok\ngrok.exe" goto :download_error
-    echo [OK] Da tai Ngrok vao: %~dp0ngrok\ngrok.exe
+    rem Khong echo duong dan tai day: ten folder co dau ngoac nhu (1)
+    rem co the bi CMD hieu nham la dau dong khoi lenh.
+    echo [OK] Da tai Ngrok thanh cong.
   )
 ) else (
   set "NGROK_EXE=ngrok.exe"
