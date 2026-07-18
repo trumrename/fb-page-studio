@@ -17,6 +17,7 @@ SAI:   "Source code (zip)" / "Source code (tar.gz)"
 - Chạy FB-Page-Studio-Desktop.exe
 - Máy mới có domain cố định: mở `CHAY-NGROK-DOMAIN-CO-DINH.bat`, dán Authtoken trực tiếp vào cửa sổ CMD rồi Enter. Không cần Edit BAT. File tự tải Ngrok nếu máy chưa có, luôn chạy `qgroup.ngrok.app` và không tạo domain ngẫu nhiên.
 - Cửa sổ BAT luôn giữ mở khi có lỗi; log nằm tại `ngrok-startup.log` cạnh BAT.
+- Có thể đặt tool trong đường dẫn chứa khoảng trắng; BAT gọi CMD theo đường dẫn đầy đủ.
 - Mở menu License → dán KEY do admin cấp (hoặc dùng trial).
 
 2) CẤU TRÚC KHUYẾN NGHỊ TRÊN MÁY KHÁCH

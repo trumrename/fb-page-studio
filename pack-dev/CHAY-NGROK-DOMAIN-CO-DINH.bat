@@ -1,6 +1,6 @@
 @echo off
 if /i not "%~1"=="__RUN__" (
-  start "FB Page Studio - Ngrok" "%ComSpec%" /d /k ""%~f0" __RUN__"
+  "%ComSpec%" /d /k call "%~f0" __RUN__
   exit /b 0
 )
 setlocal EnableExtensions

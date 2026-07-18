@@ -1,5 +1,5 @@
 FB Page Studio — gói khách
 version=1.2.3
-built_at=2026-07-18T14:58:49.223Z
+built_at=2026-07-18T15:03:47.301Z
 github=trumrename/fb-page-studio
 asset=FB-Page-Studio-Desktop.exe
