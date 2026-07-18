@@ -66,6 +66,9 @@ npm test
 - [ ] Media/caption lấy đúng folder từng Page và cập nhật số lượng khi job chạy
 - [ ] Media random và không chọn file nằm sát các lần chọn gần nhất khi kho đủ lớn
 - [ ] Caption vòng đầu đúng thứ tự; hết kho thì trộn đủ caption và chạy vòng tiếp
+- [ ] Bài lỗi không làm media bị ghi nhận là đã chọn thành công
+- [ ] Con trỏ caption độc lập với sequence photo/video/text và giữ đúng sau update
+- [ ] Số media khả dụng không tính file có hash đã dùng
 
 ## 5.1. Báo cáo / follower
 

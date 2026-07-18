@@ -83,6 +83,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
   );
   const cfg = getPagePostConfig(pageRowId);
   const slot = cfg.next_slot_index || 0;
+  const captionSlot = cfg.caption_slot_index || 0;
   const sequence =
     Array.isArray(cfg.sequence) && cfg.sequence.length
       ? cfg.sequence
@@ -92,6 +93,8 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
   ).toLowerCase();
 
   let caption = "";
+  let selectedCaptionSlot = captionSlot;
+  let usedPoolCaption = false;
   let mediaPath = null;
   for (let attempt = 0; attempt < 8; attempt++) {
     caption =
@@ -99,10 +102,11 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         ? String(opts.caption).trim()
         : pickCaption(
             cfg.captions,
-            slot + attempt,
+            (selectedCaptionSlot = captionSlot + attempt),
             "sequential_shuffle",
             cfg.captions_folder
           );
+    usedPoolCaption = !(opts.caption != null && String(opts.caption).trim());
     if (postType === "photo" || postType === "image" || postType === "video") {
       const kind = postType === "video" ? "video" : "photo";
       const picked = pickUnusedMedia(
@@ -212,6 +216,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
     savePagePostConfig(pageRowId, {
       ...cfg,
       next_slot_index: slot + 1,
+      caption_slot_index: usedPoolCaption && caption ? selectedCaptionSlot + 1 : captionSlot,
     });
 
     const log = logScheduled({

@@ -191,7 +191,7 @@ export function pickCaption(
   const index = Math.max(0, Number(slotIndex) || 0);
   const cycle = Math.floor(index / list.length);
   const offset = index % list.length;
-  const ordered = cycle === 0 ? [...list] : stableShuffle(list, cycle);
+  const ordered = captionOrderForCycle(list, cycle);
   const ban = new Set((exclude || []).map((c) => String(c).trim().toLowerCase()));
   for (let step = 0; step < ordered.length; step++) {
     const candidate = ordered[(offset + step) % ordered.length];
@@ -223,6 +223,19 @@ function stableShuffle(list, cycle) {
   // A shuffled cycle should not accidentally be identical to the source
   // order when there is enough choice.
   if (out.length > 1 && out.every((x, i) => x === list[i])) {
+    out.push(out.shift());
+  }
+  return out;
+}
+
+function captionOrderForCycle(list, cycle) {
+  if (cycle === 0) return [...list];
+  const out = stableShuffle(list, cycle);
+  const previous = captionOrderForCycle(list, cycle - 1);
+  if (out.length > 1 && out.every((item, i) => item === previous[i])) {
+    out.push(out.shift());
+  }
+  if (out.length > 1 && out[0] === previous[previous.length - 1]) {
     out.push(out.shift());
   }
   return out;

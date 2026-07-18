@@ -19,8 +19,6 @@ import {
   listMediaFiles as listMediaFilesSync,
 } from "./mediaLibrary.js";
 
-const recentMediaByPool = new Map();
-
 /** Recommended defaults (safe-ish for multi-page organic) */
 export const SAFE_PRESET = {
   enabled: 1,
@@ -108,6 +106,8 @@ export function ensureAntiSpamTables() {
       original_name TEXT,
       posted_path TEXT,
       fb_post_id TEXT,
+      source_folder TEXT,
+      media_kind TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -136,6 +136,11 @@ export function ensureAntiSpamTables() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  const mediaCols = db.prepare(`PRAGMA table_info(media_hash_used)`).all().map((c) => c.name);
+  if (!mediaCols.includes("source_folder")) db.exec(`ALTER TABLE media_hash_used ADD COLUMN source_folder TEXT`);
+  if (!mediaCols.includes("media_kind")) db.exec(`ALTER TABLE media_hash_used ADD COLUMN media_kind TEXT`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_media_hash_pool_time ON media_hash_used(source_folder, media_kind, created_at DESC)`);
 
   const row = db.prepare(`SELECT id FROM anti_spam_settings WHERE id = 1`).get();
   if (!row) {
@@ -245,7 +250,7 @@ export function getRecommendations() {
     tips: [
       "Mặc định Recommended: ~12 bài/giờ toàn app, 40/ngày, interval sàn 60 phút.",
       "1 file ảnh/video (hash) chỉ đăng 1 lần duy nhất (mọi page) rồi chuyển sang folder posted.",
-      "Caption trùng trong 48h bị chặn — dùng kho caption lớn + random.",
+      "Caption chạy lần lượt; hết kho sẽ trộn cho vòng sau. Caption trùng trong cửa sổ anti-spam vẫn bị bỏ qua.",
       "allow_ignore_quota = OFF khi production (không bypass bằng nút Force).",
       "Jitter 3–18 phút tránh pattern hẹn giờ cứng.",
       "App usage Graph > 45% → tạm dừng publish/schedule.",
@@ -290,13 +295,15 @@ export function recordMediaHash({
   original_name,
   posted_path,
   fb_post_id,
+  source_folder,
+  media_kind,
 }) {
   ensureAntiSpamTables();
   getDb()
     .prepare(
       `INSERT OR REPLACE INTO media_hash_used
-       (hash, page_row_id, page_id, original_name, posted_path, fb_post_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
+       (hash, page_row_id, page_id, original_name, posted_path, fb_post_id, source_folder, media_kind, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
     )
     .run(
       hash,
@@ -304,7 +311,9 @@ export function recordMediaHash({
       page_id || null,
       original_name || null,
       posted_path || null,
-      fb_post_id || null
+      fb_post_id || null,
+      source_folder || null,
+      media_kind || null
     );
 }
 
@@ -602,6 +611,8 @@ export function finalizeMediaAfterSuccess({
   let hash = null;
 
   if (mediaPath && fs.existsSync(mediaPath)) {
+    const sourceFolder = path.dirname(mediaPath);
+    const mediaKind = /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(mediaPath) ? "video" : "photo";
     try {
       hash = fileSha256(mediaPath);
     } catch {
@@ -616,7 +627,7 @@ export function finalizeMediaAfterSuccess({
       // If move failed but we must not re-use: still record hash
       movedPath = mediaPath;
     }
-    if (hash && (s.block_duplicate_media || s.media_once_forever)) {
+    if (hash) {
       recordMediaHash({
         hash,
         page_row_id,
@@ -624,6 +635,8 @@ export function finalizeMediaAfterSuccess({
         original_name: path.basename(mediaPath),
         posted_path: movedPath,
         fb_post_id,
+        source_folder: path.resolve(sourceFolder).toLowerCase(),
+        media_kind: mediaKind,
       });
     }
   }
@@ -641,7 +654,8 @@ export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder)
   const files = listMediaFilesSync(folder, kind);
   if (!files.length) return { path: null, skipped: 0 };
 
-  if (!s.enabled || !s.block_duplicate_media) {
+  const protectUsed = Boolean(s.media_once_forever || (s.enabled && s.block_duplicate_media));
+  if (!protectUsed) {
     return { path: pickRandomMediaSpaced(files, folder, kind), skipped: 0 };
   }
 
@@ -674,8 +688,11 @@ export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder)
 
 function pickRandomMediaSpaced(files, folder, kind) {
   if (!files.length) return null;
-  const key = `${path.resolve(folder || ".").toLowerCase()}|${kind}`;
-  const recent = recentMediaByPool.get(key) || [];
+  const recent = getDb().prepare(
+    `SELECT original_name FROM media_hash_used
+     WHERE source_folder = ? AND media_kind = ? AND original_name IS NOT NULL
+     ORDER BY created_at DESC LIMIT 3`
+  ).all(path.resolve(folder || ".").toLowerCase(), kind).map((r) => r.original_name);
   const names = files.map((f) => path.basename(f));
   const combined = [...new Set([...names, ...recent])].sort((a, b) => a.localeCompare(b));
   const recentIndexes = recent.map((name) => combined.indexOf(name)).filter((i) => i >= 0);
@@ -689,8 +706,22 @@ function pickRandomMediaSpaced(files, folder, kind) {
   if (!candidates.length) candidates = files;
 
   const picked = candidates[Math.floor(Math.random() * candidates.length)];
-  recentMediaByPool.set(key, [path.basename(picked), ...recent].slice(0, 3));
   return picked;
+}
+
+export function countUnusedMedia(folder, kind) {
+  const s = getAntiSpamSettings();
+  const protectUsed = Boolean(s.media_once_forever || (s.enabled && s.block_duplicate_media));
+  if (!protectUsed) return listMediaFilesSync(folder, kind).length;
+  let count = 0;
+  for (const file of listMediaFilesSync(folder, kind)) {
+    try {
+      if (!isMediaHashUsed(fileSha256(file))) count++;
+    } catch {
+      count++;
+    }
+  }
+  return count;
 }
 
 /** Apply floor to page config interval / daily max */

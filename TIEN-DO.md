@@ -90,6 +90,9 @@ node scripts/sync-customer-pack.mjs
 - [x] Áp dụng chung cho đăng trực tiếp, chạy ngay, rotation và hẹn giờ
 - [x] Bỏ lựa chọn random/sequential gây hiểu nhầm trên giao diện Page
 - [x] Bộ kiểm thử tự động: **133/133 đạt**
+- [x] Tách con trỏ caption khỏi vòng loại bài; migration giữ đúng vị trí đang chạy
+- [x] Chỉ ghi lịch sử media gần nhau sau khi Facebook nhận bài thành công
+- [x] Số media khả dụng loại trừ hash đã dùng; bộ kiểm thử sau rà soát: **136/136 đạt**
 
 ---
 

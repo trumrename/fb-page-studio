@@ -95,6 +95,9 @@ const firstCaptionCycle = captionSample.map((_, i) => pickCaption(captionSample,
 const secondCaptionCycle = captionSample.map((_, i) => pickCaption(captionSample, i + captionSample.length, "sequential_shuffle"));
 check("caption first cycle preserves order", firstCaptionCycle.join("|") === captionSample.join("|"));
 check("caption next cycle is a full shuffled permutation", new Set(secondCaptionCycle).size === captionSample.length && secondCaptionCycle.some((x, i) => x !== captionSample[i]));
+check("caption cursor is independent from post type cursor", poster.includes("caption_slot_index") && schedule.includes("caption_slot_index") && db.includes("caption_slot_index"));
+check("media spacing records only successful selections", read("src/services/antiSpam.js").includes("source_folder") && !read("src/services/antiSpam.js").includes("recentMediaByPool"));
+check("resource counts exclude already-used media", poster.includes("countUnusedMedia") && rot.includes("countUnusedMedia"));
 
 const server = read("src/server.js");
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));

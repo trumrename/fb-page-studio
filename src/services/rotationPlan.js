@@ -22,10 +22,10 @@ import {
   enforceBulkLimits,
   getAntiSpamSettings,
   countEffectivePostsBetween,
+  countUnusedMedia,
 } from "./antiSpam.js";
 import { listMetaAppsPublic } from "./metaApps.js";
 import { getPagePostConfig, getCaptionStats } from "./poster.js";
-import { listMediaFiles } from "./mediaLibrary.js";
 
 const SETTINGS_FILE = () =>
   path.join(config.dataDir || path.dirname(config.databasePath), "rotation_settings.json");
@@ -824,7 +824,7 @@ export function buildRunNowPlan(inputSettings = {}) {
     mediaNeeds.get(key).required += 1;
   }
   for (const need of mediaNeeds.values()) {
-    need.available = listMediaFiles(need.folder, need.kind).length;
+    need.available = countUnusedMedia(need.folder, need.kind);
     if (need.available < need.required) {
       blockers.push(`Thiếu ${need.kind}: cần ${need.required}, hiện có ${need.available} trong ${need.folder || "(chưa chọn folder)"}`);
     }

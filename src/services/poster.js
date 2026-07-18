@@ -29,6 +29,7 @@ import {
   assertCanPublish,
   pickUnusedMedia,
   finalizeMediaAfterSuccess,
+  countUnusedMedia,
   noteGraphFailure,
   clampPageLimits,
   ensureAntiSpamTables,
@@ -78,6 +79,7 @@ export function getDefaultConfig(pageRowId) {
     link_lists: { see_more: [], full_album: [] },
     story_enabled: 0,
     next_slot_index: 0,
+    caption_slot_index: 0,
     last_post_at: null,
     posts_today: 0,
     posts_today_date: null,
@@ -107,6 +109,7 @@ export function getPagePostConfig(pageRowId) {
     link_lists: parseJson(row.link_lists_json, { see_more: [], full_album: [] }),
     story_enabled: row.story_enabled || 0,
     next_slot_index: row.next_slot_index || 0,
+    caption_slot_index: row.caption_slot_index || 0,
     last_post_at: row.last_post_at,
     posts_today: row.posts_today || 0,
     posts_today_date: row.posts_today_date,
@@ -128,12 +131,12 @@ export function savePagePostConfig(pageRowId, body) {
       page_row_id, enabled, max_posts_per_day, interval_minutes,
       sequence_json, media_folder, posted_folder, captions_folder, captions_json, pick_mode,
       comment_enabled, comment_templates_json, link_lists_json, story_enabled,
-      next_slot_index, last_post_at, posts_today, posts_today_date, updated_at
+      next_slot_index, caption_slot_index, last_post_at, posts_today, posts_today_date, updated_at
     ) VALUES (
       @page_row_id, @enabled, @max_posts_per_day, @interval_minutes,
       @sequence_json, @media_folder, @posted_folder, @captions_folder, @captions_json, @pick_mode,
       @comment_enabled, @comment_templates_json, @link_lists_json, @story_enabled,
-      @next_slot_index, @last_post_at, @posts_today, @posts_today_date, datetime('now')
+      @next_slot_index, @caption_slot_index, @last_post_at, @posts_today, @posts_today_date, datetime('now')
     )
     ON CONFLICT(page_row_id) DO UPDATE SET
       enabled = excluded.enabled,
@@ -150,6 +153,7 @@ export function savePagePostConfig(pageRowId, body) {
       link_lists_json = excluded.link_lists_json,
       story_enabled = excluded.story_enabled,
       next_slot_index = excluded.next_slot_index,
+      caption_slot_index = excluded.caption_slot_index,
       last_post_at = excluded.last_post_at,
       posts_today = excluded.posts_today,
       posts_today_date = excluded.posts_today_date,
@@ -170,6 +174,7 @@ export function savePagePostConfig(pageRowId, body) {
     link_lists_json: JSON.stringify(next.link_lists || {}),
     story_enabled: next.story_enabled ? 1 : 0,
     next_slot_index: Number(next.next_slot_index) || 0,
+    caption_slot_index: Number(next.caption_slot_index) || 0,
     last_post_at: next.last_post_at || null,
     posts_today: Number(next.posts_today) || 0,
     posts_today_date: next.posts_today_date || null,
@@ -248,6 +253,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     ? cfg.sequence
     : ["photo", "text"];
   const slot = cfg.next_slot_index || 0;
+  const captionSlot = cfg.caption_slot_index || 0;
   const postType = String(
     opts.post_type || opts.force_type || sequence[slot % sequence.length]
   ).toLowerCase();
@@ -258,10 +264,12 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
   let mediaPath = null;
   let mediaSkipped = 0;
   const triedCaptions = [];
+  let selectedCaptionSlot = captionSlot;
   for (let attempt = 0; attempt < 12; attempt++) {
+    selectedCaptionSlot = captionSlot + attempt;
     caption = pickCaption(
       cfg.captions,
-      slot + attempt,
+      selectedCaptionSlot,
       "sequential_shuffle",
       cfg.captions_folder,
       triedCaptions
@@ -433,6 +441,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
           savePagePostConfig(pageRowId, {
             ...cfg,
             next_slot_index: slot + 1,
+            caption_slot_index: caption ? selectedCaptionSlot + 1 : captionSlot,
             last_post_at: new Date().toISOString().replace("T", " ").slice(0, 19),
             posts_today: dayIndex,
             posts_today_date: todayKey(),
@@ -470,6 +479,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     savePagePostConfig(pageRowId, {
       ...cfg,
       next_slot_index: slot + 1,
+      caption_slot_index: caption ? selectedCaptionSlot + 1 : captionSlot,
       last_post_at: new Date().toISOString().replace("T", " ").slice(0, 19),
       posts_today: dayIndex,
       posts_today_date: todayKey(),
@@ -576,8 +586,8 @@ export function listPostLogs({ pageRowId, limit = 100 } = {}) {
 
 export function mediaStats(folder) {
   return {
-    photos: listMediaFiles(folder, "photo").length,
-    videos: listMediaFiles(folder, "video").length,
+    photos: countUnusedMedia(folder, "photo"),
+    videos: countUnusedMedia(folder, "video"),
     folder: folder || null,
   };
 }

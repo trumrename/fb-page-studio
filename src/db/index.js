@@ -145,6 +145,7 @@ function migrate(database) {
       link_lists_json TEXT NOT NULL DEFAULT '{}',
       story_enabled INTEGER NOT NULL DEFAULT 0,
       next_slot_index INTEGER NOT NULL DEFAULT 0,
+      caption_slot_index INTEGER NOT NULL DEFAULT 0,
       last_post_at TEXT,
       posts_today INTEGER NOT NULL DEFAULT 0,
       posts_today_date TEXT,
@@ -185,6 +186,21 @@ function migrate(database) {
     );
     CREATE INDEX IF NOT EXISTS idx_follower_history_page_day ON page_follower_history(page_row_id, snapshot_day);
   `);
+
+  const configCols = database.prepare(`PRAGMA table_info(page_post_config)`).all().map((c) => c.name);
+  if (!configCols.includes("caption_slot_index")) {
+    database.exec(`ALTER TABLE page_post_config ADD COLUMN caption_slot_index INTEGER NOT NULL DEFAULT 0`);
+  }
+  const captionCursorMigrated = database.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='_caption_cursor_v1'`
+  ).get();
+  if (!captionCursorMigrated) {
+    database.exec(`
+      UPDATE page_post_config SET caption_slot_index = next_slot_index;
+      CREATE TABLE _caption_cursor_v1 (done INTEGER NOT NULL DEFAULT 1);
+      INSERT INTO _caption_cursor_v1 (done) VALUES (1);
+    `);
+  }
 }
 
 /**
