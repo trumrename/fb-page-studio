@@ -1,20 +1,29 @@
 @echo off
+if /i not "%~1"=="__RUN__" (
+  start "FB Page Studio - Ngrok" "%ComSpec%" /d /k ""%~f0" __RUN__"
+  exit /b 0
+)
 setlocal EnableExtensions
 chcp 65001 >nul
 title FB Page Studio - Ngrok domain co dinh
 
-rem ============================================================
-rem CHI SUA 1 DONG DUOI DAY: dan Authtoken Ngrok cua may moi.
-rem Lay token: https://dashboard.ngrok.com/get-started/your-authtoken
-rem ============================================================
-set "NGROK_TOKEN=DAN_TOKEN_NGROK_VAO_DAY"
+set "NGROK_LOG=%~dp0ngrok-startup.log"
+echo ============================================================ >> "%NGROK_LOG%"
+echo [%date% %time%] Bat dau khoi dong Ngrok >> "%NGROK_LOG%"
+
+rem Token se duoc hoi truc tiep trong CMD, khong luu trong file BAT.
+set "NGROK_TOKEN="
 
 rem Domain co dinh dung chung voi may hien tai.
 set "NGROK_DOMAIN=qgroup.ngrok.app"
 set "APP_PORT=3847"
 
+echo.
+echo Lay Authtoken tai:
+echo https://dashboard.ngrok.com/get-started/your-authtoken
+echo.
+set /p "NGROK_TOKEN=Dan Authtoken Ngrok vao day roi nhan Enter: "
 if "%NGROK_TOKEN%"=="" goto :token_error
-if /i "%NGROK_TOKEN%"=="DAN_TOKEN_NGROK_VAO_DAY" goto :token_error
 
 where ngrok.exe >nul 2>&1
 if errorlevel 1 (
@@ -46,7 +55,7 @@ echo  App    : http://127.0.0.1:%APP_PORT%
 echo.
 
 echo [1/4] Dang luu Authtoken cho tai khoan Ngrok...
-"%NGROK_EXE%" config add-authtoken "%NGROK_TOKEN%"
+"%NGROK_EXE%" config add-authtoken "%NGROK_TOKEN%" >> "%NGROK_LOG%" 2>&1
 if errorlevel 1 goto :config_error
 
 echo [2/4] Dang kiem tra FB Page Studio...
@@ -60,7 +69,7 @@ if errorlevel 1 (
 )
 
 echo [3/4] Dang kiem tra domain co dinh...
-"%NGROK_EXE%" config check
+"%NGROK_EXE%" config check >> "%NGROK_LOG%" 2>&1
 if errorlevel 1 goto :config_error
 
 echo [4/4] Dang mo domain CO DINH...
@@ -72,17 +81,18 @@ echo Neu hien domain khac, bam Ctrl+C va bao lai admin.
 echo ============================================================
 echo.
 
+echo [%date% %time%] Chay domain https://%NGROK_DOMAIN% >> "%NGROK_LOG%"
 "%NGROK_EXE%" http 127.0.0.1:%APP_PORT% --domain=%NGROK_DOMAIN%
+echo [%date% %time%] Ngrok dung, exit=%errorlevel% >> "%NGROK_LOG%"
 goto :end
 
 :token_error
 echo.
-echo [LOI] Chua dan token Ngrok.
-echo Chuot phai file nay ^> Edit, tim dong:
-echo set "NGROK_TOKEN=DAN_TOKEN_NGROK_VAO_DAY"
-echo Sau do thay DAN_TOKEN_NGROK_VAO_DAY bang token that va Save.
+echo [LOI] Ban chua dan token Ngrok vao cua so CMD.
+echo Chay lai file BAT, dan token tai dong yeu cau roi nhan Enter.
 echo Lay token tai:
 echo https://dashboard.ngrok.com/get-started/your-authtoken
+echo Chi tiet: %NGROK_LOG%
 echo.
 pause
 exit /b 1
@@ -95,6 +105,7 @@ echo winget install ngrok.ngrok
 echo.
 echo Hoac tai va dat ngrok.exe vao thu muc ngrok canh file BAT.
 echo Tai tai: https://ngrok.com/download
+echo Chi tiet: %NGROK_LOG%
 echo.
 pause
 exit /b 1
@@ -103,6 +114,7 @@ exit /b 1
 echo.
 echo [LOI] Token khong hop le hoac khong ket noi duoc Ngrok.
 echo Kiem tra token thuoc dung tai khoan dang so huu domain %NGROK_DOMAIN%.
+echo Chi tiet: %NGROK_LOG%
 echo.
 pause
 exit /b 1

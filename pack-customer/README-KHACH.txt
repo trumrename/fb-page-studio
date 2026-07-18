@@ -15,7 +15,8 @@ SAI:   "Source code (zip)" / "Source code (tar.gz)"
 - Copy .env.example thành .env cạnh file .exe
 - Điền FB_APP_ID, FB_APP_SECRET, FB_REDIRECT_URI (Meta App của chủ tool / khách).
 - Chạy FB-Page-Studio-Desktop.exe
-- Máy mới có domain cố định: mở `CHAY-NGROK-DOMAIN-CO-DINH.bat`, chỉ cần dán Authtoken ở dòng đầu. File tự tải Ngrok nếu máy chưa có, luôn chạy `qgroup.ngrok.app` và không tạo domain ngẫu nhiên.
+- Máy mới có domain cố định: mở `CHAY-NGROK-DOMAIN-CO-DINH.bat`, dán Authtoken trực tiếp vào cửa sổ CMD rồi Enter. Không cần Edit BAT. File tự tải Ngrok nếu máy chưa có, luôn chạy `qgroup.ngrok.app` và không tạo domain ngẫu nhiên.
+- Cửa sổ BAT luôn giữ mở khi có lỗi; log nằm tại `ngrok-startup.log` cạnh BAT.
 - Mở menu License → dán KEY do admin cấp (hoặc dùng trial).
 
 2) CẤU TRÚC KHUYẾN NGHỊ TRÊN MÁY KHÁCH
