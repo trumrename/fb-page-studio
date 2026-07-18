@@ -7,6 +7,7 @@ Nội dung gói khách (không secret):
  - MANIFEST.txt
  - media-sample
  - README-KHACH.txt
+ - tooldangapifb.zip
  - VERSION.txt
 
 CẤM có trong gói khách: license-private.pem, .env có secret, data/app.db token, source src/

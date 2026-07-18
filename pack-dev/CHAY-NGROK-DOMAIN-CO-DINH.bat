@@ -23,7 +23,15 @@ if errorlevel 1 (
   ) else if exist "%~dp0ngrok\ngrok.exe" (
     set "NGROK_EXE=%~dp0ngrok\ngrok.exe"
   ) else (
-    goto :ngrok_error
+    set "NGROK_EXE=%~dp0ngrok\ngrok.exe"
+    set "NGROK_ZIP=%TEMP%\ngrok-v3-windows-amd64.zip"
+    echo.
+    echo [0/4] May chua co Ngrok. Dang tu dong tai...
+    if not exist "%~dp0ngrok" mkdir "%~dp0ngrok"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing 'https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip' -OutFile '%TEMP%\ngrok-v3-windows-amd64.zip'; Expand-Archive -LiteralPath '%TEMP%\ngrok-v3-windows-amd64.zip' -DestinationPath '%~dp0ngrok' -Force; exit 0 } catch { Write-Host $_.Exception.Message; exit 1 }"
+    if errorlevel 1 goto :download_error
+    if not exist "%~dp0ngrok\ngrok.exe" goto :download_error
+    echo [OK] Da tai Ngrok vao: %~dp0ngrok\ngrok.exe
   )
 ) else (
   set "NGROK_EXE=ngrok.exe"
@@ -37,11 +45,11 @@ echo  Domain : https://%NGROK_DOMAIN%
 echo  App    : http://127.0.0.1:%APP_PORT%
 echo.
 
-echo [1/3] Dang luu Authtoken cho tai khoan Ngrok...
+echo [1/4] Dang luu Authtoken cho tai khoan Ngrok...
 "%NGROK_EXE%" config add-authtoken "%NGROK_TOKEN%"
 if errorlevel 1 goto :config_error
 
-echo [2/3] Dang kiem tra FB Page Studio...
+echo [2/4] Dang kiem tra FB Page Studio...
 powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:%APP_PORT%/api/meta' -TimeoutSec 3 ^| Out-Null; exit 0 } catch { exit 1 }"
 if errorlevel 1 (
   echo.
@@ -51,7 +59,11 @@ if errorlevel 1 (
   pause
 )
 
-echo [3/3] Dang mo domain CO DINH...
+echo [3/4] Dang kiem tra domain co dinh...
+"%NGROK_EXE%" config check
+if errorlevel 1 goto :config_error
+
+echo [4/4] Dang mo domain CO DINH...
 echo.
 echo Ket qua dung phai hien:
 echo Forwarding  https://%NGROK_DOMAIN% -^> http://127.0.0.1:%APP_PORT%
@@ -75,13 +87,13 @@ echo.
 pause
 exit /b 1
 
-:ngrok_error
+:download_error
 echo.
-echo [LOI] Khong tim thay ngrok.exe.
-echo Cai Ngrok bang lenh:
+echo [LOI] Khong tu dong tai duoc ngrok.exe.
+echo Thu cai bang lenh:
 echo winget install ngrok.ngrok
 echo.
-echo Hoac dat ngrok.exe cung thu muc voi file BAT nay.
+echo Hoac tai va dat ngrok.exe vao thu muc ngrok canh file BAT.
 echo Tai tai: https://ngrok.com/download
 echo.
 pause
