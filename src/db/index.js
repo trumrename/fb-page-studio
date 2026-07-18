@@ -172,6 +172,18 @@ function migrate(database) {
 
     CREATE INDEX IF NOT EXISTS idx_post_logs_page ON post_logs(page_row_id);
     CREATE INDEX IF NOT EXISTS idx_post_logs_created ON post_logs(created_at);
+
+    CREATE TABLE IF NOT EXISTS page_follower_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      page_row_id INTEGER NOT NULL,
+      snapshot_day TEXT NOT NULL,
+      followers_count INTEGER NOT NULL,
+      fan_count INTEGER,
+      captured_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(page_row_id, snapshot_day),
+      FOREIGN KEY (page_row_id) REFERENCES fb_pages(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_follower_history_page_day ON page_follower_history(page_row_id, snapshot_day);
   `);
 }
 

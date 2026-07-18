@@ -5,7 +5,7 @@
 | | |
 |--|--|
 | **Tên** | FB Page Studio |
-| **Phiên bản** | **1.2.1** |
+| **Phiên bản** | **1.2.2** |
 | **Máy DEV (gốc)** | `D:\fb-page-poster\` |
 | **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` |
 | **Ghi chú DEV** | `D:\fb-page-poster\pack-dev\README-DEV.md` |
@@ -91,15 +91,27 @@ Trial 7 ngày · key Ed25519 · UI `/license.html` · private key chỉ DEV
 ### Auto-update  
 Banner + nút **Cập nhật ngay** · check mỗi 4h · cần Release có `.exe`  
 
+### Vận hành và theo dõi
+Giao diện tách rõ **Tổng quan → Kết nối → Cấu hình Page → Xoay vòng/Chạy → Tiến trình → Anti-spam → Báo cáo → License**. Job chạy tuần tự, có phần trăm, trạng thái từng tác vụ, thông báo thành công/lỗi và lưu trạng thái để tiếp tục theo dõi sau khi mở lại app.
+
+### Báo cáo ngày và follower
+- Thông tin Page tách theo App, ghi rõ App · Admin/Profile · Page; CSV theo ngày và Excel cộng dồn, mỗi ngày một sheet.
+- Lịch sử đăng xuất CSV theo ngày và Excel cộng dồn; tự động chốt lúc **23:59 giờ Việt Nam**.
+- Lưu follower từng Page theo ngày và hiển thị tăng/giảm **1 · 3 · 7 · 30 ngày**. Ngày đầu chưa đủ mốc sẽ ghi rõ chưa đủ dữ liệu.
+- File nằm tại `FB-Page-Studio-App\data\exports\daily` trên bản đang dùng.
+
+### Đồng bộ bài hẹn giờ Facebook
+Bài hẹn giờ được đối soát thủ công hoặc tự động mỗi 5 phút. Khi Facebook xác nhận đã đăng, lịch sử chuyển từ `scheduled` sang `published`; thời gian quá khứ không được coi là một lịch hẹn mới hợp lệ.
+
 ---
 
 ## 4. Giao diện
 
 | Màn | URL |
 |-----|-----|
-| Vận hành | `/app.html` |
-| Pages | `/index.html` |
-| Publish + Rotation | `/posting.html` |
+| Tổng quan + tiến trình | `/app.html` |
+| Kết nối App/Profile/Page | `/index.html` |
+| Cấu hình Page + xoay vòng/chạy | `/posting.html` |
 | Anti-spam | `/antispam.html` |
 | License | `/license.html` |
 

@@ -1,5 +1,5 @@
 /**
- * Native folder picker (Windows Forms) for selecting media/caption libraries.
+ * Explorer-style folder picker for selecting media/caption libraries.
  * Works from Node server (including Electron child process).
  */
 import { execFile } from "child_process";
@@ -21,16 +21,22 @@ export async function pickFolder(opts = {}) {
 
   if (process.platform === "win32") {
     const initLine = initial
-      ? `$f.SelectedPath = '${initial.replace(/'/g, "''")}';`
+      ? `$f.InitialDirectory = '${initial.replace(/'/g, "''")}';`
       : "";
     const ps = [
       "Add-Type -AssemblyName System.Windows.Forms | Out-Null",
-      "$f = New-Object System.Windows.Forms.FolderBrowserDialog",
-      `$f.Description = '${title}'`,
-      "$f.ShowNewFolderButton = $true",
+      "$f = New-Object System.Windows.Forms.OpenFileDialog",
+      `$f.Title = '${title}'`,
+      "$f.Filter = 'Thư mục|*.folder'",
+      "$f.FileName = 'Chọn thư mục này'",
+      "$f.CheckFileExists = $false",
+      "$f.CheckPathExists = $true",
+      "$f.ValidateNames = $false",
+      "$f.DereferenceLinks = $true",
+      "$f.RestoreDirectory = $true",
       initLine,
       "$r = $f.ShowDialog()",
-      "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }",
+      "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output ([System.IO.Path]::GetDirectoryName($f.FileName)) }",
     ]
       .filter(Boolean)
       .join("; ");

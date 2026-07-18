@@ -34,6 +34,7 @@ import {
   ensureAntiSpamTables,
 } from "./antiSpam.js";
 import { assertCanPublish as assertLicenseActive } from "./license.js";
+import { withPageOperationLock } from "./pageOperationLock.js";
 
 function todayKey() {
   const d = new Date();
@@ -210,7 +211,7 @@ function logPost(row) {
  * Run one feed post for page_row_id (manual or scheduler).
  * @param {object} opts { force?: boolean } — force ignores enabled flag for manual test
  */
-export async function runOnePost(pageRowId, opts = {}) {
+async function runOnePostUnlocked(pageRowId, opts = {}) {
   ensureAntiSpamTables();
   assertLicenseActive();
   const db = getDb();
@@ -247,7 +248,9 @@ export async function runOnePost(pageRowId, opts = {}) {
     ? cfg.sequence
     : ["photo", "text"];
   const slot = cfg.next_slot_index || 0;
-  const postType = String(sequence[slot % sequence.length]).toLowerCase();
+  const postType = String(
+    opts.post_type || opts.force_type || sequence[slot % sequence.length]
+  ).toLowerCase();
 
   const pageToken = decryptToken(page.page_token_enc);
   // Try several captions if duplicate blocked (exclude already-tried)
@@ -520,6 +523,12 @@ export async function runOnePost(pageRowId, opts = {}) {
       post_type: postType,
     };
   }
+}
+
+export async function runOnePost(pageRowId, opts = {}) {
+  return withPageOperationLock(pageRowId, () =>
+    runOnePostUnlocked(pageRowId, opts)
+  );
 }
 
 /** Scheduler tick: process all enabled pages that are due */

@@ -11,14 +11,21 @@
  * Same page + same admin: times spaced by gap range inside windows.
  * Different admin / different group: no extra wait (job runner ~350ms).
  *
- * Note: 1 process = 1 Meta App. "Groups" = so le pools of admins
- * (simulate App1/App2). True 2 Meta App IDs need 2 instances later.
+ * Multi Meta App is supported in one process; each account keeps its
+ * meta_app_key and uses the matching OAuth credentials/token.
  */
 import fs from "fs";
 import path from "path";
 import { config } from "../config.js";
 import { getDb } from "../db/index.js";
-import { enforceBulkLimits } from "./antiSpam.js";
+import {
+  enforceBulkLimits,
+  getAntiSpamSettings,
+  countEffectivePostsBetween,
+} from "./antiSpam.js";
+import { listMetaAppsPublic } from "./metaApps.js";
+import { getPagePostConfig, getCaptionStats } from "./poster.js";
+import { listMediaFiles } from "./mediaLibrary.js";
 
 const SETTINGS_FILE = () =>
   path.join(config.dataDir || path.dirname(config.databasePath), "rotation_settings.json");
@@ -32,6 +39,10 @@ export const DEFAULT_ROTATION = {
    * empty groups + auto false → 1 nhóm tất cả
    */
   auto_groups_by_meta_app: true,
+  /** per_app | interleave_apps */
+  app_rotation_mode: "interleave_apps",
+  between_tasks_gap_minutes_min: 15,
+  between_tasks_gap_minutes_max: 25,
   posts_per_page_per_day: 2,
   days_ahead: 1,
   /** windows mode: distribute posts into named ranges */
@@ -169,6 +180,13 @@ export function normalizeSettings(s) {
     out.auto_groups_by_meta_app === undefined
       ? true
       : !!out.auto_groups_by_meta_app;
+  out.app_rotation_mode = out.app_rotation_mode === "per_app" ? "per_app" : "interleave_apps";
+  out.between_tasks_gap_minutes_min = clamp(Number(out.between_tasks_gap_minutes_min) || 15, 12, 1440);
+  out.between_tasks_gap_minutes_max = clamp(
+    Number(out.between_tasks_gap_minutes_max) || out.between_tasks_gap_minutes_min,
+    out.between_tasks_gap_minutes_min,
+    2880
+  );
   out.post_type = out.post_type || "auto";
   out.account_ids = Array.isArray(out.account_ids)
     ? out.account_ids.map(Number).filter((n) => n > 0)
@@ -229,6 +247,7 @@ export function normalizeSettings(s) {
  */
 export function loadAccountPageMatrix(settings) {
   const db = getDb();
+  const appNames = new Map(listMetaAppsPublic().map((a) => [a.key, a.name]));
   let accounts = db
     .prepare(
       `SELECT id, name, fb_user_id, page_count, status, meta_app_key, meta_app_id
@@ -271,7 +290,7 @@ export function loadAccountPageMatrix(settings) {
       meta_app_key: metaKey,
       meta_app_id: a.meta_app_id || null,
       meta_app_name:
-        metaKey === "app2" ? "App 2" : metaKey === "app1" ? "App 1" : metaKey,
+        appNames.get(metaKey) || (metaKey === "app2" ? "App 2" : metaKey === "app1" ? "App 1" : metaKey),
       pages: pages.map((p, idx) => ({
         page_row_id: p.id,
         page_id: p.page_id,
@@ -430,7 +449,7 @@ export function planTimesForPageDay(settings, dayYmd) {
  */
 export function buildRotationPlan(inputSettings = {}) {
   const settings = normalizeSettings({ ...loadRotationSettings(), ...inputSettings });
-  const matrix = loadAccountPageMatrix(settings);
+  const matrix = loadAccountPageMatrix(settings).filter((a) => a.pages.length > 0);
   const groups = resolveGroups(settings, matrix);
 
   const maxAdmins = Math.max(0, ...groups.map((g) => g.admin_count), 0);
@@ -608,7 +627,7 @@ export function buildRotationPlan(inputSettings = {}) {
       wait_logic:
         "Chỉ gap cùng page+admin trong khung giờ; khác admin/group = API sequential ~350ms, không chờ phút",
       note_meta_app:
-        "1 process = 1 Meta App. Nhóm so-le = chia admin (giả lập App1/App2). 2 Meta App ID thật = 2 máy/instance.",
+        "Một tiến trình hỗ trợ nhiều Meta App; mỗi Profile giữ meta_app_key và được nhóm đúng App 1/App 2.",
     },
     slots: finalSlots.map((s) => ({
       order: s.order,
@@ -634,6 +653,248 @@ export function buildRotationPlan(inputSettings = {}) {
     preview_order: finalSlots.slice(0, 24).map((s) => ({
       order: s.order,
       label: `${s.group_name} · ${s.account_name} · P${s.page_index} · bài${s.post_round} · ${s.local_label}`,
+    })),
+  };
+}
+
+/**
+ * Plan "run now": round 1 publishes immediately; later rounds are scheduled.
+ * Order per round depends on app_rotation_mode:
+ * - per_app: app → page → admin
+ * - interleave_apps: page → admin → app
+ */
+export function buildRunNowPlan(inputSettings = {}) {
+  const settings = normalizeSettings({ ...loadRotationSettings(), ...inputSettings });
+  const matrix = loadAccountPageMatrix(settings).filter((a) => a.pages.length > 0);
+  const groups = resolveGroups(settings, matrix);
+  // Run-now count is independent from windows mode (windows normally rewrites this count).
+  const rounds = clamp(
+    Number(inputSettings.posts_per_page_per_day) || settings.posts_per_page_per_day,
+    1,
+    12
+  );
+  const tz = settings.tz_offset_minutes;
+  const anti = getAntiSpamSettings();
+  const pageConfigs = new Map();
+  for (const account of matrix) {
+    for (const page of account.pages) {
+      pageConfigs.set(page.page_row_id, getPagePostConfig(page.page_row_id));
+    }
+  }
+  const maxPageIntervalHours = Math.max(
+    0,
+    ...[...pageConfigs.values()].map((c) => (Number(c.interval_minutes) || 0) / 60)
+  );
+  const antiCooldownHours = anti.enabled ? (Number(anti.page_cooldown_minutes) || 0) / 60 : 0;
+  const effectiveGapMinHours = Math.max(
+    settings.same_page_gap_hours_min,
+    maxPageIntervalHours,
+    antiCooldownHours,
+    0.25
+  );
+  const effectiveGapMaxHours = Math.max(settings.same_page_gap_hours_max, effectiveGapMinHours);
+  const gapMinMs = effectiveGapMinHours * 3600 * 1000;
+  const gapMaxMs = effectiveGapMaxHours * 3600 * 1000;
+  const maxAdmins = Math.max(0, ...groups.map((g) => g.admin_count), 0);
+  const maxPages = Math.max(0, ...groups.map((g) => g.max_pages), 0);
+  const taskGapMinMs = settings.between_tasks_gap_minutes_min * 60 * 1000;
+  const taskGapMaxMs = settings.between_tasks_gap_minutes_max * 60 * 1000;
+  const roundTimes = [];
+
+  const slots = [];
+  let order = 0;
+  let previousRoundStartMs = null;
+  let previousRoundEndMs = null;
+  for (let round = 0; round < rounds; round++) {
+    let cursorMs;
+    if (round === 0) {
+      cursorMs = Date.now();
+    } else {
+      const bySamePageGap = previousRoundStartMs + randBetween(gapMinMs, gapMaxMs);
+      const afterPreviousRound = previousRoundEndMs + randBetween(taskGapMinMs, taskGapMaxMs);
+      cursorMs = Math.max(bySamePageGap, afterPreviousRound);
+    }
+    roundTimes.push(new Date(cursorMs));
+    previousRoundStartMs = cursorMs;
+    let lastSlotMs = cursorMs;
+    const enqueue = (g, adminIdx, pageIdx) => {
+        const admin = g.admins[adminIdx];
+        if (!admin) return;
+          const page = admin.pages[pageIdx];
+          if (!page) return;
+          const cfg = pageConfigs.get(page.page_row_id);
+          const pageRounds = Math.min(rounds, Number(cfg?.max_posts_per_day) || rounds);
+          if (round >= pageRounds) return;
+          const sequence = Array.isArray(cfg?.sequence) && cfg.sequence.length ? cfg.sequence : ["photo", "text"];
+          const forcedType = settings.post_type && settings.post_type !== "auto" ? settings.post_type : null;
+          const plannedPostType = String(
+            forcedType || sequence[((cfg?.next_slot_index || 0) + round) % sequence.length]
+          ).toLowerCase();
+          const when = new Date(cursorMs);
+          order += 1;
+          slots.push({
+            order,
+            immediate: order === 1,
+            post_round: round + 1,
+            page_index: pageIdx + 1,
+            group_id: g.id,
+            group_name: g.name,
+            account_id: admin.account_id,
+            account_name: admin.account_name,
+            page_row_id: page.page_row_id,
+            page_id: page.page_id,
+            page_name: page.page_name,
+            planned_post_type: plannedPostType,
+            unix: Math.floor(when.getTime() / 1000),
+            iso: when.toISOString(),
+            local_label: formatLocal(when, tz),
+          });
+          lastSlotMs = when.getTime();
+          cursorMs += randBetween(taskGapMinMs, taskGapMaxMs);
+    };
+
+    if (settings.app_rotation_mode === "per_app") {
+      // App 1: Page 1 across every admin, then Page 2...; then next App.
+      for (const g of groups) {
+        for (let pageIdx = 0; pageIdx < g.max_pages; pageIdx++) {
+          for (let adminIdx = 0; adminIdx < g.admin_count; adminIdx++) {
+            enqueue(g, adminIdx, pageIdx);
+          }
+        }
+      }
+    } else {
+      // Page 1: App1 Admin1, App2 Admin1, App1 Admin2, App2 Admin2... then Page 2.
+      for (let pageIdx = 0; pageIdx < maxPages; pageIdx++) {
+        for (let adminIdx = 0; adminIdx < maxAdmins; adminIdx++) {
+          for (const g of groups) enqueue(g, adminIdx, pageIdx);
+        }
+      }
+    }
+    previousRoundEndMs = lastSlotMs;
+  }
+
+  const finalSlots = slots.map((s, i) => ({ ...s, order: i + 1 }));
+  const warnings = [];
+  const blockers = [];
+
+  if (effectiveGapMinHours > settings.same_page_gap_hours_min) {
+    warnings.push(
+      `Gap min đã tự nâng từ ${settings.same_page_gap_hours_min}h lên ${effectiveGapMinHours}h để khớp interval/cooldown Page.`
+    );
+  }
+  const limitedPages = [...pageConfigs.entries()]
+    .filter(([, c]) => Number(c.max_posts_per_day) < rounds)
+    .map(([id, c]) => `Page#${id}: ${c.max_posts_per_day}/${rounds}`);
+  if (limitedPages.length) {
+    warnings.push(`Một số Page bị giới hạn theo max bài/ngày: ${limitedPages.slice(0, 8).join(", ")}`);
+  }
+
+  const startLocalDay = todayYmd(tz);
+  const overflowSlots = finalSlots.filter((s) => s.local_label.slice(0, 10) !== startLocalDay);
+  if (overflowSlots.length) {
+    warnings.push(`Lịch vượt sang ngày kế tiếp từ vòng ${overflowSlots[0].post_round} (${overflowSlots[0].page_name}); ngày/giờ đã hiển thị đầy đủ trong preview.`);
+  }
+
+  // Media requirement by shared folder + type. This prevents multiple pages
+  // from all assuming the same files are independently available.
+  const mediaNeeds = new Map();
+  const captionNeeds = new Map();
+  for (const s of finalSlots) {
+    const cfg = pageConfigs.get(s.page_row_id);
+    const type = String(s.planned_post_type || "text").toLowerCase();
+    if (type === "text") {
+      if (!captionNeeds.has(s.page_row_id)) {
+        const stats = getCaptionStats(cfg);
+        captionNeeds.set(s.page_row_id, {
+          page_row_id: s.page_row_id,
+          page_name: s.page_name,
+          folder: cfg?.captions_folder || "",
+          required: 0,
+          available: Number(stats?.total) || 0,
+        });
+      }
+      captionNeeds.get(s.page_row_id).required += 1;
+      continue;
+    }
+    if (!["photo", "image", "video"].includes(type)) continue;
+    const kind = type === "video" ? "video" : "photo";
+    const folder = cfg?.media_folder || "";
+    const key = `${path.resolve(folder || ".").toLowerCase()}|${kind}`;
+    if (!mediaNeeds.has(key)) mediaNeeds.set(key, { folder, kind, required: 0, available: 0 });
+    mediaNeeds.get(key).required += 1;
+  }
+  for (const need of mediaNeeds.values()) {
+    need.available = listMediaFiles(need.folder, need.kind).length;
+    if (need.available < need.required) {
+      blockers.push(`Thiếu ${need.kind}: cần ${need.required}, hiện có ${need.available} trong ${need.folder || "(chưa chọn folder)"}`);
+    }
+  }
+  for (const need of captionNeeds.values()) {
+    if (need.available < need.required) {
+      blockers.push(`Thiếu caption cho ${need.page_name}: cần ${need.required}, hiện có ${need.available} trong ${need.folder || "(chưa chọn folder)"}`);
+    }
+  }
+
+  if (anti.enabled) {
+    for (const rt of roundTimes) {
+      const end = rt.toISOString();
+      const hourStart = new Date(rt.getTime() - 3600 * 1000).toISOString();
+      const dayStart = new Date(rt.getTime() - 24 * 3600 * 1000).toISOString();
+      const plannedHour = finalSlots.filter((s) => s.unix * 1000 > rt.getTime() - 3600 * 1000 && s.unix * 1000 <= rt.getTime() + 3600 * 1000).length;
+      const plannedDay = finalSlots.filter((s) => s.unix * 1000 > rt.getTime() - 24 * 3600 * 1000 && s.unix * 1000 <= rt.getTime()).length;
+      const existingHour = countEffectivePostsBetween(hourStart, end);
+      const existingDay = countEffectivePostsBetween(dayStart, end);
+      if (existingHour + plannedHour > anti.max_posts_per_hour_global) {
+        blockers.push(`Vượt anti-spam giờ tại ${formatLocal(rt, tz)}: ${existingHour + plannedHour}/${anti.max_posts_per_hour_global}.`);
+        break;
+      }
+      if (existingDay + plannedDay > anti.max_posts_per_day_global) {
+        blockers.push(`Vượt anti-spam 24h tại ${formatLocal(rt, tz)}: ${existingDay + plannedDay}/${anti.max_posts_per_day_global}.`);
+        break;
+      }
+    }
+  }
+  return {
+    settings: {
+      posts_per_page_per_day: rounds,
+      same_page_gap_hours_min: settings.same_page_gap_hours_min,
+      same_page_gap_hours_max: settings.same_page_gap_hours_max,
+      effective_gap_hours_min: effectiveGapMinHours,
+      effective_gap_hours_max: effectiveGapMaxHours,
+      tz_offset_minutes: tz,
+      post_type: settings.post_type,
+      app_rotation_mode: settings.app_rotation_mode,
+      between_tasks_gap_minutes_min: settings.between_tasks_gap_minutes_min,
+      between_tasks_gap_minutes_max: settings.between_tasks_gap_minutes_max,
+    },
+    summary: {
+      accounts: matrix.length,
+      groups: groups.length,
+      posts_per_page_per_day: rounds,
+      total_planned: slots.length,
+      total_final: finalSlots.length,
+      anti_spam_trimmed: false,
+      order_logic: settings.app_rotation_mode === "per_app"
+        ? "vòng bài# → từng App → pageIndex → toàn bộ admin của App"
+        : "vòng bài# → pageIndex → adminIndex → App 1/App 2 so le",
+      wait_logic: `Task đầu đăng ngay; mỗi Page/Admin kế tiếp cách ${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút; vòng sau vẫn giữ gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours} giờ`,
+      timezone: "Asia/Ho_Chi_Minh (UTC+7)",
+      can_run: blockers.length === 0,
+    },
+    round_times: roundTimes.map((d, i) => ({
+      post_round: i + 1,
+      immediate: i === 0,
+      local_label: formatLocal(d, tz),
+      iso: d.toISOString(),
+    })),
+    slots: finalSlots,
+    warnings,
+    blockers,
+    media_requirements: [...mediaNeeds.values()],
+    caption_requirements: [...captionNeeds.values()],
+    preview_order: finalSlots.map((s) => ({
+      order: s.order,
+      label: `Vòng ${s.post_round} · ${s.planned_post_type} · ${s.group_name} · ${s.account_name} · ${s.page_name} · ${s.immediate ? "ĐĂNG NGAY" : s.local_label + " VN"}`,
     })),
   };
 }

@@ -318,17 +318,23 @@ export function recordCaption(caption, page_row_id, page_id) {
     .run(norm, page_row_id || null, page_id || null);
 }
 
-function countPostsSince(isoCutoff) {
+const EFFECTIVE_POST_TIME_SQL = `COALESCE(NULLIF(scheduled_publish_time, ''), created_at)`;
+
+function countPostsBetween(startIso, endIso) {
   const db = getDb();
-  // success statuses
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM post_logs
        WHERE status IN ('ok','ok_comment_failed','scheduled')
-         AND created_at >= ?`
+         AND julianday(${EFFECTIVE_POST_TIME_SQL}) >= julianday(?)
+         AND julianday(${EFFECTIVE_POST_TIME_SQL}) < julianday(?)`
     )
-    .get(isoCutoff);
+    .get(startIso, endIso);
   return row?.n || 0;
+}
+
+function countPostsSince(isoCutoff) {
+  return countPostsBetween(isoCutoff, new Date().toISOString());
 }
 
 export function getBackoffState() {
@@ -397,6 +403,7 @@ export function assertCanPublish({
   ignore_quota,
   ignore_interval,
   isSchedule = false,
+  scheduledAtUnix,
 } = {}) {
   ensureAntiSpamTables();
   const s = getAntiSpamSettings();
@@ -457,10 +464,14 @@ export function assertCanPublish({
   }
 
   // Global caps
-  const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const nHour = countPostsSince(hourAgo);
-  const nDay = countPostsSince(dayAgo);
+  const targetMs = isSchedule && Number(scheduledAtUnix) > 0
+    ? Number(scheduledAtUnix) * 1000
+    : Date.now();
+  const targetIso = new Date(targetMs).toISOString();
+  const hourAgo = new Date(targetMs - 60 * 60 * 1000).toISOString();
+  const dayAgo = new Date(targetMs - 24 * 60 * 60 * 1000).toISOString();
+  const nHour = countPostsBetween(hourAgo, targetIso);
+  const nDay = countPostsBetween(dayAgo, targetIso);
   if (nHour >= s.max_posts_per_hour_global) {
     return {
       ok: false,
@@ -478,24 +489,20 @@ export function assertCanPublish({
 
   // Page cooldown (last successful post any type on this page)
   if (s.page_cooldown_minutes > 0 && pageRowId) {
-    const last = getDb()
+    const near = getDb()
       .prepare(
-        `SELECT created_at FROM post_logs
+        `SELECT ${EFFECTIVE_POST_TIME_SQL} AS effective_at FROM post_logs
          WHERE page_row_id = ? AND status IN ('ok','ok_comment_failed','scheduled')
-         ORDER BY id DESC LIMIT 1`
+           AND ABS(strftime('%s', ${EFFECTIVE_POST_TIME_SQL}) - ?) < ?
+         ORDER BY ABS(strftime('%s', ${EFFECTIVE_POST_TIME_SQL}) - ?) ASC LIMIT 1`
       )
-      .get(pageRowId);
-    if (last?.created_at) {
-      const t = new Date(last.created_at.replace(" ", "T")).getTime();
-      const need = s.page_cooldown_minutes * 60 * 1000;
-      if (Number.isFinite(t) && Date.now() - t < need) {
-        const left = Math.ceil((need - (Date.now() - t)) / 60000);
-        return {
-          ok: false,
-          code: "PAGE_COOLDOWN",
-          error: `Anti-spam: page cooldown còn ~${left} phút (cài ${s.page_cooldown_minutes}p).`,
-        };
-      }
+      .get(pageRowId, Math.floor(targetMs / 1000), s.page_cooldown_minutes * 60, Math.floor(targetMs / 1000));
+    if (near?.effective_at) {
+      return {
+        ok: false,
+        code: "PAGE_COOLDOWN",
+        error: `Anti-spam: đã có bài của Page trong khoảng ±${s.page_cooldown_minutes} phút quanh ${targetIso}.`,
+      };
     }
   }
 
@@ -516,9 +523,9 @@ export function assertCanPublish({
   if (s.block_duplicate_caption && cap.trim()) {
     const norm = normalizeCaption(cap);
     const since = new Date(
-      Date.now() - s.caption_dup_window_hours * 60 * 60 * 1000
+      targetMs - s.caption_dup_window_hours * 60 * 60 * 1000
     ).toISOString();
-    const hit = getDb()
+    const hit = isSchedule ? null : getDb()
       .prepare(
         `SELECT id, page_id, created_at FROM caption_recent
          WHERE caption_norm = ? AND created_at >= ?
@@ -535,13 +542,14 @@ export function assertCanPublish({
     // also check post_logs
     const hit2 = getDb()
       .prepare(
-        `SELECT id, created_at FROM post_logs
+        `SELECT id, ${EFFECTIVE_POST_TIME_SQL} AS effective_at FROM post_logs
          WHERE status IN ('ok','ok_comment_failed','scheduled')
-           AND created_at >= ?
+           AND julianday(${EFFECTIVE_POST_TIME_SQL}) >= julianday(?)
+           AND julianday(${EFFECTIVE_POST_TIME_SQL}) < julianday(?)
            AND lower(trim(caption)) = ?
          LIMIT 1`
       )
-      .get(since, norm);
+      .get(since, targetIso, norm);
     if (hit2) {
       return {
         ok: false,
@@ -786,6 +794,10 @@ export function getAntiSpamStats() {
     app_usage: getLastUsage(),
     recommendations: getRecommendations().tips,
   };
+}
+
+export function countEffectivePostsBetween(startIso, endIso) {
+  return countPostsBetween(startIso, endIso);
 }
 
 export function listRecentBlocks(limit = 30) {

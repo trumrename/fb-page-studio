@@ -18,6 +18,7 @@
     .toast.success { border-color: rgba(61,214,140,.4); background: var(--ok-soft); }
     .toast.error { border-color: rgba(255,107,122,.4); background: var(--danger-soft); }
     .toast.warn { border-color: rgba(245,197,66,.4); background: var(--warn-soft); }
+    .toast.info { border-color: rgba(79,140,255,.4); background: var(--accent-soft); }
     @keyframes in { from { opacity:0; transform: translateY(-8px);} to { opacity:1; transform:none;} }
     .progress-big {
       height: 14px; background: rgba(255,255,255,.06); border-radius: 99px; overflow: hidden;
@@ -42,6 +43,11 @@
     .page-card.ok { border-color: rgba(61,214,140,.35); }
     .page-card.fail { border-color: rgba(255,107,122,.35); }
     .pct { font-weight: 800; font-variant-numeric: tabular-nums; font-size: 1.1rem; }
+    .ops-strip { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.7rem;margin:1rem 0; }
+    .ops-card { border:1px solid var(--border);border-radius:14px;padding:.8rem .9rem;background:rgba(255,255,255,.025); }
+    .ops-card b { display:block;font-size:1.15rem;font-variant-numeric:tabular-nums; }
+    .ops-card span { color:var(--muted);font-size:.75rem; }
+    @media(max-width:720px){.ops-strip{grid-template-columns:repeat(2,minmax(0,1fr));}.task-row{grid-template-columns:1fr 72px}.task-row>div:last-child{grid-column:1/-1}}
   </style>
 </head>
 <body>
@@ -57,15 +63,16 @@
         </div>
       </a>
       <div class="nav-label">App</div>
-      <a class="nav-item active" href="/app.html"><span class="ico">▶</span> Vận hành</a>
-      <a class="nav-item" href="/index.html"><span class="ico">▣</span> Pages / Connect</a>
-      <a class="nav-item" href="/posting.html"><span class="ico">✦</span> Cấu hình đăng</a>
-      <a class="nav-item" href="/antispam.html"><span class="ico">🛡</span> Anti-spam</a>
-      <a class="nav-item" href="/license.html"><span class="ico">🔑</span> License</a>
+      <a class="nav-item" href="/index.html"><span class="ico">1</span> Connect & chọn Page</a>
+      <a class="nav-item" href="/posting.html"><span class="ico">2</span> Cấu hình & chạy</a>
+      <a class="nav-item active" href="/app.html"><span class="ico">3</span> Tiến trình vận hành</a>
+      <a class="nav-item" href="/antispam.html"><span class="ico">4</span> Giới hạn Anti-spam</a>
       <div class="nav-label">Báo cáo</div>
-      <a class="nav-item" href="#" id="navCsv" data-dl="/api/jobs/reports/csv" data-name="dang_bai_chi_tiet.csv"><span class="ico">↓</span> Tải CSV chi tiết</a>
-      <a class="nav-item" href="#" id="navXlsx" data-dl="/api/jobs/reports/xlsx" data-name="dang_bai_chi_tiet.xlsx"><span class="ico">↓</span> Tải Excel chi tiết</a>
-      <a class="nav-item" href="/app.html#logs"><span class="ico">≡</span> Xem log trong app</a>
+      <a class="nav-item" href="/app.html#logsSection"><span class="ico">5</span> Kết quả & log</a>
+      <a class="nav-item" href="#" id="navCsv" data-dl="/api/jobs/reports/csv" data-name="dang_bai_chi_tiet.csv"><span class="ico">6</span> Tải CSV chi tiết</a>
+      <a class="nav-item" href="#" id="navXlsx" data-dl="/api/jobs/reports/xlsx" data-name="dang_bai_chi_tiet.xlsx"><span class="ico">7</span> Tải Excel chi tiết</a>
+      <div class="nav-label">System</div>
+      <a class="nav-item" href="/license.html"><span class="ico">🔑</span> License</a>
       <div class="nav-foot">
         <div class="meta" id="reportPath">Báo cáo: data/exports/</div>
       </div>
@@ -88,9 +95,9 @@
       </header>
 
       <main class="content">
-        <div class="hero" style="cursor:default">
+        <div class="hero" id="overviewHero" style="cursor:default">
           <div>
-            <div class="hero-kicker">FB Page Studio · 1 app · nhiều page</div>
+            <div class="hero-kicker" id="heroMeta">FB Page Studio · đang kết nối hệ thống…</div>
             <div class="hero-title">Đăng ngay · hoặc Hẹn giờ — chọn page rồi bấm nút xanh / vàng</div>
             <div class="hero-desc">
               <b style="color:#8fd9a8">Nút xanh = ĐĂNG NGAY</b> lên feed.
@@ -101,9 +108,37 @@
           <span class="badge live" id="appVer">v—</span>
         </div>
 
-        <div class="grid-2">
+        <div class="ops-strip" id="overviewStats" aria-label="Trạng thái vận hành">
+          <div class="ops-card"><b id="opsState">Đang tải…</b><span>Trạng thái hệ thống</span></div>
+          <div class="ops-card"><b id="opsToday">0</b><span>Tác vụ hôm nay</span></div>
+          <div class="ops-card"><b id="opsSuccess">0</b><span>Đã đăng / FB nhận lịch</span></div>
+          <div class="ops-card"><b id="opsFail">0</b><span>Lỗi hôm nay</span></div>
+          <div class="ops-card"><b id="opsScheduler">Đang tải…</b><span>Scheduler tự động</span></div>
+        </div>
+        <div class="flash show" id="configHealth" style="margin-bottom:1rem">Đang kiểm tra cấu hình Media, Caption và Posted…</div>
+
+        <section class="panel section-gap" id="pageOperationSection">
+          <h2 class="panel-hd">
+            <span>Cấu hình vận hành theo từng Page</span>
+            <span class="hint" id="rotationSummary">Đang tải chế độ rotation…</span>
+          </h2>
+          <div class="panel-body" style="padding:0">
+            <div class="table-wrap" style="max-height:360px">
+              <table>
+                <thead><tr>
+                  <th>Meta App</th><th>Profile / Admin</th><th>Page</th><th>Chế độ chạy</th>
+                  <th>Followers hiện tại</th><th>± 1 ngày</th><th>± 3 ngày</th><th>± 7 ngày</th><th>± 30 ngày</th>
+                  <th>Loại bài theo vòng</th><th>Giờ ưu tiên VN</th><th>Hôm nay</th><th>Khoảng cách</th>
+                </tr></thead>
+                <tbody id="pageOperationRows"><tr><td colspan="13" class="muted">Đang tải…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <div class="grid-2" id="executionGrid">
           <!-- Pages select -->
-          <section class="panel">
+          <section class="panel" id="pageActionPanel">
             <h2 class="panel-hd">
               <span>Chọn page</span>
               <span class="hint">
@@ -151,7 +186,7 @@
           </section>
 
           <!-- Progress -->
-          <section class="panel">
+          <section class="panel" id="jobSection">
             <h2 class="panel-hd">
               <span>Tiến trình job</span>
               <span class="hint" id="jobTitle">Chưa chạy</span>
@@ -181,7 +216,7 @@
           </section>
         </div>
 
-        <section class="panel section-gap">
+        <section class="panel section-gap" id="jobNotifications">
           <h2 class="panel-hd">
             <span>Thông báo job</span>
             <span class="hint">OK / FAIL chi tiết</span>
@@ -191,21 +226,26 @@
           </div>
         </section>
 
-        <section class="panel section-gap" id="logs">
+        <section class="panel section-gap" id="logsSection">
           <h2 class="panel-hd">
-            <span>Báo cáo gần đây (đã đăng?)</span>
+            <span>Kết quả đăng và hẹn giờ gần đây</span>
             <span class="hint">
               <button type="button" class="btn-ghost btn-sm" id="btnRefreshLogs">Làm mới</button>
+              <button type="button" class="btn-primary btn-sm" id="btnReconcileLogs">↻ Đối soát Facebook</button>
+              <button type="button" class="btn-primary btn-sm" id="btnExportDailyHistory">Xuất lịch sử hôm nay</button>
+              <button type="button" class="btn-ghost btn-sm" id="btnShowDailyFiles">Danh sách file ngày</button>
               <button type="button" class="btn-ghost btn-sm" data-dl="/api/jobs/reports/xlsx" data-name="dang_bai_chi_tiet.xlsx">↓ Excel</button>
               <a class="btn-ghost btn-sm" href="/app.html" style="text-decoration:none">← Quay về vận hành</a>
             </span>
           </h2>
           <div class="panel-body" style="padding:0">
+            <div id="dailyReportFiles" class="muted" style="display:none;padding:.85rem 1rem;border-bottom:1px solid var(--border)"></div>
             <div class="table-wrap" style="max-height:280px">
               <table>
                 <thead>
                   <tr>
-                    <th>Thời gian</th>
+                    <th>Tool thực hiện lúc</th>
+                    <th>Facebook sẽ đăng lúc</th>
                     <th>Page</th>
                     <th>Loại</th>
                     <th>Kết quả</th>
@@ -229,6 +269,7 @@
     let pages = [];
     let currentJobId = null;
     let pollTimer = null;
+    let jobsTimer = null;
     let seenNotifs = new Set();
 
     async function api(path, opts) {
@@ -245,9 +286,47 @@
       return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     }
 
+    function fmtVn(value) {
+      if (!value) return "—";
+      const raw = String(value);
+      const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw) ? raw.replace(" ", "T") + "Z" : raw;
+      const d = new Date(normalized);
+      return Number.isNaN(d.getTime()) ? raw : d.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", hour12: false });
+    }
+
+    function statusLabel(status) {
+      return ({ queued:"Đang xếp hàng", running:"Đang chạy", paused:"Tạm dừng", ok:"Hoàn tất", partial:"Xong một phần", fail:"Thất bại", stopped:"Đã dừng", interrupted:"Bị gián đoạn khi App đóng", pending:"Chờ", skipped:"Bỏ qua" })[status] || status || "—";
+    }
+
+    function vnDateKey(value) {
+      if (!value) return "";
+      const raw = String(value);
+      const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw) ? raw.replace(" ", "T") + "Z" : raw;
+      const d = new Date(normalized);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
+    }
+
+    function scheduleDisplay(log) {
+      if (!log.scheduled_publish_time) return { label: "—", state: "", future: false };
+      const at = new Date(log.scheduled_publish_time);
+      const future = !Number.isNaN(at.getTime()) && at.getTime() > Date.now();
+      if (log.status === "published") {
+        return { label: fmtVn(log.scheduled_publish_time) + " giờ VN", state: "Đã đăng · Facebook xác nhận", future: false };
+      }
+      if (log.status === "schedule_overdue") {
+        return { label: fmtVn(log.scheduled_publish_time) + " giờ VN", state: "Quá giờ nhưng Facebook chưa xuất bản", future: false };
+      }
+      return {
+        label: fmtVn(log.scheduled_publish_time) + " giờ VN",
+        state: future ? "Facebook đã nhận lịch · đang chờ đăng" : "Đã tới giờ · chưa đối soát Facebook",
+        future,
+      };
+    }
+
     function toast(level, title, body) {
       const el = document.createElement("div");
-      el.className = "toast " + (level === "error" ? "error" : level === "warn" ? "warn" : "success");
+      el.className = "toast " + (level === "error" ? "error" : level === "warn" ? "warn" : level === "info" ? "info" : "success");
       el.innerHTML = `<b>${esc(title)}</b><div class="muted" style="margin-top:.25rem;color:inherit;opacity:.9">${esc(body || "")}</div>`;
       $("toasts").appendChild(el);
       setTimeout(() => el.remove(), 7000);
@@ -277,6 +356,56 @@
           </div>
         </label>
       `).join("");
+      renderPageOperations();
+    }
+
+    function renderPageOperations() {
+      const tb = $("pageOperationRows");
+      if (!tb) return;
+      if (!pages.length) {
+        tb.innerHTML = `<tr><td colspan="13" class="muted">Chưa có Page</td></tr>`;
+        return;
+      }
+      const growthText = (g) => {
+        if (!g || g.delta == null) return `<span class="muted">Chưa đủ dữ liệu</span>`;
+        const sign = Number(g.delta) > 0 ? "+" : "";
+        const cls = Number(g.delta) > 0 ? "ok" : Number(g.delta) < 0 ? "fail" : "muted";
+        return `<span class="${cls}"><b>${sign}${g.delta}</b>${g.percent != null ? ` (${sign}${g.percent}%)` : ""}</span><div class="muted">từ ${esc(g.baseline_day)}</div>`;
+      };
+      tb.innerHTML = pages.map((p) => {
+        const sequence = (p.sequence || ["photo", "video", "text"]).map((x) => ({photo:"Ảnh",video:"Video",text:"Text"})[x] || x).join(" → ");
+        const hours = (p.preferred_hours || []).length ? p.preferred_hours.map((h) => String(h).padStart(2,"0") + ":00").join(", ") : "Chưa đặt";
+        const mode = p.enabled ? "Tự động local · scheduler 60 giây" : "Thủ công / chạy job / rotation";
+        return `<tr>
+          <td><span class="badge">${esc(p.meta_app_name || p.meta_app_key || "App 1")}</span></td>
+          <td>${esc(p.account_name || "—")}</td>
+          <td><b>${esc(p.name)}</b><div class="muted">ID ${esc(p.page_id)}</div></td>
+          <td class="${p.enabled ? "ok" : "muted"}">${esc(mode)}</td>
+          <td><b>${p.followers_count == null ? "—" : Number(p.followers_count).toLocaleString("vi-VN")}</b>${p.followers_count == null && p.enrich_error ? `<div class="fail">Thiếu quyền / chưa Sync</div>` : ""}</td>
+          <td>${growthText(p.follower_growth?.d1)}</td>
+          <td>${growthText(p.follower_growth?.d3)}</td>
+          <td>${growthText(p.follower_growth?.d7)}</td>
+          <td>${growthText(p.follower_growth?.d30)}</td>
+          <td>${esc(sequence)}</td>
+          <td>${esc(hours)}</td>
+          <td><b>${Number(p.total_planned_today || 0)}/${Number(p.max_posts_per_day || 0)}</b> bài<div class="muted">trực tiếp ${Number(p.direct_today || 0)} · hẹn ${Number(p.scheduled_today || 0)}</div></td>
+          <td>${Number(p.interval_minutes || 0)} phút/bài</td>
+        </tr>`;
+      }).join("");
+    }
+
+    async function loadRotationSummary() {
+      try {
+        const [r, appsData] = await Promise.all([api("/api/jobs/rotation/settings"), api("/auth/apps")]);
+        const s = r.settings || {};
+        const appCount = (appsData.apps || []).filter((a) => a.configured).length;
+        const strategy = s.app_rotation_mode === "interleave_apps" ? "Hai App so le" : "Chạy lần lượt từng App";
+        const perDay = Number(s.posts_per_page_per_day || s.posts_per_day || 0);
+        const warning = s.app_rotation_mode === "interleave_apps" && appCount < 2 ? " · ⚠ hiện chỉ có 1 Meta App, sẽ chạy như chế độ 1 App" : "";
+        $("rotationSummary").textContent = `${strategy} · ${perDay || "—"} bài/Page/ngày · chờ task ${s.between_tasks_gap_minutes_min || 12}–${s.between_tasks_gap_minutes_max || 25} phút${warning}`;
+      } catch (e) {
+        $("rotationSummary").textContent = "Không đọc được cấu hình rotation: " + e.message;
+      }
     }
 
     async function downloadFile(url, filename) {
@@ -336,6 +465,45 @@
       }
     });
     $("btnRefreshLogs")?.addEventListener("click", () => loadLogs());
+    $("btnReconcileLogs")?.addEventListener("click", async () => {
+      const btn = $("btnReconcileLogs");
+      btn.disabled = true;
+      btn.textContent = "Đang hỏi Facebook…";
+      try {
+        const r = await api("/api/posting/reconcile-scheduled", { method: "POST", body: JSON.stringify({ limit: 50 }) });
+        toast(r.overdue || r.unknown ? "warn" : "success", "Đối soát hoàn tất", `Đã đăng ${r.published} · quá giờ ${r.overdue} · chưa xác minh ${r.unknown}`);
+        await loadLogs();
+      } catch (e) {
+        toast("error", "Đối soát Facebook thất bại", e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "↻ Đối soát Facebook";
+      }
+    });
+    async function showDailyFiles() {
+      const r = await api("/api/reports/daily/info");
+      const box = $("dailyReportFiles");
+      box.style.display = "block";
+      box.innerHTML = `<b>Thư mục:</b> ${esc(r.dir)}<br/>` + ((r.files || []).length
+        ? r.files.map((name) => `<a href="/api/reports/daily/file/${encodeURIComponent(name)}">↓ ${esc(name)}</a>`).join("<br/>")
+        : "Chưa có file báo cáo ngày.");
+    }
+    $("btnShowDailyFiles")?.addEventListener("click", () => showDailyFiles().catch((e) => toast("error", "Danh sách file", e.message)));
+    $("btnExportDailyHistory")?.addEventListener("click", async () => {
+      const btn = $("btnExportDailyHistory");
+      btn.disabled = true;
+      btn.textContent = "Đang tạo báo cáo…";
+      try {
+        const r = await api("/api/reports/daily/history", { method: "POST", body: "{}" });
+        toast("success", "Đã xuất lịch sử ngày", `${r.rows} dòng · sheet ${r.day}`);
+        await showDailyFiles();
+      } catch (e) {
+        toast("error", "Xuất lịch sử thất bại", e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Xuất lịch sử hôm nay";
+      }
+    });
 
     function renderJob(job) {
       if (!job) return;
@@ -343,11 +511,11 @@
       $("jobTitle").textContent = job.title || job.id;
       $("jobPct").textContent = (p.percent || 0) + "%";
       $("jobStats").textContent = ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}`;
-      $("jobStatus").textContent = job.status;
-      $("jobStatus").className = "badge " + (job.status === "ok" ? "on" : job.status === "fail" || job.status === "stopped" ? "err" : "live");
+      $("jobStatus").textContent = statusLabel(job.status);
+      $("jobStatus").className = "badge " + (job.status === "ok" ? "on" : ["fail", "stopped", "interrupted"].includes(job.status) ? "err" : "live");
       $("jobBarFill").style.width = (p.percent || 0) + "%";
       const bar = $("jobBar");
-      bar.className = "progress-big " + (job.status === "ok" ? "ok" : job.status === "fail" || job.status === "stopped" ? "fail" : "");
+      bar.className = "progress-big " + (job.status === "ok" ? "ok" : ["fail", "stopped", "interrupted"].includes(job.status) ? "fail" : "");
       $("jobCurrent").textContent = p.current_label || (job.status === "paused" ? "⏸ Đang tạm dừng…" : "—");
       const ctl = $("jobControls");
       if (ctl) {
@@ -369,7 +537,7 @@
           <div class="page-card ${esc(pg.status)}">
             <div style="display:flex;justify-content:space-between">
               <b>${esc(pg.page_name)}</b>
-              <span class="badge">${esc(pg.status)} · ${pg.percent}%</span>
+              <span class="badge">${esc(statusLabel(pg.status))} · ${pg.percent}%</span>
             </div>
             <div class="mini-bar" style="margin-top:.4rem"><i style="width:${pg.percent}%"></i></div>
             <div class="muted" style="margin-top:.3rem;font-size:.75rem">OK ${pg.ok} · FAIL ${pg.fail} · ${pg.done}/${pg.total}</div>
@@ -385,7 +553,7 @@
             <b>${esc(t.page_name)}</b>
             <div class="muted">${esc(t.label)} · ${esc(t.message || "")}</div>
           </div>
-          <div class="${t.status === "ok" ? "ok" : t.status === "fail" ? "fail" : "muted"}">${esc(t.status)}</div>
+          <div class="${t.status === "ok" ? "ok" : t.status === "fail" ? "fail" : "muted"}">${esc(statusLabel(t.status))}</div>
           <div>
             <div class="mini-bar"><i style="width:${t.percent || 0}%"></i></div>
             <div class="muted" style="font-size:.7rem;margin-top:.15rem">${t.percent || 0}%</div>
@@ -407,7 +575,7 @@
           <div style="padding:.45rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
             <span class="${n.level === "error" ? "fail" : n.level === "success" ? "ok" : "muted"}">[${esc(n.level)}]</span>
             <b>${esc(n.title)}</b>
-            <div class="muted">${esc(n.body)} · ${esc(n.at)}</div>
+            <div class="muted">${esc(n.body)} · ${esc(fmtVn(n.at))} giờ VN</div>
           </div>
         `).join("");
       }
@@ -416,14 +584,18 @@
         $("reportPath").textContent = "Đã ghi: " + job.report_files.map((f) => f.split(/[/\\]/).pop()).join(", ");
       }
 
-      if (["ok", "fail", "partial", "stopped"].includes(job.status)) {
+      if (["ok", "fail", "partial", "stopped", "interrupted"].includes(job.status)) {
         clearInterval(pollTimer);
         pollTimer = null;
         loadLogs();
       }
+      const active = ["running", "paused", "queued"].includes(job.status);
+      $("opsState").textContent = active ? (job.status === "paused" ? "Tạm dừng" : "Đang chạy") : "Sẵn sàng";
     }
 
     async function watchJob(id) {
+      if (!id) return;
+      if (currentJobId === id && pollTimer) return;
       currentJobId = id;
       seenNotifs = new Set();
       clearInterval(pollTimer);
@@ -443,6 +615,53 @@
       };
       await pull();
       pollTimer = setInterval(pull, 800);
+    }
+
+    async function discoverJobs() {
+      try {
+        const data = await api("/api/jobs");
+        const list = data.jobs || [];
+        const active = list.find((j) => ["running", "paused", "queued"].includes(j.status));
+        const target = active || list[0];
+        if (target && target.id !== currentJobId) {
+          await watchJob(target.id);
+          toast(active ? "info" : "success", active ? "Đã phát hiện job đang chạy" : "Đã tải job gần nhất", target.title || target.id);
+        } else if (!target && !currentJobId) {
+          $("opsState").textContent = "Sẵn sàng";
+          $("jobCurrent").textContent = "Không có job trong bộ nhớ. Hoạt động gần đây vẫn hiển thị ở báo cáo bên dưới.";
+        }
+      } catch (e) {
+        $("opsState").textContent = "Mất kết nối";
+        toast("error", "Không đọc được tiến trình", e.message);
+      }
+    }
+
+    async function loadRuntime() {
+      try {
+        const r = await api("/api/runtime");
+        const s = r.scheduler || {};
+        const h = r.config_health || {};
+        const enabled = Number(s.enabled_pages || 0);
+        $("opsScheduler").textContent = s.running ? `Đang quét ${enabled} Page` : enabled ? `${enabled} Page ON` : "0 Page ON";
+        $("opsScheduler").className = enabled ? "ok" : "";
+        if (!currentJobId) {
+          $("opsState").textContent = s.running ? "Scheduler đang chạy" : enabled ? "Đang chờ lượt quét" : "Chưa bật Page";
+          $("jobCurrent").textContent = enabled
+            ? `Scheduler quét mỗi ${Math.round((s.interval_ms || 60000) / 1000)} giây · lượt gần nhất: ${fmtVn(s.last_finished_at)}`
+            : "Tool đang mở nhưng chưa có Page bật Auto scheduler. Vào Cấu hình Page, bật Auto scheduler và lưu.";
+        }
+        if (s.last_error) toast("error", "Scheduler lỗi", s.last_error);
+        const health = $("configHealth");
+        const missing = Number(h.pages_without_media || 0) + Number(h.pages_without_captions || 0);
+        if (health) {
+          health.className = "flash show " + (missing ? "err" : "ok");
+          health.innerHTML = missing
+            ? `<b>Kho nội dung chưa sẵn sàng:</b> ${h.ready_pages || 0}/${h.total_pages || 0} Page có đủ nội dung · ${h.pages_without_media || 0} Page không có Media · ${h.pages_without_captions || 0} Page không có Caption · ${h.default_config_pages || 0} Page đang dùng cấu hình mặc định. <a href="/posting.html#configWorkspace">Mở cấu hình Page →</a>`
+            : `<b>Kho nội dung đã đầy đủ:</b> ${h.ready_pages || 0}/${h.total_pages || 0} Page có Media, Caption và Posted hợp lệ.`;
+        }
+      } catch (e) {
+        $("opsScheduler").textContent = "Mất kết nối";
+      }
     }
 
     async function runPost() {
@@ -490,25 +709,35 @@
 
     async function loadLogs() {
       try {
-        const data = await api("/api/posting/logs?limit=40");
+        const data = await api("/api/posting/logs?limit=100");
         const tb = $("logs");
+        const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
+        const todayLogs = (data.logs || []).filter((l) => vnDateKey(l.created_at) === today);
+        const good = todayLogs.filter((l) => ["ok", "published", "ok_comment_failed"].includes(l.status) || (l.status === "scheduled" && scheduleDisplay(l).future)).length;
+        const bad = todayLogs.filter((l) => ["fail", "schedule_fail", "schedule_overdue"].includes(l.status)).length;
+        $("opsToday").textContent = String(todayLogs.length);
+        $("opsSuccess").textContent = String(good);
+        $("opsFail").textContent = String(bad);
         if (!data.logs?.length) {
-          tb.innerHTML = `<tr><td colspan="6" class="muted">Chưa có log</td></tr>`;
+          tb.innerHTML = `<tr><td colspan="7" class="muted">Chưa có log</td></tr>`;
           return;
         }
         tb.innerHTML = data.logs.map((l) => {
-          const ok = l.status === "ok" || l.status === "scheduled" || l.status === "ok_comment_failed";
+          const sched = scheduleDisplay(l);
+          const ok = l.status === "ok" || l.status === "published" || l.status === "ok_comment_failed" || (l.status === "scheduled" && sched.future);
+          const deliveryMode = l.scheduled_publish_time ? "Hẹn giờ Facebook" : "Đăng trực tiếp";
           return `<tr>
-            <td>${esc(l.created_at)}</td>
+            <td>${esc(fmtVn(l.created_at))} giờ VN</td>
+            <td class="${l.scheduled_publish_time ? "sched" : "muted"}">${esc(sched.label)}</td>
             <td>${esc(l.page_name)}</td>
-            <td>${esc(l.post_type)}</td>
-            <td class="${ok ? "ok" : "fail"}">${esc(l.status)}</td>
+            <td>${esc(l.post_type)}<div class="muted">${esc(deliveryMode)}</div></td>
+            <td class="${ok ? "ok" : "fail"}">${esc(l.scheduled_publish_time ? sched.state : statusLabel(l.status))}</td>
             <td>${l.fb_post_url ? `<a href="${esc(l.fb_post_url)}" target="_blank">link</a>` : esc(l.fb_post_id || "—")}</td>
             <td class="fail">${esc(l.error || "")}</td>
           </tr>`;
         }).join("");
-      } catch {
-        /* ignore */
+      } catch (e) {
+        toast("error", "Không tải được báo cáo", e.message);
       }
     }
 
@@ -517,12 +746,18 @@
     $("btnPost").onclick = runPost;
     $("btnSched").onclick = runSched;
 
-    api("/api/version").then((v) => { $("appVer").textContent = "v" + v.version; }).catch(() => {});
+    Promise.all([api("/api/version"), api("/auth/apps"), api("/api/posting/pages")]).then(([v, apps, pg]) => {
+      $("appVer").textContent = "v" + v.version;
+      $("heroMeta").textContent = `FB Page Studio · ${(apps.apps || []).length} Meta App · ${(pg.pages || []).length} Page`;
+    }).catch((e) => toast("warn", "Thông tin hệ thống", e.message));
     api("/api/jobs/reports/info").then((r) => {
       $("reportPath").textContent = r.dir || "data/exports";
     }).catch(() => {});
 
-    loadPages().then(loadLogs).catch((e) => toast("error", "Lỗi", e.message));
+    loadPages().then(loadLogs).then(discoverJobs).then(loadRuntime).then(loadRotationSummary).catch((e) => toast("error", "Lỗi dashboard", e.message));
+    jobsTimer = setInterval(discoverJobs, 1500);
+    setInterval(loadLogs, 10000);
+    setInterval(loadRuntime, 3000);
   </script>
 </body>
 </html>

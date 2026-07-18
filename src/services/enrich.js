@@ -3,6 +3,7 @@ import { decryptToken } from "./crypto.js";
 import { config } from "../config.js";
 import { getPageProfile, getPageInsights, sleep } from "./facebook.js";
 import { suggestedDelayMs, getLastUsage, usageWarning } from "./rateLimit.js";
+import { saveFollowerSnapshot } from "./followerHistory.js";
 
 const DEFAULT_DELAY_MS = config.enrichDelayMs || 200;
 
@@ -212,6 +213,12 @@ export async function enrichPageById(pageRowId, opts = {}) {
     JSON.stringify(insights),
     errors.length ? errors.join(" | ") : null,
     pageRowId
+  );
+
+  saveFollowerSnapshot(
+    pageRowId,
+    profile.followers_count ?? null,
+    profile.fan_count ?? null
   );
 
   return {

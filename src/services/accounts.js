@@ -125,6 +125,7 @@ export async function connectFromOAuthCode(code, opts = {}) {
   return {
     account: getAccountPublic(accountId),
     pages: pages.map(publicPage),
+    sync_summary: pages.sync_summary || null,
     meta_app_key: metaAppKey,
   };
 }
@@ -165,10 +166,29 @@ export async function syncPagesForAccount(accountId, userTokenOptional) {
       updated_at = datetime('now')
   `);
 
+  const existingRows = db
+    .prepare(`SELECT id, page_id, status FROM fb_pages WHERE account_id = ?`)
+    .all(accountId);
+  const existingIds = new Set(existingRows.map((p) => String(p.page_id)));
+  const activeGlobalBefore = db
+    .prepare(`SELECT COUNT(*) AS n FROM fb_pages WHERE status = 'active'`)
+    .get().n;
+  const skippedByLicense = [];
+  let acceptedNew = 0;
+
   const seen = new Set();
   const tx = db.transaction((list) => {
     for (const p of list) {
       if (!p.id || !p.access_token) continue;
+      const isNew = !existingIds.has(String(p.id));
+      if (isNew) {
+        const quota = checkQuota("page", activeGlobalBefore + acceptedNew);
+        if (!quota.ok) {
+          skippedByLicense.push({ page_id: String(p.id), name: p.name || String(p.id), error: quota.error });
+          continue;
+        }
+        acceptedNew++;
+      }
       seen.add(p.id);
       upsert.run({
         account_id: accountId,
@@ -190,18 +210,29 @@ export async function syncPagesForAccount(accountId, userTokenOptional) {
         ).run(accountId, ep.page_id);
       }
     }
+    const activeForAccount = db
+      .prepare(`SELECT COUNT(*) AS n FROM fb_pages WHERE account_id = ? AND status = 'active'`)
+      .get(accountId).n;
     db.prepare(
       `UPDATE fb_accounts SET page_count = ?, last_sync_at = datetime('now'), status = 'active', last_error = NULL, updated_at = datetime('now') WHERE id = ?`
-    ).run(seen.size, accountId);
+    ).run(activeForAccount, accountId);
   });
 
   tx(pages);
 
-  return db
+  const result = db
     .prepare(
       `SELECT * FROM fb_pages WHERE account_id = ? AND status = 'active' ORDER BY name COLLATE NOCASE`
     )
     .all(accountId);
+  result.sync_summary = {
+    remote_pages: pages.length,
+    active_pages: result.length,
+    added_pages: acceptedNew,
+    skipped_license: skippedByLicense.length,
+    skipped_pages: skippedByLicense,
+  };
+  return result;
 }
 
 export function listAccounts() {

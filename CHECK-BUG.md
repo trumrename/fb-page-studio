@@ -1,7 +1,7 @@
 # CHECK-BUG — Checklist kiểm thử FB Page Studio
 
 > Trước mỗi ship / release. Đánh `[x]` khi OK.  
-> **Phiên bản code:** 1.2.1  
+> **Phiên bản code:** 1.2.2
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`
 
@@ -20,7 +20,7 @@
 
 ```powershell
 cd D:\fb-page-poster
-node scripts/test-requirements.mjs
+npm test
 ```
 
 - [ ] ALL CHECKS PASSED  
@@ -60,6 +60,19 @@ node scripts/test-requirements.mjs
 - [ ] Rotation preview so-le App1↔App2  
 - [ ] Gap cùng page đúng khung  
 - [ ] Hẹn giờ 1–2 page thật (tuỳ)  
+- [ ] Chạy ngay hiển thị đúng App · Admin · Page · bài số · chế độ đăng · giờ Việt Nam
+- [ ] Không tạo lịch mới ở quá khứ; bài hẹn cũ chỉ đổi trạng thái sau khi Facebook xác nhận
+- [ ] Job hiển thị % và thông báo rõ thành công/lỗi
+- [ ] Media/caption lấy đúng folder từng Page và cập nhật số lượng khi job chạy
+
+## 5.1. Báo cáo / follower
+
+- [ ] Báo cáo Page ghi đủ App · Admin/Profile · Page và follower
+- [ ] CSV Page tạo theo ngày; Excel Page theo App có một sheet mỗi ngày
+- [ ] CSV lịch sử tạo theo ngày; Excel lịch sử có một sheet mỗi ngày
+- [ ] Tự xuất cuối ngày lúc 23:59 giờ Việt Nam
+- [ ] Tăng/giảm follower 1 · 3 · 7 · 30 ngày đúng snapshot; thiếu dữ liệu ghi rõ
+- [ ] Page thiếu quyền Facebook hiển thị cảnh báo quyền, không ghi follower giả
 
 ---
 

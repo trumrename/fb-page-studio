@@ -201,6 +201,7 @@ router.get("/facebook/callback", async (req, res) => {
       connected: "1",
       account: String(result.account.id),
       pages: String(result.pages.length),
+      skipped: String(result.sync_summary?.skipped_license || 0),
       app: app.key,
     });
     const localUi = `http://127.0.0.1:${config.port}/index.html?${q}`;
@@ -218,7 +219,8 @@ p{color:#b8f0d0;line-height:1.5}a{color:#9ec1ff}
 <div class="card">
   <h1>✓ Đã kết nối Facebook</h1>
   <p><span class="badge">${escapeHtml(app.name)} · ${escapeHtml(app.key)}</span></p>
-  <p>Account #${result.account.id} · <b>${result.pages.length}</b> page(s).</p>
+  <p>Account #${result.account.id} · <b>${result.pages.length}</b> Page đang hoạt động.</p>
+  ${result.sync_summary?.skipped_license ? `<p style="color:#f5c96a"><b>${result.sync_summary.skipped_license}</b> Page mới không được thêm do giới hạn license.</p>` : ""}
   <p>Tài khoản đã gắn đúng <b>${escapeHtml(app.name)}</b> — rotation so-le dùng nhóm app này.</p>
   <p><a class="btn" href="${localUi}" style="display:inline-block;margin:.5rem .5rem 0 0;padding:.65rem 1rem;background:#1877f2;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">← Quay về Pages trong app</a>
   <a class="btn" href="http://127.0.0.1:${config.port}/app.html" style="display:inline-block;margin:.5rem 0 0;padding:.65rem 1rem;background:#2a2f3a;color:#e8eaed;border-radius:8px;text-decoration:none;font-weight:700">Vận hành</a></p>

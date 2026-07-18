@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { nanoid } from "nanoid";
 import { getDb } from "../db/index.js";
 import {
   startBulkPostJob,
@@ -17,6 +18,7 @@ import {
   loadRotationSettings,
   saveRotationSettings,
   buildRotationPlan,
+  buildRunNowPlan,
   planToScheduleSlots,
   loadAccountPageMatrix,
   resolveGroups,
@@ -25,6 +27,18 @@ import {
 import { listAccounts } from "../services/accounts.js";
 
 const router = Router();
+const runNowPlans = new Map();
+const RUN_NOW_PLAN_TTL_MS = 15 * 60 * 1000;
+
+function saveRunNowPlan(plan) {
+  const now = Date.now();
+  for (const [id, item] of runNowPlans) {
+    if (now - item.created_at > RUN_NOW_PLAN_TTL_MS) runNowPlans.delete(id);
+  }
+  const id = nanoid(12);
+  runNowPlans.set(id, { plan, created_at: now });
+  return id;
+}
 
 function pagesMeta(ids) {
   const db = getDb();
@@ -173,6 +187,49 @@ router.post("/rotation/run", (req, res) => {
       preview_order: plan.preview_order,
       reports: getReportPaths(),
     });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** POST /api/jobs/rotation/run-now — first round now, later rounds scheduled. */
+router.post("/rotation/run-now", (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.dry_run) {
+      const plan = buildRunNowPlan(body);
+      const planId = saveRunNowPlan(plan);
+      return res.json({ ok: true, dry_run: true, plan_id: planId, ...plan });
+    }
+    const planId = String(body.plan_id || "");
+    const saved = runNowPlans.get(planId);
+    if (!saved || Date.now() - saved.created_at > RUN_NOW_PLAN_TTL_MS) {
+      return res.status(400).json({ ok: false, error: "Kế hoạch đã hết hạn hoặc chưa preview. Hãy bấm Xem lịch chạy ngay lại." });
+    }
+    const plan = saved.plan;
+    if (!plan.summary?.can_run || plan.blockers?.length) {
+      return res.status(400).json({ ok: false, error: "Kế hoạch còn lỗi chặn; chưa thể chạy.", plan });
+    }
+    if (!plan.slots.length) return res.status(400).json({ ok: false, error: "Không có Page để chạy", plan });
+    const tasks = plan.slots.map((s) => ({
+      kind: s.immediate ? "post" : "schedule",
+      page_row_id: s.page_row_id,
+      page_name: s.page_name,
+      page_id: s.page_id,
+      label: s.immediate
+        ? `Vòng ${s.post_round} · đăng ngay · ${s.account_name}`
+        : `Vòng ${s.post_round} · hẹn ${s.local_label} VN · ${s.account_name}`,
+      opts: s.immediate
+        ? { ignore_quota: false, ignore_interval: false, post_type: s.planned_post_type }
+        : { scheduled_publish_time: s.unix, post_type: s.planned_post_type },
+    }));
+    const job = startJob({
+      type: "rotation_run_now",
+      title: `Chạy ngay · ${plan.summary.posts_per_page_per_day} bài/page · ${plan.summary.accounts} admin`,
+      tasks,
+    });
+    runNowPlans.delete(planId);
+    res.json({ ok: true, job, ...plan });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }

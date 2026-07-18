@@ -13,6 +13,9 @@ set "NGROK_TOKEN=DAN_TOKEN_NGROK_VAO_DAY"
 :: Cong app FB Page Studio (doi neu .env dung PORT khac)
 set "APP_PORT=3847"
 
+:: Domain ngrok co dinh (goi tra phi)
+set "NGROK_DOMAIN=qgroup.ngrok.app"
+
 :: Thu muc cai ngrok (mac dinh canh file .bat)
 set "NGROK_DIR=%~dp0ngrok"
 set "NGROK_EXE=%NGROK_DIR%\ngrok.exe"
@@ -93,7 +96,7 @@ echo    APP_BASE_URL=https://....
 echo    FB_REDIRECT_URI=https://..../auth/facebook/callback
 echo  Roi them URI do tren Meta Developers + restart app.
 echo.
-"%NGROK_EXE%" http 127.0.0.1:%APP_PORT%
+"%NGROK_EXE%" http 127.0.0.1:%APP_PORT% --domain=%NGROK_DOMAIN%
 goto :eof
 
 :bad_token

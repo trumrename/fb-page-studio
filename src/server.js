@@ -10,7 +10,10 @@ import apiRoutes from "./routes/api.js";
 import postingRoutes from "./routes/posting.js";
 import jobsRoutes from "./routes/jobs.js";
 import licenseRoutes from "./routes/license.js";
-import { runSchedulerTick } from "./services/poster.js";
+import { runSchedulerTick, getPagePostConfig, mediaStats, getCaptionStats } from "./services/poster.js";
+import { reconcileScheduledLogs } from "./services/schedule.js";
+import { exportAllDailyReports, exportPostingHistoryDaily, vnDay, yesterdayVn } from "./services/dailyReports.js";
+import { enrichAllPages } from "./services/enrich.js";
 import { ensureAntiSpamTables } from "./services/antiSpam.js";
 import {
   getLicenseStatus,
@@ -140,10 +143,76 @@ import("./services/updater.js")
 
 // Scheduler: every 60s check enabled pages
 const SCHEDULER_MS = Number(process.env.SCHEDULER_INTERVAL_MS || 60000);
+let schedulerRunning = false;
+const schedulerState = {
+  enabled: true,
+  interval_ms: SCHEDULER_MS,
+  running: false,
+  tick_count: 0,
+  last_started_at: null,
+  last_finished_at: null,
+  next_tick_at: new Date(Date.now() + SCHEDULER_MS).toISOString(),
+  last_error: null,
+  last_summary: { checked: 0, posted: 0, skipped: 0, failed: 0 },
+};
+
+app.get("/api/runtime", (_req, res) => {
+  let enabledPages = 0;
+  let configHealth = { total_pages: 0, custom_config_pages: 0, default_config_pages: 0, valid_folder_pages: 0, ready_pages: 0, pages_without_media: 0, pages_without_captions: 0 };
+  try {
+    const db = getDb();
+    enabledPages = db
+      .prepare("SELECT COUNT(*) AS n FROM page_post_config c JOIN fb_pages p ON p.id=c.page_row_id WHERE c.enabled=1 AND p.status='active'")
+      .get()?.n || 0;
+    const rows = db.prepare(`SELECT p.id, c.page_row_id AS has_custom_config
+      FROM fb_pages p LEFT JOIN page_post_config c ON c.page_row_id=p.id WHERE p.status='active'`).all();
+    configHealth.total_pages = rows.length;
+    const mediaCache = new Map();
+    const captionCache = new Map();
+    for (const row of rows) {
+      row.has_custom_config ? configHealth.custom_config_pages++ : configHealth.default_config_pages++;
+      const cfg = getPagePostConfig(row.id);
+      const foldersOk = [cfg.media_folder, cfg.captions_folder, cfg.posted_folder].every((p) => p && fs.existsSync(p));
+      if (foldersOk) configHealth.valid_folder_pages++;
+      if (!mediaCache.has(cfg.media_folder)) mediaCache.set(cfg.media_folder, mediaStats(cfg.media_folder));
+      if (!captionCache.has(cfg.captions_folder)) captionCache.set(cfg.captions_folder, getCaptionStats(cfg));
+      const media = mediaCache.get(cfg.media_folder);
+      const captions = captionCache.get(cfg.captions_folder);
+      const hasMedia = Number(media?.photos || 0) + Number(media?.videos || 0) > 0;
+      const hasCaptions = Number(captions?.total || 0) > 0;
+      if (!hasMedia) configHealth.pages_without_media++;
+      if (!hasCaptions) configHealth.pages_without_captions++;
+      if (foldersOk && hasMedia && hasCaptions) configHealth.ready_pages++;
+    }
+  } catch {}
+  res.json({
+    ok: true,
+    server_time: new Date().toISOString(),
+    scheduler: { ...schedulerState, enabled_pages: enabledPages },
+    config_health: configHealth,
+  });
+});
+
 setInterval(() => {
+  schedulerState.next_tick_at = new Date(Date.now() + SCHEDULER_MS).toISOString();
+  if (schedulerRunning) {
+    console.warn("[scheduler] Bỏ qua tick vì lượt trước vẫn đang chạy");
+    return;
+  }
+  schedulerRunning = true;
+  schedulerState.running = true;
+  schedulerState.last_started_at = new Date().toISOString();
+  schedulerState.last_error = null;
   runSchedulerTick()
     .then((results) => {
       const posted = results.filter((r) => r.ok);
+      schedulerState.tick_count++;
+      schedulerState.last_summary = {
+        checked: results.length,
+        posted: posted.length,
+        skipped: results.filter((r) => r.skipped).length,
+        failed: results.filter((r) => !r.ok && !r.skipped).length,
+      };
       if (posted.length) {
         console.log(
           `[scheduler] posted ${posted.length}:`,
@@ -151,8 +220,70 @@ setInterval(() => {
         );
       }
     })
-    .catch((e) => console.error("[scheduler]", e.message));
+    .catch((e) => {
+      schedulerState.last_error = e.message;
+      console.error("[scheduler]", e.message);
+    })
+    .finally(() => {
+      schedulerRunning = false;
+      schedulerState.running = false;
+      schedulerState.last_finished_at = new Date().toISOString();
+    });
 }, SCHEDULER_MS);
+
+// Reconcile schedules that have passed their publish time with Facebook.
+const RECONCILE_MS = 5 * 60 * 1000;
+let reconcileRunning = false;
+async function runScheduledReconcile() {
+  if (reconcileRunning) return;
+  reconcileRunning = true;
+  try {
+    const r = await reconcileScheduledLogs({ limit: 50 });
+    if (r.checked) {
+      console.log(`[reconcile] checked ${r.checked} · published ${r.published} · overdue ${r.overdue} · unknown ${r.unknown}`);
+    }
+  } catch (e) {
+    console.warn("[reconcile]", e.message);
+  } finally {
+    reconcileRunning = false;
+  }
+}
+setTimeout(runScheduledReconcile, 15000);
+setInterval(runScheduledReconcile, RECONCILE_MS);
+
+// Daily CSV + cumulative Excel sheets at 23:59 Vietnam time.
+let lastDailyExportDay = null;
+async function runEndOfDayExport(day, reason) {
+  try {
+    const followerSync = await enrichAllPages({ force: true });
+    const r = await exportAllDailyReports({ day });
+    lastDailyExportDay = day;
+    console.log(`[daily-report] ${reason} ${day} · follower accounts ${followerSync.accounts} · page files ${r.pages.files.length} · history rows ${r.history.rows}`);
+  } catch (e) {
+    console.warn("[daily-report]", e.message);
+  }
+}
+function dailyReportTick() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Ho_Chi_Minh", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(now);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+  const day = vnDay(now);
+  if (hour === 23 && minute === 59 && lastDailyExportDay !== day) {
+    runEndOfDayExport(day, "23:59 VN");
+  }
+}
+setTimeout(async () => {
+  try {
+    const r = await exportPostingHistoryDaily({ day: yesterdayVn() });
+    console.log(`[daily-report] startup history catch-up ${r.day} · ${r.rows} rows`);
+  } catch (e) {
+    console.warn("[daily-report] startup catch-up", e.message);
+  }
+}, 20000);
+setInterval(dailyReportTick, 30000);
 
 function openBrowser(url) {
   try {
@@ -172,10 +303,14 @@ function openBrowser(url) {
   }
 }
 
-const server = app.listen(config.port, () => {
-  const local = `http://localhost:${config.port}`;
+// Bind IPv4 only — ngrok on Windows often dials [::1] for "localhost" and fails
+// with ERR_NGROK_8012 if the app only works on 127.0.0.1 (or nothing is listening).
+const LISTEN_HOST = process.env.LISTEN_HOST || "127.0.0.1";
+const server = app.listen(config.port, LISTEN_HOST, () => {
+  const local = `http://127.0.0.1:${config.port}`;
   console.log(`\n  FB Page Studio  v${config.version}`);
   console.log(`  APP CONSOLE    →  ${local}/app.html`);
+  console.log(`  Listen         →  ${LISTEN_HOST}:${config.port}`);
   console.log(`  Public base    →  ${config.appBaseUrl}`);
   console.log(`  Reports        →  ${path.join(dataRoot, "exports")}`);
   console.log(`  Data folder    →  ${dataRoot}`);
@@ -185,6 +320,9 @@ const server = app.listen(config.port, () => {
   console.log(`  Graph version  →  ${config.facebook.graphVersion}`);
   console.log(
     `  App configured →  ${config.facebook.appId ? "yes" : "NO — set .env"}\n`
+  );
+  console.log(
+    `  Ngrok tip      →  ngrok http 127.0.0.1:${config.port}  (giữ app MỞ khi login FB)\n`
   );
 
   // Desktop (Electron) never opens external browser

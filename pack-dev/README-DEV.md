@@ -37,11 +37,21 @@ D:\fb-page-poster\
 ```powershell
 cd D:\fb-page-poster
 npm start                    # chạy dev
-node scripts/test-requirements.mjs
+npm test                     # rebuild native + chạy toàn bộ kiểm thử
 node scripts/gen-license.mjs --type commercial --holder "KH" --days 365
 npm run build:desktop        # build exe
 node scripts/sync-customer-pack.mjs   # đổ exe + file an toàn sang pack-customer
 ```
+
+## Trạng thái bản v1.2.2
+
+- Workspace UI đã tách rõ theo quy trình vận hành.
+- Rotation hỗ trợ từng App và hai App so le; job tuần tự, có tiến trình và thông báo.
+- Có khóa theo Page, khóa scheduler và lưu trạng thái job sau restart.
+- Bài hẹn Facebook được đối soát tự động mỗi 5 phút.
+- Báo cáo ngày nằm trong `data\exports\daily`: Page theo App, lịch sử đăng và follower 1/3/7/30 ngày.
+- Tác vụ cuối ngày chạy theo giờ Việt Nam lúc 23:59.
+- Khi follower trống, kiểm tra token có `pages_show_list`, `pages_read_engagement` và quyền Page tương ứng.
 
 ## Quy tắc với AI / khi fix
 

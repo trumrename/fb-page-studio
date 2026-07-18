@@ -26,6 +26,23 @@ const exeCandidates = [
 fs.mkdirSync(out, { recursive: true });
 fs.mkdirSync(path.join(out, "media-sample", "captions"), { recursive: true });
 
+// Never declare a customer pack ready while it contains local credentials,
+// tokens, databases, logs, private keys, or source code.
+const forbidden = [
+  path.join(out, ".env"),
+  path.join(out, "data"),
+  path.join(out, "src"),
+  path.join(out, "keys", "license-private.pem"),
+  path.join(out, "desktop-startup.log"),
+];
+const unsafe = forbidden.filter((p) => fs.existsSync(p));
+if (unsafe.length) {
+  throw new Error(
+    `Gói khách chứa dữ liệu riêng, dừng sync:\n${unsafe.map((p) => ` - ${p}`).join("\n")}\n` +
+      "Di chuyển chúng về gói DEV trước khi build khách."
+  );
+}
+
 // VERSION
 fs.writeFileSync(
   path.join(out, "VERSION.txt"),
@@ -76,7 +93,7 @@ if (!fs.existsSync(cap)) {
 }
 
 // MANIFEST an toàn
-const files = fs.readdirSync(out);
+const files = fs.readdirSync(out).sort((a, b) => a.localeCompare(b));
 fs.writeFileSync(
   path.join(out, "MANIFEST.txt"),
   [

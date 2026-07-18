@@ -52,6 +52,22 @@ async function graphPostJson(urlPath, pageToken, body = {}) {
   return data;
 }
 
+async function graphGetJson(urlPath, pageToken, fields) {
+  const url = new URL(`${graphBase()}${urlPath}`);
+  url.searchParams.set("access_token", pageToken);
+  if (fields) url.searchParams.set("fields", fields);
+  const res = await fetch(url);
+  noteGraphResponse(res);
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(data.error.message || "Graph read error");
+    err.code = data.error.code;
+    err.fb = data.error;
+    throw err;
+  }
+  return data;
+}
+
 /**
  * Validate FB scheduled_publish_time rules:
  * must be between 10 minutes and 30 days from now (unix seconds).
@@ -192,6 +208,27 @@ export async function listScheduledPosts(pageId, pageToken, limit = 50) {
     throw err;
   }
   return data.data || [];
+}
+
+/** Read one scheduled/published object to reconcile local log status. */
+export async function getFacebookPostStatus(postId, pageToken) {
+  if (!postId) throw new Error("Missing Facebook post id");
+  try {
+    return await graphGetJson(
+      `/${postId}`,
+      pageToken,
+      "id,created_time,permalink_url,is_published,scheduled_publish_time,status_type"
+    );
+  } catch (e) {
+    if (Number(e.code) !== 100) throw e;
+    const basic = await graphGetJson(
+      `/${postId}`,
+      pageToken,
+      "id,created_time,link"
+    );
+    if (!basic.permalink_url && basic.link) basic.permalink_url = basic.link;
+    return basic;
+  }
 }
 
 /** Comment as Page on a post */

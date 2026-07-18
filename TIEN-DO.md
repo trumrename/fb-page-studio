@@ -1,6 +1,6 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-17** · Code: **1.2.1**  
+> Cập nhật: **2026-07-18** · Code: **1.2.2**
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`  
 > **GitHub:** `trumrename/fb-page-studio` — **push chỉ khi user OK**
@@ -71,6 +71,19 @@ node scripts/sync-customer-pack.mjs
 - [x] Connect mở Chrome ưu tiên (session login)
 - [x] Portable update path + sqlite ABI fix
 
+### G. Vận hành và báo cáo v1.2.2
+- [x] Tách workspace rõ: Tổng quan · Kết nối · Cấu hình Page · Xoay vòng/Chạy · Tiến trình · Anti-spam · Báo cáo · License
+- [x] Hai chế độ xoay vòng: theo từng App và hai App so le; tự xử lý khi App/Admin không đủ Page
+- [x] Chạy ngay, lịch theo giờ Việt Nam, khoảng nghỉ Page và kiểm tra lịch quá khứ
+- [x] Job có phần trăm, thông báo thành công/lỗi, trạng thái từng tác vụ và phục hồi theo dõi sau restart
+- [x] Khóa thao tác theo Page và khóa chồng scheduler để tránh đăng trùng
+- [x] Đối soát bài hẹn giờ Facebook thủ công + tự động mỗi 5 phút
+- [x] Báo cáo Page theo App: CSV ngày + Excel cộng dồn mỗi ngày một sheet
+- [x] Lịch sử đăng: CSV ngày + Excel cộng dồn, tự xuất 23:59 giờ Việt Nam
+- [x] Theo dõi follower từng Page, tăng/giảm 1 · 3 · 7 · 30 ngày
+- [x] Refresh follower trước báo cáo Page cuối ngày; ghi rõ Page thiếu quyền Facebook
+- [x] Bộ kiểm thử tự động: **129/129 đạt** trước build phát hành
+
 ---
 
 ## Chưa làm / chờ bạn
@@ -78,8 +91,8 @@ node scripts/sync-customer-pack.mjs
 | Hạng mục | Ai |
 |----------|-----|
 | `FB_APP_ID_2` nếu dùng App 2 | Bạn |
-| Build + sync pack-customer có .exe | Bạn / AI khi được lệnh build |
-| Push GH / Release có asset | **Chỉ khi bạn OK** |
+| Build + sync pack-customer có .exe | Đang thực hiện cho v1.2.2 |
+| Push GH / Release có asset | Đã được user cho phép cho v1.2.2 |
 | Online revoke license | Sau |
 
 ---
@@ -100,7 +113,7 @@ node scripts/sync-customer-pack.mjs
 ```powershell
 cd D:\fb-page-poster
 npm start
-node scripts/test-requirements.mjs
+npm test
 node scripts/gen-license.mjs --type lifetime --holder "KH" --lifetime
 npm run build:desktop
 node scripts/sync-customer-pack.mjs

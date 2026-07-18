@@ -21,6 +21,7 @@ import {
   getWorkbookPath,
 } from "../services/export.js";
 import fs from "fs";
+import path from "path";
 import {
   getLastUsage,
   usageWarning,
@@ -44,8 +45,38 @@ import {
   ensureAntiSpamTables,
 } from "../services/antiSpam.js";
 import { pickFolder } from "../services/folderPicker.js";
+import {
+  exportPageInfoDaily,
+  exportPostingHistoryDaily,
+  dailyReportInfo,
+  getDailyReportFile,
+} from "../services/dailyReports.js";
 
 const router = Router();
+
+router.get("/reports/daily/info", (_req, res) => {
+  res.json(dailyReportInfo());
+});
+
+router.post("/reports/daily/pages", async (req, res) => {
+  try {
+    const refresh = req.body?.refresh_followers !== false;
+    const follower_sync = refresh ? await enrichAllPages({ force: true }) : null;
+    res.json({ ok: true, follower_sync, ...(await exportPageInfoDaily({ day: req.body?.day })) });
+  }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+router.post("/reports/daily/history", async (req, res) => {
+  try { res.json({ ok: true, ...(await exportPostingHistoryDaily({ day: req.body?.day })) }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+router.get("/reports/daily/file/:name", (req, res) => {
+  const file = getDailyReportFile(req.params.name);
+  if (!file) return res.status(404).json({ error: "File báo cáo không tồn tại" });
+  res.download(file, path.basename(file));
+});
 
 /**
  * POST /api/system/pick-folder
@@ -216,6 +247,7 @@ router.post("/accounts/:id/sync", async (req, res) => {
         category: p.category,
         status: p.status,
       })),
+      sync_summary: pages.sync_summary || null,
     });
   } catch (e) {
     console.error("[sync]", e);

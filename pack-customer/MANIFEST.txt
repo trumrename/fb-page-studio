@@ -1,9 +1,8 @@
 Nội dung gói khách (không secret):
- - .env
  - .env.example
- - data
- - desktop-startup.log
+ - CAI-NGROK.bat
  - FB-Page-Studio-Desktop.exe
+ - HUONG-DAN-MAY-MOI.md
  - MANIFEST.txt
  - media-sample
  - README-KHACH.txt

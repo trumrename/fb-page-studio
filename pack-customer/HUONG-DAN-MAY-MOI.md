@@ -50,8 +50,8 @@
 
 https://github.com/trumrename/fb-page-studio/releases  
 
-Chọn bản mới nhất (vd **v1.2.1**):  
-https://github.com/trumrename/fb-page-studio/releases/tag/v1.2.1  
+Chọn bản mới nhất (vd **v1.2.2**):
+https://github.com/trumrename/fb-page-studio/releases/tag/v1.2.2
 
 ### Trong mục **Assets** — TẢI CÁI NÀY
 
@@ -414,6 +414,13 @@ Release: https://github.com/trumrename/fb-page-studio/releases
 - Nick có quyền page?  
 - Đã Accept lời mời **Tester**?  
 - Bấm Sync list  
+
+### Có Page nhưng không lấy được follower
+
+- Connect lại và chấp nhận tối thiểu `pages_show_list`, `pages_read_engagement`.
+- Nick Facebook phải có quyền xem/đọc nội dung và thông tin của chính Page đó.
+- Nếu Meta App đang ở Dev mode, nick phải là Admin/Developer/Tester và đã nhận lời mời.
+- Sau khi cấp quyền, vào Kết nối/Báo cáo và refresh lại Page. Các mốc 1/3/7/30 ngày chỉ xuất hiện sau khi đã có snapshot đủ số ngày.
 
 ### Zip không có exe / file lạ
 

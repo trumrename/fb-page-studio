@@ -9,6 +9,7 @@ import {
   publishPhoto,
   publishVideo,
   listScheduledPosts,
+  getFacebookPostStatus,
   validateScheduleUnix,
 } from "./publish.js";
 import { pickCaption } from "./mediaLibrary.js";
@@ -29,6 +30,7 @@ import {
   getAntiSpamSettings,
 } from "./antiSpam.js";
 import { assertCanPublish as assertLicenseActive } from "./license.js";
+import { withPageOperationLock } from "./pageOperationLock.js";
 
 function logScheduled(row) {
   const db = getDb();
@@ -63,7 +65,7 @@ function logScheduled(row) {
  * @param {number} pageRowId
  * @param {object} opts { scheduled_publish_time, post_type?, caption?, force_type? }
  */
-export async function scheduleOnePost(pageRowId, opts = {}) {
+async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
   ensureAntiSpamTables();
   assertLicenseActive();
   const db = getDb();
@@ -120,6 +122,7 @@ export async function scheduleOnePost(pageRowId, opts = {}) {
       ignore_quota: false,
       ignore_interval: false,
       isSchedule: true,
+      scheduledAtUnix: unix,
     });
     if (gate.ok) break;
     if (
@@ -269,6 +272,12 @@ export async function scheduleOnePost(pageRowId, opts = {}) {
       page: { id: page.id, page_id: page.page_id, name: page.name },
     };
   }
+}
+
+export async function scheduleOnePost(pageRowId, opts = {}) {
+  return withPageOperationLock(pageRowId, () =>
+    scheduleOnePostUnlocked(pageRowId, opts)
+  );
 }
 
 /**
@@ -519,5 +528,71 @@ export async function listFbScheduledForPage(pageRowId) {
   return {
     page: { id: page.id, page_id: page.page_id, name: page.name },
     posts,
+  };
+}
+
+/** Reconcile overdue local scheduled logs against the Facebook object. */
+export async function reconcileScheduledLogs({ limit = 50 } = {}) {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT l.id, l.page_row_id, l.page_id, l.page_name, l.fb_post_id, l.fb_post_url,
+           l.scheduled_publish_time, p.page_token_enc
+    FROM post_logs l
+    JOIN fb_pages p ON p.id = l.page_row_id
+    WHERE l.status = 'scheduled'
+      AND l.fb_post_id IS NOT NULL
+      AND julianday(l.scheduled_publish_time) <= julianday('now')
+    ORDER BY l.scheduled_publish_time ASC
+    LIMIT ?
+  `).all(Math.min(100, Math.max(1, Number(limit) || 50)));
+
+  const results = [];
+  const pendingByPage = new Map();
+  for (const row of rows) {
+    try {
+      const token = decryptToken(row.page_token_enc);
+      if (!pendingByPage.has(row.page_row_id)) {
+        const pending = await listScheduledPosts(row.page_id, token, 100);
+        pendingByPage.set(row.page_row_id, new Set(pending.map((p) => String(p.id))));
+      }
+      const pendingIds = pendingByPage.get(row.page_row_id);
+      const stillPending = [...pendingIds].some((id) =>
+        id === String(row.fb_post_id) || id.endsWith(`_${row.fb_post_id}`) || String(row.fb_post_id).endsWith(`_${id}`)
+      );
+      if (stillPending) {
+        db.prepare(`UPDATE post_logs SET status = 'schedule_overdue', error = ? WHERE id = ?`)
+          .run("Đã qua giờ dự kiến nhưng bài vẫn còn trong scheduled_posts của Facebook", row.id);
+        results.push({ id: row.id, page_name: row.page_name, status: "schedule_overdue", post_url: row.fb_post_url });
+        await sleep(250);
+        continue;
+      }
+      const fb = await getFacebookPostStatus(row.fb_post_id, token);
+      const explicitPublished = fb.is_published === true;
+      const explicitUnpublished = fb.is_published === false;
+      const looksPublished = !!fb.permalink_url && !fb.scheduled_publish_time;
+      const objectExists = !!fb.id;
+      const status = explicitPublished || (!explicitUnpublished && (looksPublished || objectExists))
+        ? "published"
+        : "schedule_overdue";
+      const url = fb.permalink_url || row.fb_post_url || null;
+      db.prepare(`UPDATE post_logs SET status = ?, fb_post_url = COALESCE(?, fb_post_url), error = ? WHERE id = ?`)
+        .run(
+          status,
+          url,
+          status === "schedule_overdue" ? "Đã qua giờ dự kiến nhưng Facebook vẫn báo chưa xuất bản" : null,
+          row.id
+        );
+      results.push({ id: row.id, page_name: row.page_name, status, post_url: url });
+    } catch (e) {
+      results.push({ id: row.id, page_name: row.page_name, status: "unknown", error: e.message });
+    }
+    await sleep(250);
+  }
+  return {
+    checked: rows.length,
+    published: results.filter((r) => r.status === "published").length,
+    overdue: results.filter((r) => r.status === "schedule_overdue").length,
+    unknown: results.filter((r) => r.status === "unknown").length,
+    results,
   };
 }

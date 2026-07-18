@@ -3,8 +3,16 @@
  * Sequential Graph calls (safe). Live state for UI polling/SSE.
  */
 import { EventEmitter } from "events";
+import fs from "fs";
+import path from "path";
 import { nanoid } from "nanoid";
-import { runOnePost } from "./poster.js";
+import { config } from "../config.js";
+import {
+  runOnePost,
+  getPagePostConfig,
+  mediaStats,
+  getCaptionStats,
+} from "./poster.js";
 import { scheduleOnePost } from "./schedule.js";
 import { getReportPaths } from "./reportExport.js";
 
@@ -14,6 +22,59 @@ bus.setMaxListeners(50);
 /** @type {Map<string, object>} */
 const jobs = new Map();
 const MAX_JOBS = 40;
+const JOB_STATE_FILE = path.join(path.dirname(config.databasePath), "jobs-state.json");
+
+function persistJobs() {
+  try {
+    const list = [...jobs.values()]
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .slice(0, MAX_JOBS);
+    fs.writeFileSync(JOB_STATE_FILE, JSON.stringify(list, null, 2), "utf8");
+  } catch (e) {
+    console.warn("[jobs persist]", e.message);
+  }
+}
+
+function restoreJobs() {
+  try {
+    if (!fs.existsSync(JOB_STATE_FILE)) return;
+    const list = JSON.parse(fs.readFileSync(JOB_STATE_FILE, "utf8"));
+    if (!Array.isArray(list)) return;
+    for (const job of list.slice(0, MAX_JOBS)) {
+      if (!job?.id || !Array.isArray(job.tasks)) continue;
+      if (["running", "paused", "queued"].includes(job.status)) {
+        for (const task of job.tasks) {
+          if (task.status === "running") {
+            task.status = "fail";
+            task.percent = 100;
+            task.error = "App đã đóng hoặc khởi động lại khi nhiệm vụ đang chạy";
+            task.message = task.error;
+            task.finished_at = nowIso();
+          } else if (task.status === "pending") {
+            task.status = "skipped";
+            task.percent = 100;
+            task.message = "Bỏ qua vì App đã khởi động lại";
+            task.finished_at = nowIso();
+          }
+        }
+        job.status = "interrupted";
+        job.paused = false;
+        job.stop_requested = true;
+        job.finished_at = nowIso();
+        job.notifications = job.notifications || [];
+        job.notifications.unshift({
+          id: nanoid(6), level: "error", title: "Job bị gián đoạn",
+          body: "App đã đóng hoặc khởi động lại trước khi job hoàn tất.", at: nowIso(),
+        });
+      }
+      recompute(job);
+      jobs.set(job.id, job);
+    }
+    persistJobs();
+  } catch (e) {
+    console.warn("[jobs restore]", e.message);
+  }
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -32,6 +93,7 @@ function trimJobs() {
 }
 
 function emit(job) {
+  persistJobs();
   bus.emit("job", job);
   bus.emit(`job:${job.id}`, job);
 }
@@ -46,13 +108,14 @@ function recompute(job) {
   const fail = tasks.filter((t) => t.status === "fail").length;
   const skipped = tasks.filter((t) => t.status === "skipped").length;
   const running = tasks.find((t) => t.status === "running");
+  const progressUnits = done + (running ? (Number(running.percent) || 0) / 100 : 0);
   job.progress = {
     total,
     done,
     ok,
     fail,
     skipped,
-    percent: Math.min(100, Math.round((done / total) * 100)),
+    percent: Math.min(100, Math.round((progressUnits / total) * 100)),
     current_task_id: running?.id || null,
     current_label: running
       ? `${running.page_name || "?"} · ${running.label || running.kind}`
@@ -96,6 +159,34 @@ function recompute(job) {
   return job;
 }
 
+function refreshResources(job) {
+  const pageIds = [...new Set((job.tasks || []).map((t) => Number(t.page_row_id)).filter((id) => id > 0))];
+  const folders = new Map();
+  for (const id of pageIds) {
+    try {
+      const cfg = getPagePostConfig(id);
+      const key = `${cfg.media_folder || ""}|${cfg.captions_folder || ""}`;
+      if (folders.has(key)) continue;
+      const media = mediaStats(cfg.media_folder);
+      const captions = getCaptionStats(cfg);
+      folders.set(key, {
+        media_folder: cfg.media_folder || "",
+        posted_folder: cfg.posted_folder || "",
+        captions_folder: cfg.captions_folder || "",
+        photos: media.photos || 0,
+        videos: media.videos || 0,
+        captions: captions.total || 0,
+      });
+    } catch {
+      /* keep job running even if one config cannot be summarized */
+    }
+  }
+  job.resources = {
+    updated_at: nowIso(),
+    folders: [...folders.values()],
+  };
+}
+
 export function subscribeJobs(fn) {
   bus.on("job", fn);
   return () => bus.off("job", fn);
@@ -121,6 +212,8 @@ export function getJob(id) {
 function publicJob(j) {
   return JSON.parse(JSON.stringify(j));
 }
+
+restoreJobs();
 
 /**
  * Create job from task defs then run async.
@@ -163,6 +256,7 @@ export function startJob({ type, title, tasks }) {
     report_files: [],
   };
   recompute(job);
+  refreshResources(job);
   jobs.set(id, job);
   emit(job);
 
@@ -239,6 +333,7 @@ async function runJob(jobId) {
   if (!job) return;
   job.status = "running";
   job.started_at = nowIso();
+  notify(job, "info", `Job bắt đầu · ${job.title}`, `${job.tasks.length} nhiệm vụ đang chạy tuần tự.`);
   recompute(job);
   emit(job);
 
@@ -272,6 +367,10 @@ async function runJob(jobId) {
     emit(job);
 
     try {
+      task.percent = 40;
+      task.message = "Đang gọi Facebook API…";
+      recompute(job);
+      emit(job);
       const result = await executeTask(task);
       task.result = summarizeResult(result);
       task.percent = 100;
@@ -315,6 +414,7 @@ async function runJob(jobId) {
     }
 
     task.finished_at = nowIso();
+    refreshResources(job);
     recompute(job);
     emit(job);
 
@@ -336,6 +436,14 @@ async function runJob(jobId) {
     job.status = "stopped";
     job.finished_at = nowIso();
     recompute(job);
+    refreshResources(job);
+    job.outcome = {
+      expected: job.progress.total,
+      success: job.progress.ok,
+      failed: job.progress.fail,
+      skipped: job.progress.skipped,
+      shortfall: Math.max(0, job.progress.total - job.progress.ok),
+    };
     notify(
       job,
       "warn",
@@ -353,6 +461,13 @@ async function runJob(jobId) {
         ? "partial"
         : "ok";
   job.finished_at = nowIso();
+  job.outcome = {
+    expected: job.progress.total,
+    success: job.progress.ok,
+    failed: job.progress.fail,
+    skipped: job.progress.skipped,
+    shortfall: Math.max(0, job.progress.total - job.progress.ok),
+  };
   recompute(job);
   notify(
     job,
@@ -401,6 +516,7 @@ async function executeTask(task) {
       force: true,
       ignore_quota: !!task.opts.ignore_quota,
       ignore_interval: !!task.opts.ignore_interval,
+      post_type: task.opts.post_type,
     });
   }
   if (kind === "schedule") {
