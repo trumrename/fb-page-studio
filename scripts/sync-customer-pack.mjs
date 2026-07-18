@@ -93,7 +93,11 @@ if (!fs.existsSync(cap)) {
 }
 
 // MANIFEST an toàn
-const files = fs.readdirSync(out).sort((a, b) => a.localeCompare(b));
+// Do not advertise stale/nested archives that a user may have copied into
+// pack-customer. Release ZIPs must be built from the safe delivery files only.
+const files = fs.readdirSync(out)
+  .filter((name) => !/\.(zip|7z|rar)$/i.test(name))
+  .sort((a, b) => a.localeCompare(b));
 fs.writeFileSync(
   path.join(out, "MANIFEST.txt"),
   [
