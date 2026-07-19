@@ -1,0 +1,75 @@
+name: Smoke test released EXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without v prefix"
+        required: true
+        default: "1.2.16"
+
+permissions:
+  contents: read
+
+jobs:
+  clean-windows-runtime:
+    runs-on: windows-latest
+    steps:
+      - name: Download exact versioned release asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ inputs.version }}"
+          New-Item -ItemType Directory -Path smoke -Force | Out-Null
+          gh release download "v$version" --repo "${{ github.repository }}" --pattern "FB-Page-Studio-Desktop-v$version.exe" --dir smoke
+
+      - name: Create clean machine configuration
+        shell: pwsh
+        run: |
+          @'
+          PORT=3857
+          APP_BASE_URL=https://smoke-test.invalid
+          FB_APP_ID=
+          FB_APP_SECRET=
+          FB_REDIRECT_URI=https://smoke-test.invalid/auth/facebook/callback
+          NGROK_AUTHTOKEN=
+          NGROK_AUTOSTART=1
+          TOKEN_ENCRYPTION_KEY=smoke-test-only-key-longer-than-32-characters
+          DATABASE_PATH=./data/app.db
+          GITHUB_REPO=${{ github.repository }}
+          UPDATE_ASSET=FB-Page-Studio-Desktop.exe
+          '@ | Set-Content -LiteralPath smoke/.env -Encoding utf8
+
+      - name: Launch portable EXE and verify runtime
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          $exe = (Resolve-Path "smoke/FB-Page-Studio-Desktop-v$version.exe").Path
+          $proc = Start-Process -FilePath $exe -WorkingDirectory (Resolve-Path smoke).Path -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(75)
+            $info = $null
+            do {
+              Start-Sleep -Milliseconds 750
+              try { $info = Invoke-RestMethod "http://127.0.0.1:3857/api/version" -TimeoutSec 2 } catch {}
+            } until ($info -or (Get-Date) -gt $deadline)
+            if (-not $info) { throw "Released EXE did not start API on clean Windows VM" }
+            if ($info.version -ne $version) { throw "Embedded/runtime version mismatch: $($info.version) != $version" }
+            $ngrok = Invoke-RestMethod "http://127.0.0.1:3857/api/setup/ngrok" -TimeoutSec 5
+            if ($ngrok.status -ne "needs_token") { throw "Expected needs_token on clean VM, got $($ngrok.status)" }
+            if ($ngrok.token_configured) { throw "Clean VM unexpectedly reports an Ngrok token" }
+            Write-Host "PASS version=$($info.version) exe_dir=$($info.exe_dir) ngrok=$($ngrok.status)"
+          } finally {
+            cmd /c "taskkill /PID $($proc.Id) /T /F" 2>$null | Out-Null
+          }
+
+      - name: Upload startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-diagnostics-v${{ inputs.version }}
+          path: |
+            smoke/desktop-startup.log
+            smoke/_update-error.txt
+          if-no-files-found: ignore
