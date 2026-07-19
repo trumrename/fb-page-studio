@@ -90,7 +90,15 @@ function chromeUserDataDir(value = process.env.FB_CHROME_USER_DATA_DIR) {
   // Accept its root folder too so the user does not need to hunt for the
   // technical subfolder by hand.
   for (const candidate of [raw, path.join(raw, "Data", "profile"), path.join(raw, "profile")]) {
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return candidate;
+    try {
+      if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) continue;
+      const names = fs.readdirSync(candidate);
+      // The root of a ChromePortable bundle also exists, but it contains App /
+      // Data / Other — not Chrome profiles. Only accept a real user-data root.
+      if (names.includes("Local State") || names.includes("Default") || names.some((n) => /^Profile \d+$/i.test(n))) {
+        return candidate;
+      }
+    } catch { /* try the next portable-layout candidate */ }
   }
   return raw;
 }
