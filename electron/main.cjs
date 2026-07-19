@@ -182,7 +182,16 @@ function openInPreferredBrowser(url) {
     try {
       const isChrome = /(?:^|\\)chrome(?:\.exe)?$/i.test(exe);
       const profile = String(browserEnv.FB_CHROME_PROFILE || process.env.FB_CHROME_PROFILE || "").trim();
-      const userData = String(browserEnv.FB_CHROME_USER_DATA_DIR || process.env.FB_CHROME_USER_DATA_DIR || "").trim();
+      // Supplying only --profile-directory is unreliable when Chrome is already
+      // running: Windows can forward the URL to a different active Chrome
+      // instance.  Always bind the launch to the real Chrome User Data root,
+      // then select its exact profile folder.  This preserves that profile's
+      // Facebook cookies (unless the user deliberately configured another root).
+      const userData = String(
+        browserEnv.FB_CHROME_USER_DATA_DIR ||
+        process.env.FB_CHROME_USER_DATA_DIR ||
+        path.join(local, "Google", "Chrome", "User Data")
+      ).trim();
       // Chrome does not allow an external app to take over the active tab.
       // Passing the profile opens a new tab with that profile's FB cookies.
       const args = isChrome && profile

@@ -166,7 +166,9 @@ router.put("/setup/browser", (req, res) => {
     }
     writeEnvValues(getEnvPath(), { FB_CHROME_PROFILE: wanted });
     process.env.FB_CHROME_PROFILE = wanted;
-    res.json({ ok: true, selected_profile: wanted, restart_required: true });
+    // Electron reads this .env file again at every OAuth launch, so the user
+    // can test the chosen profile immediately without restarting the tool.
+    res.json({ ok: true, selected_profile: wanted, restart_required: false });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
