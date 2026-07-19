@@ -112,6 +112,8 @@ check("updater bypasses stale GitHub cache", updater.includes('"Cache-Control"')
 check("updater rolls back and reports replacement failure", updater.includes(":replace_failed") && updater.includes("_update-error.txt") && apiRoutes.includes('"/update/last-error"') && updateUi.includes("showLastUpdateError"));
 check("release gate verifies embedded version and EXE hashes", fs.existsSync(path.join(root, "scripts/verify-release.mjs")) && read("scripts/verify-release.mjs").includes("EXE embedded version") && read("scripts/verify-release.mjs").includes("customer EXE hash"));
 check("tag release workflow runs verification gate", fs.existsSync(path.join(root, ".github/workflows/release-desktop.yml")) && read(".github/workflows/release-desktop.yml").includes("release:verify") && read(".github/workflows/release-desktop.yml").includes("GITHUB_REF_NAME"));
+check("release asset filename includes exact version", fs.existsSync(path.join(root, "scripts/prepare-release-asset.mjs")) && read("scripts/prepare-release-asset.mjs").includes("Desktop-v${pkg.version}.exe") && read(".github/workflows/release-desktop.yml").includes("Desktop-v$version.exe"));
+check("opening new EXE warns when old version is still running", read("electron/main.cjs").includes("additionalData?.version") && read("electron/main.cjs").includes("Đang có một phiên bản FB Page Studio khác chạy nền"));
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));
 check("overdue Facebook schedules reconcile automatically", server.includes("runScheduledReconcile") && server.includes("RECONCILE_MS"));
 check("runtime reports scheduler and config health", server.includes('/api/runtime') && server.includes("config_health") && server.includes("enabled_pages"));

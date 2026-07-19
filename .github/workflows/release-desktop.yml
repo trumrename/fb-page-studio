@@ -31,6 +31,7 @@ jobs:
       - run: npm test
       - run: npm run build:desktop
       - run: npm run pack:customer
+      - run: npm run release:asset
       - run: npm run release:verify -- --offline
 
       - name: Create or update verified GitHub Release
@@ -38,10 +39,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $asset = "dist-desktop-oauth/FB-Page-Studio-Desktop.exe"
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $asset = "dist-desktop-oauth/FB-Page-Studio-Desktop-v$version.exe"
+          $checksum = "$asset.sha256.txt"
           gh release view $env:GITHUB_REF_NAME 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME $asset --clobber
+            gh release upload $env:GITHUB_REF_NAME $asset $checksum --clobber
           } else {
-            gh release create $env:GITHUB_REF_NAME $asset --generate-notes --title "FB Page Studio $env:GITHUB_REF_NAME"
+            gh release create $env:GITHUB_REF_NAME $asset $checksum --generate-notes --title "FB Page Studio $env:GITHUB_REF_NAME"
           }

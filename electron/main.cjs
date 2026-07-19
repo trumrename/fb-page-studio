@@ -483,11 +483,31 @@ function createTray() {
   );
 }
 
-const gotLock = app.requestSingleInstanceLock();
+const ownVersion = app.getVersion();
+const gotLock = app.requestSingleInstanceLock({
+  version: ownVersion,
+  executable: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath,
+});
 if (!gotLock) {
-  app.quit();
+  // Without this warning, opening a newly downloaded EXE only focuses the
+  // already-running old build, making the user believe the download is stale.
+  dialog.showErrorBox(
+    `FB Page Studio v${ownVersion}`,
+    `Đang có một phiên bản FB Page Studio khác chạy nền.\n\n` +
+      `Hãy Thoát tool ở khay hệ thống hoặc tắt toàn bộ tiến trình FB Page Studio trong Task Manager, rồi mở lại file v${ownVersion}.`
+  );
+  app.exit(0);
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, _argv, _workingDirectory, additionalData) => {
+    const requestedVersion = String(additionalData?.version || "").trim();
+    if (requestedVersion && requestedVersion !== ownVersion) {
+      dialog.showMessageBox(mainWindow || undefined, {
+        type: "warning",
+        title: "Đang chạy phiên bản cũ",
+        message: `Tool đang chạy là v${ownVersion}, nhưng bạn vừa mở EXE v${requestedVersion}.`,
+        detail: "Hãy Thoát tool hoàn toàn ở khay hệ thống, sau đó mở lại file EXE phiên bản mới.",
+      });
+    }
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();

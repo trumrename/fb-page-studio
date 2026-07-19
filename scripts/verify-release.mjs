@@ -46,6 +46,8 @@ const getJson = (url) => new Promise((resolve, reject) => {
 const pkg = json(path.join(root, "package.json"));
 const lock = json(path.join(root, "package-lock.json"));
 const exe = path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe");
+const versionedExe = path.join(root, "dist-desktop-oauth", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
+const checksumFile = `${versionedExe}.sha256.txt`;
 const customerExe = path.join(root, "pack-customer", "FB-Page-Studio-Desktop.exe");
 const appAsar = path.join(root, "dist-desktop-oauth", "win-unpacked", "resources", "app.asar");
 const customerVersionFile = path.join(root, "pack-customer", "VERSION.txt");
@@ -53,6 +55,8 @@ const customerVersionFile = path.join(root, "pack-customer", "VERSION.txt");
 assert(/^\d+\.\d+\.\d+$/.test(pkg.version), "package version is strict semver", pkg.version);
 assert(lock.version === pkg.version && lock.packages?.[""]?.version === pkg.version, "package-lock versions match package.json");
 assert(fs.existsSync(exe), "desktop EXE exists");
+assert(fs.existsSync(versionedExe), "versioned release EXE exists");
+assert(fs.existsSync(checksumFile), "versioned release SHA-256 file exists");
 assert(fs.existsSync(customerExe), "customer EXE exists");
 assert(fs.existsSync(appAsar), "packaged app.asar exists");
 assert(fs.existsSync(customerVersionFile), "customer VERSION.txt exists");
@@ -73,6 +77,11 @@ if (fs.existsSync(customerVersionFile)) {
 if (fs.existsSync(exe) && fs.existsSync(customerExe)) {
   assert(sha256(exe) === sha256(customerExe), "customer EXE hash matches release EXE");
 }
+if (fs.existsSync(exe) && fs.existsSync(versionedExe)) {
+  assert(sha256(exe) === sha256(versionedExe), "versioned asset hash matches verified build EXE");
+  const checksumText = fs.existsSync(checksumFile) ? fs.readFileSync(checksumFile, "utf8") : "";
+  assert(checksumText.startsWith(sha256(versionedExe)), "SHA-256 sidecar matches versioned asset");
+}
 
 for (const rel of ["pack-customer/.env", "pack-customer/data", "pack-customer/src", "pack-customer/desktop-startup.log", "pack-customer/keys/license-private.pem"]) {
   assert(!fs.existsSync(path.join(root, rel)), `customer pack excludes ${rel.replace("pack-customer/", "")}`);
@@ -86,9 +95,9 @@ if (!process.argv.includes("--offline")) {
       pass(`GitHub latest already equals v${pkg.version} (re-verification)`);
     } else {
       assert(newer(pkg.version, remoteVersion), "local version is newer than GitHub latest", `${pkg.version} <= ${remoteVersion}`);
-      const oldAsset = (release.assets || []).find((a) => a.name === pkg.updateAsset);
+      const oldAsset = (release.assets || []).find((a) => a.name === pkg.updateAsset) || (release.assets || []).find((a) => /\.exe$/i.test(a.name || ""));
       const oldDigest = String(oldAsset?.digest || "").replace(/^sha256:/, "").toLowerCase();
-      if (oldDigest && fs.existsSync(exe)) assert(sha256(exe) !== oldDigest, "new EXE is not a stale copy of previous release");
+      if (oldDigest && fs.existsSync(versionedExe)) assert(sha256(versionedExe) !== oldDigest, "new EXE is not a stale copy of previous release");
     }
   } catch (e) {
     assert(false, "online GitHub release verification", e.message);
