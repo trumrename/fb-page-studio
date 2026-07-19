@@ -1,7 +1,7 @@
 # CHECK-BUG — Checklist kiểm thử FB Page Studio
 
 > Trước mỗi ship / release. Đánh `[x]` khi OK.  
-> **Phiên bản code:** 1.2.6
+> **Phiên bản code:** 1.2.7
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`
 
@@ -89,6 +89,8 @@ npm test
 - [ ] Banner khi GitHub có version **mới hơn** + có file `.exe`  
 - [ ] Bấm Cập nhật → chỉ thay exe · **license còn**  
 - [ ] Release không có exe → báo thiếu asset, không crash  
+- [ ] Update hiển thị tiến trình %/dung lượng trong app, không mở/spam CMD
+- [ ] Sau download Electron thoát rồi thay đúng EXE tại chỗ và mở lại app
 
 ---
 

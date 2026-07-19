@@ -297,7 +297,7 @@ function startBackend() {
   serverProc = spawn(process.execPath, [serverJs], {
     env,
     cwd: USER_DIR,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
     windowsHide: true,
   });
 
@@ -305,6 +305,34 @@ function startBackend() {
   serverProc.stderr.on("data", (d) => log("ERR", d.toString().trim()));
   serverProc.on("exit", (code) => log("Server exit", String(code)));
   serverProc.on("error", (e) => log("Server spawn error", e.message));
+  serverProc.on("message", (msg) => {
+    if (msg?.type !== "fbps-apply-update" || !msg.batPath) return;
+    const batPath = path.resolve(String(msg.batPath));
+    const cwd = path.resolve(String(msg.cwd || USER_DIR));
+    // Only a staged update BAT beside this portable app may request shutdown.
+    if (path.basename(batPath) !== "_apply_update.bat" || path.dirname(batPath) !== cwd) {
+      log("Ignored invalid update restart request", batPath);
+      return;
+    }
+    log("Update ready; Electron will quit before replacement", batPath);
+    setTimeout(() => {
+      try {
+        spawn("cmd.exe", ["/c", batPath], {
+          detached: true,
+          stdio: "ignore",
+          cwd,
+          windowsHide: true,
+        }).unref();
+      } catch (e) {
+        log("Update BAT spawn error", e.message);
+        return;
+      }
+      if (serverProc && !serverProc.killed) {
+        try { serverProc.kill(); } catch { /* ignore */ }
+      }
+      app.quit();
+    }, 150);
+  });
 
   return waitForServer(PORT);
 }

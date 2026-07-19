@@ -119,8 +119,38 @@
     btn.dataset.hasUpdate = "1";
   }
 
+  function updateProgressText(p) {
+    const mb = (n) => `${(Number(n || 0) / 1024 / 1024).toFixed(1)} MB`;
+    if (p.state === "downloading") {
+      return p.total
+        ? `Đang tải ${p.percent || 0}% · ${mb(p.bytes)} / ${mb(p.total)}`
+        : `Đang tải ${mb(p.bytes)}`;
+    }
+    return p.message || "Đang chuẩn bị cập nhật…";
+  }
+
+  async function watchUpdateProgress(btn, applyBtn) {
+    const deadline = Date.now() + 30 * 60 * 1000;
+    while (Date.now() < deadline) {
+      const p = await api("/api/update/progress");
+      const label = updateProgressText(p);
+      if (btn) btn.textContent = label;
+      if (applyBtn) applyBtn.textContent = label;
+      if (p.state === "error") throw new Error(p.error || "Tải update thất bại");
+      if (p.state === "idle" && !p.active) return { latest: true, progress: p };
+      if (p.state === "ready" || p.state === "restarting") {
+        if (btn) btn.textContent = "Đang khởi động lại…";
+        if (applyBtn) applyBtn.textContent = "Đang khởi động lại…";
+        return { restarting: true, progress: p };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+    throw new Error("Tải update quá lâu. Kiểm tra mạng rồi bấm lại.");
+  }
+
   async function doUpdate(uiBtn) {
     const btn = uiBtn || document.getElementById("btnUpdateApp");
+    let restarting = false;
     if (btn) {
       btn.disabled = true;
       btn.textContent = "Đang tải…";
@@ -155,23 +185,24 @@
       );
       if (!ok) return;
 
-      const up = await api("/api/update/apply", {
+      const started = await api("/api/update/apply", {
         method: "POST",
         body: JSON.stringify({ restart: true }),
       });
-      if (up.ok && up.updated) {
-        alert(
-          up.message ||
-            "Đã cập nhật tại chỗ. App sẽ đóng và mở lại cùng đường dẫn…"
-        );
-      } else {
-        alert(up.error || up.message || "Update thất bại");
+      if (!started.ok) throw new Error(started.error || "Không thể bắt đầu update");
+      const finished = await watchUpdateProgress(btn, applyBtn);
+      if (finished.latest) {
+        alert("Đã là bản mới nhất.");
+      } else if (finished.restarting) {
+        // Electron exits immediately after this; no CMD window is shown.
+        restarting = true;
+        return;
       }
     } catch (e) {
       alert(e.message || String(e));
     } finally {
-      if (btn) btn.disabled = false;
-      if (applyBtn) {
+      if (btn && !restarting) btn.disabled = false;
+      if (applyBtn && !restarting) {
         applyBtn.disabled = false;
         applyBtn.textContent = "Cập nhật ngay";
       }

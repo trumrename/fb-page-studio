@@ -10,6 +10,27 @@ import { spawn } from "child_process";
 import { getExeDir, getOuterExePath, getPackageJson, isPackaged } from "../paths.js";
 import { config } from "../config.js";
 
+const updateProgress = {
+  state: "idle", // idle | checking | downloading | ready | restarting | error
+  bytes: 0,
+  total: 0,
+  percent: 0,
+  from: null,
+  to: null,
+  error: null,
+  message: "Chưa có cập nhật đang chạy",
+  updated_at: null,
+};
+let activeUpdate = null;
+
+function setUpdateProgress(next) {
+  Object.assign(updateProgress, next, { updated_at: new Date().toISOString() });
+}
+
+export function getUpdateProgress() {
+  return { ...updateProgress, active: Boolean(activeUpdate) };
+}
+
 function parseRepo(repo) {
   // owner/name or https://github.com/owner/name
   const s = String(repo || "").trim().replace(/\/$/, "");
@@ -240,18 +261,25 @@ export async function checkForUpdate() {
  *
  * Windows locks a running .exe → must: download .new → exit → rename → start same path.
  */
-export async function applyUpdate({ restart = true } = {}) {
+export async function applyUpdate() {
+  setUpdateProgress({ state: "checking", bytes: 0, total: 0, percent: 0, error: null, message: "Đang kiểm tra bản phát hành…" });
   const check = await checkForUpdate();
-  if (!check.ok) return check;
+  if (!check.ok) {
+    setUpdateProgress({ state: "error", error: check.error || "Không kiểm tra được bản cập nhật", message: "Kiểm tra update thất bại" });
+    return check;
+  }
   if (!check.has_update) {
+    setUpdateProgress({ state: "idle", message: "Đã là bản mới nhất" });
     return { ok: true, updated: false, message: "Đã là phiên bản mới nhất", ...check };
   }
   if (!check.asset?.download_url) {
-    return {
+    const result = {
       ok: false,
       error: `Release có tag ${check.latest_version} nhưng không có file .exe trên GitHub (cần upload asset). Không mở bản khác — chờ admin upload rồi bấm lại.`,
       ...check,
     };
+    setUpdateProgress({ state: "error", error: result.error, message: "Release thiếu file EXE" });
+    return result;
   }
 
   // Prefer exact path of running outer portable exe (FB_OUTER_EXE from Electron)
@@ -276,7 +304,28 @@ export async function applyUpdate({ restart = true } = {}) {
     }
   }
 
-  await downloadFile(check.asset.download_url, destNew);
+  setUpdateProgress({
+    state: "downloading",
+    from: check.current_version,
+    to: check.latest_version,
+    bytes: 0,
+    total: Number(check.asset.size) || 0,
+    percent: 0,
+    message: `Đang tải v${check.latest_version} từ GitHub…`,
+  });
+  await downloadFile(check.asset.download_url, destNew, (bytes, total) => {
+    const expected = total || Number(check.asset.size) || 0;
+    setUpdateProgress({
+      state: "downloading",
+      bytes,
+      total: expected,
+      percent: expected ? Math.min(100, Math.floor((bytes / expected) * 100)) : 0,
+      message: `Đang tải v${check.latest_version}…`,
+    });
+  });
+  if (Number(check.asset.size) > 0 && fs.statSync(destNew).size !== Number(check.asset.size)) {
+    throw new Error("File update tải về không đủ dung lượng; không thay EXE hiện tại");
+  }
 
   // Snapshot license (data/ never deleted)
   try {
@@ -294,11 +343,11 @@ export async function applyUpdate({ restart = true } = {}) {
     "@echo off",
     "setlocal",
     `cd /d "${exeDir}"`,
-    "echo Cap nhat TAI CHO — cung file, cung thu muc...",
-    `echo Target: ${targetName}`,
-    "echo Giữ data, .env, license (khong tao app moi).",
-    "timeout /t 2 /nobreak >nul",
+    "timeout /t 1 /nobreak >nul",
+    "set /a tries=0",
     `:retry`,
+    "set /a tries+=1",
+    "if %tries% GTR 30 goto locked",
     `if exist "${targetName}" (`,
     `  del /f /q "${path.basename(destBak)}" 2>nul`,
     `  ren "${targetName}" "${path.basename(destBak)}" 2>nul`,
@@ -308,11 +357,10 @@ export async function applyUpdate({ restart = true } = {}) {
     `  )`,
     `)`,
     `if not exist "${path.basename(destNew)}" (`,
-    `  echo LOI: khong thay file .new`,
-    `  pause`,
+    `  echo LOI: khong thay file .new > "_update-error.txt"`,
     `  exit /b 1`,
     `)`,
-    `move /y "${path.basename(destNew)}" "${targetName}"`,
+    `move /y "${path.basename(destNew)}" "${targetName}" >nul`,
     `del /f /q "${path.basename(destBak)}" 2>nul`,
     `del /f /q "*.new" 2>nul`,
     `if exist "license.backup.json" if not exist "data\\license.json" (`,
@@ -322,6 +370,10 @@ export async function applyUpdate({ restart = true } = {}) {
     `start "" "${targetName}"`,
     `del /f /q "%~f0"`,
     "endlocal",
+    "exit /b 0",
+    `:locked`,
+    `echo LOI: EXE van dang bi khoa sau 30 giay > "_update-error.txt"`,
+    `exit /b 1`,
     "",
   ].join("\r\n");
 
@@ -334,7 +386,7 @@ export async function applyUpdate({ restart = true } = {}) {
       `Cập nhật tại chỗ: ${currentExe}\n` +
       `v${check.current_version} → v${check.latest_version}\n` +
       `Cùng file/tên — không tạo bản app khác. License & data giữ nguyên.` +
-      (restart ? "\nĐang khởi động lại…" : ""),
+      "\nĐã tải xong. App sẽ tự khởi động lại…",
     from: check.current_version,
     to: check.latest_version,
     target_exe: currentExe,
@@ -344,11 +396,20 @@ export async function applyUpdate({ restart = true } = {}) {
     preserves: ["data/", ".env", "license.json", "license.backup.json"],
   };
 
-  if (restart) {
-    scheduleRestart(batPath, exeDir);
-  }
-
+  setUpdateProgress({ state: "ready", bytes: Number(check.asset.size) || fs.statSync(destNew).size, total: Number(check.asset.size) || fs.statSync(destNew).size, percent: 100, message: "Đã tải xong, đang chuẩn bị khởi động lại…" });
   return payload;
+}
+
+/** Start exactly one background download. UI polls getUpdateProgress(). */
+export function startUpdate() {
+  if (activeUpdate) return { started: false, already_running: true, progress: getUpdateProgress(), promise: activeUpdate };
+  activeUpdate = applyUpdate()
+    .catch((e) => {
+      setUpdateProgress({ state: "error", error: e.message, message: "Tải update thất bại" });
+      return { ok: false, updated: false, error: e.message };
+    })
+    .finally(() => { activeUpdate = null; });
+  return { started: true, already_running: false, progress: getUpdateProgress(), promise: activeUpdate };
 }
 
 /** Spawn update bat and exit process shortly after */
@@ -360,4 +421,15 @@ export function scheduleRestart(batPath, cwd) {
     windowsHide: true,
   }).unref();
   setTimeout(() => process.exit(0), 600);
+}
+
+/** Ask Electron parent to exit first; plain Node keeps a safe fallback. */
+export function requestUpdateRestart(batPath, cwd) {
+  setUpdateProgress({ state: "restarting", message: "Đang đóng app cũ và thay EXE…" });
+  if (typeof process.send === "function") {
+    process.send({ type: "fbps-apply-update", batPath, cwd });
+    return true;
+  }
+  scheduleRestart(batPath, cwd);
+  return false;
 }

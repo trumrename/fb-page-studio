@@ -31,9 +31,10 @@ import { config } from "../config.js";
 import { isPackaged, getExeDir, getEnvPath, debugPaths } from "../paths.js";
 import {
   checkForUpdate,
-  applyUpdate,
+  getUpdateProgress,
   getUpdateConfig,
-  scheduleRestart,
+  startUpdate,
+  requestUpdateRestart,
 } from "../services/updater.js";
 import {
   getAntiSpamSettings,
@@ -306,6 +307,11 @@ router.get("/update/check", async (_req, res) => {
   }
 });
 
+/** GET /api/update/progress — browser polls this while direct EXE download runs. */
+router.get("/update/progress", (_req, res) => {
+  res.json({ ok: true, ...getUpdateProgress() });
+});
+
 /**
  * POST /api/update/apply
  * Download latest .exe from GitHub Release and restart (Windows).
@@ -320,11 +326,19 @@ router.post("/update/apply", async (req, res) => {
       });
     }
     const restart = req.body?.restart !== false;
-    // Download only first so client gets JSON before process exits
-    const result = await applyUpdate({ restart: false });
-    res.json(result);
-    if (result.ok && result.updated && restart && result.bat) {
-      setTimeout(() => scheduleRestart(result.bat), 500);
+    const started = startUpdate();
+    res.status(started.already_running ? 200 : 202).json({
+      ok: true,
+      started: started.started,
+      already_running: started.already_running,
+      progress: started.progress,
+    });
+    if (started.started) {
+      started.promise.then((result) => {
+        if (result?.ok && result.updated && restart && result.bat) {
+          setTimeout(() => requestUpdateRestart(result.bat, path.dirname(result.target_exe)), 700);
+        }
+      });
     }
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

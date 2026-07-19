@@ -1,6 +1,6 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-19** · Code: **1.2.6**
+> Cập nhật: **2026-07-19** · Code: **1.2.7**
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`  
 > **GitHub:** `trumrename/fb-page-studio` — **push chỉ khi user OK**
@@ -109,6 +109,11 @@ node scripts/sync-customer-pack.mjs
 ### K. Áp dụng profile không restart v1.2.6
 - [x] Electron đọc lại lựa chọn Chrome Profile trước mỗi lần mở OAuth
 - [x] Lưu profile xong bấm Connect ngay, không cần tắt/mở tool
+
+### L. Direct updater có tiến trình v1.2.7
+- [x] Tool tải EXE trực tiếp từ GitHub Release và hiển thị byte/% tải xuống
+- [x] Electron chính thoát trước khi thay EXE; không để BAT/CMD lặp vì file còn bị khóa
+- [x] BAT update chạy nền ẩn, giữ nguyên `.env`, `data` và license
 
 ---
 
