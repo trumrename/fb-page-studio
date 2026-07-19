@@ -1,0 +1,47 @@
+name: Verified Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-verify-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Require tag to match package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Release blocked: tag $env:GITHUB_REF_NAME does not match package v$version"
+          }
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:desktop
+      - run: npm run pack:customer
+      - run: npm run release:verify -- --offline
+
+      - name: Create or update verified GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $asset = "dist-desktop-oauth/FB-Page-Studio-Desktop.exe"
+          gh release view $env:GITHUB_REF_NAME 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:GITHUB_REF_NAME $asset --clobber
+          } else {
+            gh release create $env:GITHUB_REF_NAME $asset --generate-notes --title "FB Page Studio $env:GITHUB_REF_NAME"
+          }

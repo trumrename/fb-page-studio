@@ -350,6 +350,21 @@ router.get("/update/progress", (_req, res) => {
   res.json({ ok: true, ...getUpdateProgress() });
 });
 
+// Surface a failed replacement instead of silently staying on the old version.
+router.get("/update/last-error", (_req, res) => {
+  const file = path.join(getExeDir(), "_update-error.txt");
+  let error = null;
+  try { if (fs.existsSync(file)) error = fs.readFileSync(file, "utf8").trim() || "Cập nhật EXE thất bại"; }
+  catch { /* best effort diagnostic */ }
+  res.json({ ok: true, has_error: Boolean(error), error });
+});
+
+router.post("/update/last-error/clear", (_req, res) => {
+  const file = path.join(getExeDir(), "_update-error.txt");
+  try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch { /* keep app usable */ }
+  res.json({ ok: true });
+});
+
 /**
  * POST /api/update/apply
  * Download latest .exe from GitHub Release and restart (Windows).

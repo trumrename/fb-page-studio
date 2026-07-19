@@ -240,7 +240,22 @@
     }
   }
 
+  async function showLastUpdateError() {
+    try {
+      const r = await api("/api/update/last-error");
+      if (!r?.has_error) return;
+      alert(
+        `LẦN CẬP NHẬT TRƯỚC THẤT BẠI\n\n${r.error}\n\n` +
+          "Tool vẫn đang chạy bản cũ. Hãy bấm cập nhật lại hoặc chép đè EXE thủ công."
+      );
+      await api("/api/update/last-error/clear", { method: "POST", body: "{}" });
+    } catch {
+      /* update diagnostics must not block the app */
+    }
+  }
+
   async function init() {
+    await showLastUpdateError();
     const btn = ensureBtn();
     ensureBanner();
 
