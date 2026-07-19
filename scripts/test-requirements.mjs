@@ -207,13 +207,17 @@ passRun(1, () => {
 
   const apps = listMetaApps();
   assert("P1 at least app1 listed", apps.length >= 1 && apps[0].key === "app1");
-  assert("P1 app1 configured", apps[0].configured === true, apps[0].appId?.slice(0, 8));
+  if (apps[0].configured) {
+    assert("P1 app1 configured", true, apps[0].appId?.slice(0, 8));
+  } else {
+    assert("P1 clean CI does not require Meta secrets", !process.env.FB_APP_ID && !process.env.FB_APP_SECRET);
+  }
 
   const pub = listMetaAppsPublic();
   assert("P1 public list no secret field", !JSON.stringify(pub).includes("appSecret"));
 
   const a1 = getMetaApp("app1");
-  assert("P1 getMetaApp app1", a1?.appId);
+  assert("P1 getMetaApp app1", a1?.key === "app1");
 
   let threw = false;
   try {
@@ -239,10 +243,13 @@ passRun(1, () => {
   }
 
   // Login URL uses app1 id
+  const testApp = a1.appId
+    ? a1
+    : { appId: "123456789012345", redirectUri: "https://example.test/auth/facebook/callback", scopes: ["public_profile"] };
   const url = buildLoginUrl("teststate123", {
-    app: { appId: a1.appId, redirectUri: a1.redirectUri, scopes: a1.scopes },
+    app: { appId: testApp.appId, redirectUri: testApp.redirectUri, scopes: testApp.scopes },
   });
-  assert("P1 login URL has client_id", url.includes(a1.appId));
+  assert("P1 login URL has client_id", url.includes(testApp.appId));
   assert("P1 login URL has state", url.includes("teststate123"));
 });
 
