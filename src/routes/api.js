@@ -52,6 +52,7 @@ import {
   dailyReportInfo,
   getDailyReportFile,
 } from "../services/dailyReports.js";
+import { getNgrokStatus, startNgrok, stopNgrok } from "../services/ngrokManager.js";
 
 const router = Router();
 
@@ -131,7 +132,7 @@ router.get("/setup/domain", (_req, res) => {
   });
 });
 
-router.put("/setup/domain", (req, res) => {
+router.put("/setup/domain", async (req, res) => {
   try {
     const origin = normalizeOAuthOrigin(req.body?.domain || req.body?.origin);
     const redirectUri = `${origin}/auth/facebook/callback`;
@@ -151,6 +152,10 @@ router.put("/setup/domain", (req, res) => {
     if (updates.FB_REDIRECT_URI_2) process.env.FB_REDIRECT_URI_2 = redirectUri;
     config.appBaseUrl = origin;
     config.facebook.redirectUri = redirectUri;
+    let ngrok = getNgrokStatus();
+    if (process.env.NGROK_AUTHTOKEN && String(process.env.NGROK_AUTOSTART || "1") !== "0") {
+      ngrok = await startNgrok({ origin, port: config.port });
+    }
     res.json({
       ok: true,
       origin,
@@ -158,11 +163,29 @@ router.put("/setup/domain", (req, res) => {
       port: config.port,
       app2_updated: Boolean(updates.FB_REDIRECT_URI_2),
       ngrok_command: `ngrok http --domain=${new URL(origin).hostname} 127.0.0.1:${config.port}`,
+      ngrok_status: ngrok.status,
     });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
 });
+
+router.get("/setup/ngrok", (_req, res) => res.json({ ok: true, ...getNgrokStatus() }));
+router.put("/setup/ngrok", async (req, res) => {
+  try {
+    const token = String(req.body?.token || "").trim();
+    if (!token) throw new Error("Hãy nhập Authtoken Ngrok");
+    writeEnvValues(getEnvPath(), { NGROK_AUTHTOKEN: token, NGROK_AUTOSTART: "1" });
+    process.env.NGROK_AUTHTOKEN = token; process.env.NGROK_AUTOSTART = "1";
+    const status = await startNgrok({ token, origin: config.appBaseUrl, port: config.port });
+    res.status(status.status === "running" ? 200 : 400).json({ ok: status.status === "running", error: status.status === "running" ? undefined : status.message, ...status });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message, ...getNgrokStatus() }); }
+});
+router.post("/setup/ngrok/start", async (_req, res) => {
+  const status = await startNgrok({ origin: config.appBaseUrl, port: config.port });
+  res.status(status.status === "running" ? 200 : 400).json({ ok: status.status === "running", error: status.status === "running" ? undefined : status.message, ...status });
+});
+router.post("/setup/ngrok/stop", async (_req, res) => { await stopNgrok(); res.json({ ok: true, ...getNgrokStatus() }); });
 
 router.get("/setup/browser", (_req, res) => {
   const found = listChromeProfiles();

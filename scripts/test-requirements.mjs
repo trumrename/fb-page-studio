@@ -114,6 +114,11 @@ check("release gate verifies embedded version and EXE hashes", fs.existsSync(pat
 check("tag release workflow runs verification gate", fs.existsSync(path.join(root, ".github/workflows/release-desktop.yml")) && read(".github/workflows/release-desktop.yml").includes("release:verify") && read(".github/workflows/release-desktop.yml").includes("GITHUB_REF_NAME"));
 check("release asset filename includes exact version", fs.existsSync(path.join(root, "scripts/prepare-release-asset.mjs")) && read("scripts/prepare-release-asset.mjs").includes("Desktop-v${pkg.version}.exe") && read(".github/workflows/release-desktop.yml").includes("Desktop-v$version.exe"));
 check("opening new EXE warns when old version is still running", read("electron/main.cjs").includes("additionalData?.version") && read("electron/main.cjs").includes("Đang có một phiên bản FB Page Studio khác chạy nền"));
+const ngrokManager = read("src/services/ngrokManager.js");
+check("Ngrok manager handles token, install and exact domain", ngrokManager.includes("NGROK_AUTHTOKEN") && ngrokManager.includes("ensureExe") && ngrokManager.includes("find((x) => domainOf(x.public_url) === domain)"));
+check("Ngrok restart cannot lose the new child process", ngrokManager.includes("await stopNgrok(); stopRequested = false") && ngrokManager.includes("child === proc"));
+check("Ngrok shuts down through Electron IPC", read("src/server.js").includes('msg?.type === "shutdown"') && read("electron/main.cjs").includes("serverProc.send({ type: \"shutdown\" })"));
+check("customer env example includes official Ngrok setup", read("pack-customer/.env.example").includes("NGROK_AUTHTOKEN") && read("pack-customer/.env.example").includes("NGROK_AUTOSTART=1") && read("pack-customer/.env.example").includes("qgroup.ngrok.app") && read("pack-customer/.env.example").includes("trumrename/fb-page-studio"));
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));
 check("overdue Facebook schedules reconcile automatically", server.includes("runScheduledReconcile") && server.includes("RECONCILE_MS"));
 check("runtime reports scheduler and config health", server.includes('/api/runtime') && server.includes("config_health") && server.includes("enabled_pages"));
@@ -139,6 +144,7 @@ check("OAuth flash escapes URL values", index.includes('escapeHtml(p.get("error"
 check("UI Connect App 1", index.includes("app=app1"));
 check("UI Connect App 2", index.includes("app=app2"));
 check("UI domain setup and Ngrok command", index.includes("oauthDomain") && index.includes("btnSaveOAuthDomain") && index.includes("btnCopyNgrokCommand"));
+check("Ngrok integrated autostart and token recovery", fs.existsSync(path.join(root, "src/services/ngrokManager.js")) && server.includes("startNgrok") && apiRoutes.includes('"/setup/ngrok"') && apiRoutes.includes("NGROK_AUTHTOKEN") && index.includes("btnSaveNgrokToken"));
 check("UI Chrome profile selection", index.includes("oauthBrowserProfile") && index.includes("btnSaveBrowserProfile"));
 check("UI meta app badge on accounts", index.includes("meta_app") || index.includes("appLabel"));
 check("UI exports Page information per App", index.includes("btnExportDailyPages") && index.includes("/api/reports/daily/pages"));

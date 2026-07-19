@@ -64,7 +64,8 @@ if (!fs.existsSync(readmeSrc)) {
 }
 
 const envEx = path.join(root, "pack-customer", ".env.example");
-// already in pack-customer
+// Customer template is maintained separately because it contains the official
+// domain/repository defaults. Never overwrite it with the generic DEV sample.
 
 let copiedExe = null;
 for (const c of exeCandidates) {

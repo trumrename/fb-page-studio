@@ -41,6 +41,12 @@ function log(...args) {
   console.log(...args);
 }
 
+function shutdownBackend() {
+  if (!serverProc || serverProc.killed) return;
+  try { serverProc.send({ type: "shutdown" }); } catch { /* process may already be gone */ }
+  setTimeout(() => { if (serverProc && !serverProc.killed) { try { serverProc.kill(); } catch {} } }, 1800);
+}
+
 function appRoot() {
   try {
     return app.getAppPath();
@@ -339,9 +345,7 @@ function startBackend() {
         log("Update BAT spawn error", e.message);
         return;
       }
-      if (serverProc && !serverProc.killed) {
-        try { serverProc.kill(); } catch { /* ignore */ }
-      }
+      shutdownBackend();
       // Portable Electron may keep the outer EXE locked when a renderer/tray
       // delays normal app.quit(). Destroy all UI resources, then terminate the
       // Electron process immediately so the hidden updater can replace the EXE.
@@ -475,7 +479,7 @@ function createTray() {
       {
         label: "Thoát",
         click: () => {
-          if (serverProc && !serverProc.killed) serverProc.kill();
+          shutdownBackend();
           app.quit();
         },
       },
@@ -536,19 +540,13 @@ if (!gotLock) {
         "FB Page Studio",
         `${e.message}\n\nUser dir: ${USER_DIR}\nLog: ${logFile || "?"}`
       );
-      if (serverProc && !serverProc.killed) serverProc.kill();
+      shutdownBackend();
       app.quit();
     }
   });
 
   app.on("before-quit", () => {
-    if (serverProc && !serverProc.killed) {
-      try {
-        serverProc.kill();
-      } catch {
-        /* ignore */
-      }
-    }
+    shutdownBackend();
   });
 
   app.on("window-all-closed", () => {

@@ -65,9 +65,14 @@ if (fs.existsSync(appAsar)) {
   const embeddedPkg = JSON.parse(asar.extractFile(appAsar, "package.json").toString());
   const embeddedMain = asar.extractFile(appAsar, path.join("electron", "main.cjs")).toString();
   const embeddedUpdater = asar.extractFile(appAsar, path.join("src", "services", "updater.js")).toString();
+  const embeddedNgrok = asar.extractFile(appAsar, path.join("src", "services", "ngrokManager.js")).toString();
+  const embeddedServer = asar.extractFile(appAsar, path.join("src", "server.js")).toString();
   assert(embeddedPkg.version === pkg.version, "EXE embedded version matches package.json", embeddedPkg.version);
   assert(embeddedMain.includes("app.exit(0)"), "EXE contains forced updater shutdown safeguard");
   assert(embeddedUpdater.includes("no-cache") && embeddedUpdater.includes("Date.now()"), "EXE contains GitHub cache-busting safeguard");
+  assert(embeddedNgrok.includes("await stopNgrok(); stopRequested = false") && embeddedNgrok.includes("child === proc"), "EXE contains safe Ngrok restart logic");
+  assert(embeddedNgrok.includes("find((x) => domainOf(x.public_url) === domain)") && !embeddedNgrok.includes("|| j.tunnels?.[0]"), "EXE only accepts the configured Ngrok domain");
+  assert(embeddedServer.includes('msg?.type === "shutdown"') && embeddedMain.includes('serverProc.send({ type: "shutdown" })'), "EXE shuts Ngrok down through Electron IPC");
 }
 
 if (fs.existsSync(customerVersionFile)) {

@@ -19,6 +19,7 @@ import {
   getLicenseStatus,
   ensureLicenseAfterUpdate,
 } from "./services/license.js";
+import { startNgrok, stopNgrok } from "./services/ngrokManager.js";
 
 const app = express();
 const publicDir = getPublicDir();
@@ -78,6 +79,8 @@ if (!fs.existsSync(exampleBeside)) {
       "FB_APP_NAME_2=App 2",
       "# FB_REDIRECT_URI_2=  (empty = same as App 1; register URI on BOTH Meta apps)",
       "FB_GRAPH_VERSION=v21.0",
+      "NGROK_AUTHTOKEN=",
+      "NGROK_AUTOSTART=1",
       "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
       "TOKEN_ENCRYPTION_KEY=change-me-to-a-long-random-string-32+",
       "GITHUB_REPO=trumrename/fb-page-studio",
@@ -325,6 +328,11 @@ const server = app.listen(config.port, LISTEN_HOST, () => {
   console.log(
     `  Ngrok tip      →  ngrok http 127.0.0.1:${config.port}  (giữ app MỞ khi login FB)\n`
   );
+  if (String(process.env.NGROK_AUTOSTART || "1") !== "0") {
+    startNgrok({ origin: config.appBaseUrl, port: config.port })
+      .then((s) => console.log(`[ngrok] ${s.status} · ${s.message}${s.public_url ? ` · ${s.public_url}` : ""}`))
+      .catch((e) => console.warn("[ngrok]", e.message));
+  }
 
   // Desktop (Electron) never opens external browser
   if (
@@ -334,6 +342,18 @@ const server = app.listen(config.port, LISTEN_HOST, () => {
   ) {
     openBrowser(`${local}/app.html`);
   }
+});
+
+let shuttingDown = false;
+function gracefulShutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  stopNgrok().finally(() => process.exit(0));
+}
+process.once("SIGTERM", gracefulShutdown);
+process.once("SIGINT", gracefulShutdown);
+process.on("message", (msg) => {
+  if (msg?.type === "shutdown") gracefulShutdown();
 });
 
 server.on("error", (err) => {

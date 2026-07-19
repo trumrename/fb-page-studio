@@ -85,7 +85,7 @@
         <section class="panel" id="domainSetup" style="margin-bottom:1rem">
           <h2 class="panel-hd">Thiết lập domain OAuth cho máy này <span class="badge">Setup nhanh</span></h2>
           <div class="panel-body">
-            <p class="muted" style="margin-top:0">Dán domain Ngrok cố định hoặc domain tạm. Tool tự cập nhật <code>APP_BASE_URL</code> và Redirect URI cho App 1/App 2; không hiển thị App Secret.</p>
+            <p class="muted" style="margin-top:0">Dán domain và Authtoken Ngrok một lần. Tool tự lưu cấu hình, mở Ngrok cùng EXE và đóng tunnel khi thoát.</p>
             <div class="toolbar" style="align-items:end">
               <label style="flex:1;min-width:260px">Domain HTTPS
                 <input id="oauthDomain" type="text" placeholder="qgroup.ngrok.app hoặc https://xxx.ngrok-free.dev" autocomplete="off" />
@@ -94,6 +94,14 @@
               <button class="btn-ghost" id="btnCopyNgrokCommand" type="button" disabled>Copy lệnh Ngrok</button>
             </div>
             <div id="oauthDomainStatus" class="muted" style="margin-top:.75rem;font-size:.84rem"></div>
+            <div class="toolbar" style="align-items:end;margin-top:.8rem">
+              <label style="flex:1;min-width:260px">Ngrok Authtoken
+                <input id="ngrokToken" type="password" placeholder="Nhập lần đầu hoặc khi token sai/thu hồi" autocomplete="new-password" />
+              </label>
+              <button class="btn-ok" id="btnSaveNgrokToken" type="button">Lưu token &amp; mở server</button>
+              <button class="btn-ghost" id="btnStartNgrok" type="button">Mở lại Ngrok</button>
+            </div>
+            <div id="ngrokStatus" class="muted" style="margin-top:.65rem;font-size:.84rem">Đang kiểm tra Ngrok…</div>
             <hr style="border:0;border-top:1px solid rgba(255,255,255,.08);margin:1rem 0" />
             <div class="toolbar" style="align-items:end;margin-bottom:.6rem">
               <label style="flex:1;min-width:260px">Thư mục dữ liệu Chrome / ChromePortable <span class="muted">(nếu dùng ChromePortable)</span>
@@ -266,6 +274,13 @@
     }
 
     let ngrokCommand = "";
+    function renderNgrokStatus(r) {
+      const colors = { running: "#34d399", needs_token: "#fbbf24", error: "#fb7185", starting: "#60a5fa", installing: "#60a5fa" };
+      const detail = r.last_error && r.status !== "running" ? `<br/><span class="muted">${escapeHtml(r.last_error)}</span>` : "";
+      $("ngrokStatus").innerHTML = `<b style="color:${colors[r.status] || "#aab2c0"}">${escapeHtml(r.message || r.status || "")}</b>${r.public_url ? `<br/>Public: <code>${escapeHtml(r.public_url)}</code>` : ""}${detail}`;
+      $("btnStartNgrok").disabled = ["starting", "installing", "running"].includes(r.status);
+    }
+    async function loadNgrokStatus() { try { renderNgrokStatus(await api("/api/setup/ngrok")); } catch (e) { renderNgrokStatus({ status: "error", message: e.message }); } }
     async function loadOAuthDomain() {
       const r = await api("/api/setup/domain");
       const origin = r.origin || "";
@@ -300,6 +315,15 @@
       try { await navigator.clipboard.writeText(ngrokCommand); alert("Đã copy lệnh Ngrok."); }
       catch { prompt("Copy lệnh này:", ngrokCommand); }
     };
+    $("btnSaveNgrokToken").onclick = async () => {
+      const btn = $("btnSaveNgrokToken"), token = $("ngrokToken").value.trim();
+      if (!token) return alert("Hãy dán Authtoken Ngrok.");
+      btn.disabled = true; renderNgrokStatus({ status: "starting", message: "Đang lưu token và mở Ngrok…" });
+      try { const r = await api("/api/setup/ngrok", { method: "PUT", body: JSON.stringify({ token }) }); $("ngrokToken").value = ""; renderNgrokStatus(r); }
+      catch (e) { renderNgrokStatus({ status: "needs_token", message: e.message }); }
+      finally { btn.disabled = false; }
+    };
+    $("btnStartNgrok").onclick = async () => { renderNgrokStatus({ status: "starting", message: "Đang mở lại Ngrok…" }); try { renderNgrokStatus(await api("/api/setup/ngrok/start", { method: "POST" })); } catch { await loadNgrokStatus(); } };
 
     function renderBrowserProfiles(r) {
       const select = $("oauthBrowserProfile");
@@ -600,13 +624,14 @@
     };
 
     async function refreshAll() {
-      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadOAuthDomain(), loadBrowserProfiles()]);
+      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadOAuthDomain(), loadNgrokStatus(), loadBrowserProfiles()]);
     }
 
     showFlash();
     refreshAll().catch((e) => {
       $("flash").innerHTML = `<div class="flash-block err">${escapeHtml(e.message)}</div>`;
     });
+    setInterval(loadNgrokStatus, 5000);
   </script>
 </body>
 </html>
