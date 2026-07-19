@@ -1,7 +1,7 @@
 /**
  * Auto-check GitHub Releases · banner thông báo · bấm Cập nhật là tải + restart
  * - Check khi mở trang + lặp mỗi 4 giờ
- * - Nút topbar v1.2.0↑ khi có bản mới
+ * - Nút topbar hiển thị version hiện tại và tiến trình khi có bản mới
  */
 (function () {
   const RECHECK_MS = 4 * 60 * 60 * 1000;
@@ -288,7 +288,7 @@
             alert(
               (r.error || "Không kiểm tra được") +
                 "\n\nGITHUB_REPO mặc định: trumrename/fb-page-studio\n" +
-                "Tạo GitHub Release có file FB-Page-Studio-Desktop.exe"
+                "Tạo GitHub Release có file FB-Page-Studio-Desktop-vX.Y.Z.exe"
             );
             return;
           }

@@ -82,8 +82,49 @@
         </div>
         <p id="usageHint" class="muted" style="margin:-.35rem 0 1rem;font-size:.8rem"></p>
 
+        <section class="panel" id="firstRunSetup" style="margin-bottom:1rem">
+          <h2 class="panel-hd">Bước 1 · Thiết lập Meta App <span class="badge" id="firstRunBadge">Đang kiểm tra</span></h2>
+          <div class="panel-body">
+            <p class="muted" style="margin-top:0">
+              Máy mới không cần tự tạo hoặc sửa file .env. Nhập thông tin Meta App một lần; tool tự tạo khóa mã hóa an toàn và lưu cạnh EXE.
+            </p>
+            <div class="toolbar" style="align-items:end">
+              <label style="flex:1;min-width:180px">Tên App 1
+                <input id="setupApp1Name" type="text" placeholder="App 1" autocomplete="off" />
+              </label>
+              <label style="flex:1;min-width:220px">App ID 1
+                <input id="setupApp1Id" type="text" inputmode="numeric" placeholder="Dãy số App ID" autocomplete="off" />
+              </label>
+              <label style="flex:1;min-width:260px">App Secret 1
+                <input id="setupApp1Secret" type="password" placeholder="Nhập lần đầu; để trống = giữ secret đã lưu" autocomplete="new-password" />
+              </label>
+            </div>
+            <details style="margin-top:.8rem">
+              <summary style="cursor:pointer;color:var(--muted)">App 2 tùy chọn</summary>
+              <div class="toolbar" style="align-items:end;margin-top:.55rem">
+                <label style="flex:1;min-width:180px">Tên App 2
+                  <input id="setupApp2Name" type="text" placeholder="App 2" autocomplete="off" />
+                </label>
+                <label style="flex:1;min-width:220px">App ID 2
+                  <input id="setupApp2Id" type="text" inputmode="numeric" placeholder="Để trống nếu chỉ dùng 1 App" autocomplete="off" />
+                </label>
+                <label style="flex:1;min-width:260px">App Secret 2
+                  <input id="setupApp2Secret" type="password" placeholder="Nhập khi cấu hình App 2" autocomplete="new-password" />
+                </label>
+                <label style="display:flex;align-items:center;gap:.45rem;margin-bottom:.75rem">
+                  <input id="setupRemoveApp2" type="checkbox" /> Xóa cấu hình App 2
+                </label>
+              </div>
+            </details>
+            <div class="actions">
+              <button class="btn-ok" id="btnSaveFirstRun" type="button">Lưu thiết lập máy mới</button>
+            </div>
+            <div id="firstRunStatus" class="muted" style="margin-top:.75rem;font-size:.84rem"></div>
+          </div>
+        </section>
+
         <section class="panel" id="domainSetup" style="margin-bottom:1rem">
-          <h2 class="panel-hd">Thiết lập domain OAuth cho máy này <span class="badge">Setup nhanh</span></h2>
+          <h2 class="panel-hd">Bước 2 · Domain OAuth, Ngrok và Chrome <span class="badge">Setup nhanh</span></h2>
           <div class="panel-body">
             <p class="muted" style="margin-top:0">Dán domain và Authtoken Ngrok một lần. Tool tự lưu cấu hình, mở Ngrok cùng EXE và đóng tunnel khi thoát.</p>
             <div class="toolbar" style="align-items:end">
@@ -98,6 +139,7 @@
               <label style="flex:1;min-width:260px">Ngrok Authtoken
                 <input id="ngrokToken" type="password" placeholder="Nhập lần đầu hoặc khi token sai/thu hồi" autocomplete="new-password" />
               </label>
+              <button class="btn-ghost" id="btnPasteNgrokToken" type="button">Dán token</button>
               <button class="btn-ok" id="btnSaveNgrokToken" type="button">Lưu token &amp; mở server</button>
               <button class="btn-ghost" id="btnStartNgrok" type="button">Mở lại Ngrok</button>
             </div>
@@ -231,6 +273,65 @@
       return { text: s, cls };
     }
 
+    async function loadFirstRunStatus() {
+      const r = await api("/api/setup/first-run");
+      $("setupApp1Name").value = r.app1?.name || "App 1";
+      $("setupApp1Id").value = r.app1?.app_id_full || "";
+      $("setupApp2Name").value = r.app2?.name || "App 2";
+      $("setupApp2Id").value = r.app2?.app_id_full || "";
+      $("setupApp1Secret").value = "";
+      $("setupApp2Secret").value = "";
+      $("setupApp1Secret").placeholder = r.app1?.configured
+        ? "Đã lưu · để trống để giữ nguyên"
+        : "Nhập App Secret 1";
+      $("setupApp2Secret").placeholder = r.app2?.configured
+        ? "Đã lưu · để trống để giữ nguyên"
+        : "Nhập khi cấu hình App 2";
+      $("firstRunBadge").textContent = r.ready ? "Đã cấu hình" : "Cần thiết lập";
+      $("firstRunBadge").className = "badge " + (r.ready ? "on" : "err");
+      if (r.ready) {
+        $("firstRunStatus").innerHTML =
+          '<b style="color:#34d399">Meta App 1 đã sẵn sàng.</b> ' +
+          (r.app2?.configured ? "App 2 cũng đã sẵn sàng. " : "") +
+          "Khóa mã hóa: " +
+          (r.encryption_ready ? "an toàn" : "đang giữ khóa cũ vì máy đã có dữ liệu") +
+          '.<br/><span class="muted">File cấu hình: ' +
+          escapeHtml(r.env_path) +
+          "</span>";
+      } else {
+        $("firstRunStatus").innerHTML =
+          '<b style="color:#fbbf24">Chưa có Meta App hoàn chỉnh.</b> Nhập App ID và App Secret rồi lưu trước khi Connect Facebook.';
+      }
+    }
+
+    $("btnSaveFirstRun").onclick = async () => {
+      const button = $("btnSaveFirstRun");
+      button.disabled = true;
+      button.textContent = "Đang lưu…";
+      try {
+        const r = await api("/api/setup/first-run", {
+          method: "PUT",
+          body: JSON.stringify({
+            app1_name: $("setupApp1Name").value.trim(),
+            app1_id: $("setupApp1Id").value.trim(),
+            app1_secret: $("setupApp1Secret").value.trim(),
+            app2_name: $("setupApp2Name").value.trim(),
+            app2_id: $("setupApp2Id").value.trim(),
+            app2_secret: $("setupApp2Secret").value.trim(),
+            remove_app2: $("setupRemoveApp2").checked,
+          }),
+        });
+        $("setupRemoveApp2").checked = false;
+        await Promise.all([loadFirstRunStatus(), loadMetaAppsHint()]);
+        alert(r.message);
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Lưu thiết lập máy mới";
+      }
+    };
+
     async function loadStats() {
       const s = await api("/api/stats");
       $("statAccounts").textContent = s.account_count;
@@ -275,7 +376,7 @@
 
     let ngrokCommand = "";
     function renderNgrokStatus(r) {
-      const colors = { running: "#34d399", needs_token: "#fbbf24", error: "#fb7185", starting: "#60a5fa", installing: "#60a5fa" };
+      const colors = { running: "#34d399", needs_token: "#fbbf24", domain_busy: "#fb923c", error: "#fb7185", starting: "#60a5fa", installing: "#60a5fa" };
       const detail = r.last_error && r.status !== "running" ? `<br/><span class="muted">${escapeHtml(r.last_error)}</span>` : "";
       $("ngrokStatus").innerHTML = `<b style="color:${colors[r.status] || "#aab2c0"}">${escapeHtml(r.message || r.status || "")}</b>${r.public_url ? `<br/>Public: <code>${escapeHtml(r.public_url)}</code>` : ""}${detail}`;
       $("btnStartNgrok").disabled = ["starting", "installing", "running"].includes(r.status);
@@ -285,7 +386,7 @@
       const r = await api("/api/setup/domain");
       const origin = r.origin || "";
       $("oauthDomain").value = origin.replace(/^https:\/\//, "");
-      ngrokCommand = origin ? `ngrok http --domain=${new URL(origin).hostname} 127.0.0.1:${r.port || 3847}` : "";
+      ngrokCommand = origin ? `ngrok http --url=${origin} 127.0.0.1:${r.port || 3847}` : "";
       $("btnCopyNgrokCommand").disabled = !ngrokCommand;
       $("oauthDomainStatus").innerHTML = origin
         ? `Đang dùng: <b>${escapeHtml(origin)}</b><br/>Redirect URI: <code>${escapeHtml(r.redirect_uri || "")}</code><br/><span class="muted">Chỉ một máy cần giữ domain khi Connect Facebook. Các máy đã Connect vẫn đăng bài song song không cần Ngrok.</span>`
@@ -314,6 +415,18 @@
       if (!ngrokCommand) return;
       try { await navigator.clipboard.writeText(ngrokCommand); alert("Đã copy lệnh Ngrok."); }
       catch { prompt("Copy lệnh này:", ngrokCommand); }
+    };
+    $("btnPasteNgrokToken").onclick = async () => {
+      const input = $("ngrokToken");
+      input.focus();
+      try {
+        const token = (await navigator.clipboard.readText()).trim();
+        if (!token) return alert("Clipboard đang trống. Hãy copy Authtoken Ngrok rồi bấm Dán token.");
+        input.value = token;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      } catch {
+        alert("Windows chưa cho phép đọc clipboard. Ô token đã được chọn; hãy nhấn Ctrl+V để dán.");
+      }
     };
     $("btnSaveNgrokToken").onclick = async () => {
       const btn = $("btnSaveNgrokToken"), token = $("ngrokToken").value.trim();
@@ -347,7 +460,10 @@
     }
 
     $("btnChooseBrowserData").onclick = async () => {
-      const r = await api("/api/system/pick-folder", { method:"POST", body: JSON.stringify({ title:"Chọn thư mục ChromePortable hoặc Data\\profile", initial_dir: $("oauthBrowserDataDir").value }) });
+      const options = { title:"Chọn thư mục ChromePortable hoặc Data\\profile", initialDir: $("oauthBrowserDataDir").value };
+      const r = window.fbPageStudioDesktop?.pickFolder
+        ? await window.fbPageStudioDesktop.pickFolder(options)
+        : await api("/api/system/pick-folder", { method:"POST", body: JSON.stringify({ title:options.title, initial_dir:options.initialDir }) });
       if (r.path) $("oauthBrowserDataDir").value = r.path;
     };
 
@@ -624,7 +740,7 @@
     };
 
     async function refreshAll() {
-      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadOAuthDomain(), loadNgrokStatus(), loadBrowserProfiles()]);
+      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadFirstRunStatus(), loadOAuthDomain(), loadNgrokStatus(), loadBrowserProfiles()]);
     }
 
     showFlash();

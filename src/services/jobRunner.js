@@ -123,7 +123,7 @@ function recompute(job) {
         ? "Hoàn tất"
         : "Chờ…",
   };
-  // per-page rollup
+  // per-page rollup (+ last / all errors for UI)
   const byPage = {};
   for (const t of tasks) {
     const k = String(t.page_row_id ?? t.page_name ?? "?");
@@ -138,13 +138,24 @@ function recompute(job) {
         fail: 0,
         percent: 0,
         status: "pending",
+        last_error: null,
+        errors: [],
+        failed_task_ids: [],
       };
     }
     const p = byPage[k];
     p.total++;
     if (["ok", "fail", "skipped"].includes(t.status)) p.done++;
     if (t.status === "ok") p.ok++;
-    if (t.status === "fail") p.fail++;
+    if (t.status === "fail") {
+      p.fail++;
+      const errText = String(t.error || t.message || "Thất bại").trim();
+      if (errText) {
+        p.last_error = errText;
+        if (!p.errors.includes(errText)) p.errors.push(errText);
+      }
+      if (t.id) p.failed_task_ids.push(t.id);
+    }
     if (t.status === "running") p.status = "running";
   }
   for (const p of Object.values(byPage)) {
@@ -156,6 +167,21 @@ function recompute(job) {
     }
   }
   job.pages = Object.values(byPage);
+  job.failed_tasks = tasks
+    .filter((t) => t.status === "fail")
+    .map((t) => ({
+      id: t.id,
+      index: t.index,
+      kind: t.kind,
+      page_row_id: t.page_row_id,
+      page_name: t.page_name,
+      page_id: t.page_id,
+      label: t.label,
+      error: t.error || t.message || "Thất bại",
+      message: t.message,
+      opts: t.opts || {},
+      run_at: t.run_at || null,
+    }));
   return job;
 }
 
@@ -175,7 +201,10 @@ function refreshResources(job) {
         captions_folder: cfg.captions_folder || "",
         photos: media.photos || 0,
         videos: media.videos || 0,
-        captions: captions.total || 0,
+        captions: captions.available ?? captions.total ?? 0,
+        captions_total: captions.total || 0,
+        captions_used_recent: captions.used_recent || 0,
+        caption_window_hours: captions.duplicate_window_hours || 0,
       });
     } catch {
       /* keep job running even if one config cannot be summarized */
@@ -250,6 +279,7 @@ export function startJob({ type, title, tasks }) {
       result: null,
       started_at: null,
       finished_at: null,
+      run_at: t.run_at || t.opts?.run_at || null,
       opts: t.opts || {},
     })),
     notifications: [],
@@ -303,6 +333,70 @@ export function resumeJob(jobId) {
   return publicJob(job);
 }
 
+/**
+ * Start a new job that re-runs failed tasks from a finished (or interrupted) job.
+ * body filters (optional):
+ *  - task_ids: string[] only those failed task ids
+ *  - page_row_ids: number[] only failed tasks on those pages
+ *
+ * Keeps original kind (post/schedule) and opts so schedule times / post_type are preserved.
+ */
+export function retryFailedJob(sourceJobId, { task_ids, page_row_ids } = {}) {
+  const source = jobs.get(sourceJobId);
+  if (!source) return null;
+  if (["running", "paused", "queued"].includes(source.status)) {
+    throw new Error("Job vẫn đang chạy — chờ xong hoặc dừng trước khi đăng lại lỗi.");
+  }
+
+  let failed = (source.tasks || []).filter((t) => t.status === "fail");
+  if (Array.isArray(task_ids) && task_ids.length) {
+    const want = new Set(task_ids.map(String));
+    failed = failed.filter((t) => want.has(String(t.id)));
+  }
+  if (Array.isArray(page_row_ids) && page_row_ids.length) {
+    const want = new Set(page_row_ids.map(Number));
+    failed = failed.filter((t) => want.has(Number(t.page_row_id)));
+  }
+  if (!failed.length) {
+    throw new Error("Không có nhiệm vụ lỗi phù hợp để đăng lại.");
+  }
+
+  const tasks = failed.map((t) => {
+    const kind = t.kind === "schedule" ? "schedule" : "post";
+    const opts = { ...(t.opts || {}) };
+    // Direct-local run_at already passed → publish immediately on retry
+    if (kind === "post") {
+      delete opts.run_at;
+    }
+    return {
+      kind,
+      page_row_id: t.page_row_id,
+      page_name: t.page_name,
+      page_id: t.page_id,
+      run_at: null,
+      label:
+        kind === "schedule"
+          ? `Đăng lại hẹn giờ · ${t.page_name || ""}`.trim()
+          : `Đăng lại · ${t.page_name || ""}`.trim(),
+      opts: {
+        ...opts,
+        // Retry should not soft-block on quota/interval leftovers from first run
+        ignore_quota: opts.ignore_quota ?? false,
+        ignore_interval: opts.ignore_interval ?? false,
+        retry_of_task_id: t.id,
+        retry_of_job_id: source.id,
+        previous_error: t.error || t.message || null,
+      },
+    };
+  });
+
+  return startJob({
+    type: "retry_failed",
+    title: `Đăng lại lỗi · ${failed.length} task · từ ${source.title || source.id}`,
+    tasks,
+  });
+}
+
 async function waitWhilePaused(job) {
   while (job.paused && !job.stop_requested) {
     job.status = "paused";
@@ -326,6 +420,58 @@ function notify(job, level, title, body) {
   job.notifications.unshift(n);
   if (job.notifications.length > 100) job.notifications.length = 100;
   return n;
+}
+
+function formatWait(seconds) {
+  const total = Math.max(0, Math.ceil(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
+function formatDueVn(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "");
+  return date.toLocaleString("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    hour12: false,
+  });
+}
+
+/** Wait locally while the tool remains open, then execute a direct post. */
+async function waitUntilTaskDue(job, task) {
+  const raw = task.run_at || task.opts?.run_at;
+  if (!raw) return true;
+  const targetMs = typeof raw === "number" && raw < 10_000_000_000
+    ? raw * 1000
+    : new Date(raw).getTime();
+  if (!Number.isFinite(targetMs)) throw new Error(`Thời điểm chạy local không hợp lệ: ${raw}`);
+  task.due_at = new Date(targetMs).toISOString();
+  let lastBucket = null;
+  while (!job.stop_requested) {
+    await waitWhilePaused(job);
+    if (job.stop_requested) return false;
+    const remainingMs = targetMs - Date.now();
+    if (remainingMs <= 0) {
+      task.wait_remaining_seconds = 0;
+      return true;
+    }
+    const remainingSeconds = Math.ceil(remainingMs / 1000);
+    task.percent = 5;
+    task.wait_remaining_seconds = remainingSeconds;
+    task.message = `Tool đang chờ đến ${formatDueVn(task.due_at)} giờ VN · còn ${formatWait(remainingSeconds)}`;
+    recompute(job);
+    const bucket = Math.floor(remainingSeconds / 30);
+    if (bucket !== lastBucket) {
+      lastBucket = bucket;
+      emit(job);
+    }
+    await sleep(Math.min(1000, remainingMs));
+  }
+  return false;
 }
 
 async function runJob(jobId) {
@@ -367,8 +513,18 @@ async function runJob(jobId) {
     emit(job);
 
     try {
+      const due = await waitUntilTaskDue(job, task);
+      if (!due) {
+        task.status = "skipped";
+        task.percent = 100;
+        task.message = "Đã dừng trong lúc chờ giờ đăng trực tiếp";
+        task.finished_at = nowIso();
+        recompute(job);
+        emit(job);
+        continue;
+      }
       task.percent = 40;
-      task.message = "Đang gọi Facebook API…";
+      task.message = "Đã đến giờ · đang đăng trực tiếp qua Facebook API…";
       recompute(job);
       emit(job);
       const result = await executeTask(task);

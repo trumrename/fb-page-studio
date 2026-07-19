@@ -5,12 +5,31 @@
 | | |
 |--|--|
 | **Tên** | FB Page Studio |
-| **Phiên bản** | **1.2.7** |
+| **Phiên bản** | **1.2.20** |
 | **Máy DEV (gốc)** | `D:\fb-page-poster\` |
-| **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` |
+| **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` (+ ZIP `FB-Page-Studio-v1.2.20-Windows.zip`) |
 | **Ghi chú DEV** | `D:\fb-page-poster\pack-dev\README-DEV.md` |
+| **Admin cấp key** | `D:\fb-page-poster\Admin-Quan-Ly\MENU-ADMIN.bat` |
+| **Lưu trữ bản cũ** | `D:\fb-page-poster\Luu-Tru-Ban-Cu\` |
 | **GitHub** | https://github.com/trumrename/fb-page-studio |
-| **Docs** | `TIEN-DO.md` · `CHECK-BUG.md` · `LICENSE-KEYS.md` · `GITHUB.md` · `AGENTS.md` |
+| **Docs** | `TRANG-THAI-HIEN-TAI.md` · `TIEN-DO.md` · `CHECK-BUG.md` · `BAO-CAO-TEST.md` |
+
+---
+
+## Logic đăng hiện tại v1.2.20
+
+- **Direct Local:** tool phải mở; task đầu đăng ngay, task sau chờ `run_at` trên máy rồi gọi đăng trực tiếp. Không gửi lịch hẹn cho Facebook.
+- **Hẹn Facebook:** Facebook giữ bài và tự đăng theo giờ; tổng bài/Page/ngày bằng đúng tổng số bài của các dòng khung giờ.
+- **Caption dùng chung:** các Page trỏ cùng Caption folder dùng một con trỏ chung; caption chỉ được note sau khi Facebook nhận đăng thành công và không được cấp lại trong cửa sổ anti-spam.
+- **Thông báo:** tối đa 3 popup có nút đóng; toàn bộ OK/FAIL vẫn lưu trong bảng tiến trình và lịch sử.
+
+### Bản đang dùng để check bug
+
+- EXE live: `FB-Page-Studio-App\FB-Page-Studio-Desktop-v1.2.20.exe`
+- ZIP khách: `pack-customer\FB-Page-Studio-v1.2.20-Windows.zip` (cũng có trong `release-assets\`)
+- Gói khách sạch: `npm run pack:all` · gate: `npm run release:verify`
+- Bản cũ: `Luu-Tru-Ban-Cu\` (không còn rải trong App folder)
+- Test: **189/189 PASS** · License commercial Owner-Dev
 
 ---
 
@@ -40,7 +59,7 @@
 |------|-----------|
 | Sửa bug / thêm tính năng | `D:\fb-page-poster\` (gốc) |
 | Build exe | `npm run build:desktop` trên gốc |
-| Đổ file cho khách | `node scripts/sync-customer-pack.mjs` → `pack-customer\` |
+| Đổ file cho khách | `npm run pack:all` → `pack-customer\` + ZIP Windows |
 | Cấp license key | Máy DEV · `scripts/gen-license.mjs` |
 | Push GitHub | **Chỉ khi bạn đồng ý** (xem `AGENTS.md`) |
 
@@ -82,6 +101,8 @@ Connect `?app=app1|app2` · `meta_app_key` trên account · badge UI
 ### Publish & Schedule  
 text/photo/video · caption random · bulk hẹn giờ · **Rotation so-le**  
 
+Trạng thái màn đăng được lưu trong SQLite: Page đã chọn, Page đang cấu hình, tab và lịch dùng lần cuối vẫn giữ sau reload/đóng mở. Cấu hình Page tự lưu và được flush trước khi chuyển màn hình.
+
 ### Anti-spam  
 Recommended: ~12/h · ~40/day · bulk ≤15 page · media 1 lần  
 
@@ -117,7 +138,7 @@ Chọn Chrome Profile đã đăng nhập Facebook ngay trong app. Tool mở mộ
 |-----|-----|
 | Tổng quan + tiến trình | `/app.html` |
 | Kết nối App/Profile/Page | `/index.html` |
-| Cấu hình Page + xoay vòng/chạy | `/posting.html` |
+| Chọn Page + cấu hình + chạy + lịch + kết quả | `/posting.html` (4 workspace riêng) |
 | Anti-spam | `/antispam.html` |
 | License | `/license.html` |
 
@@ -146,6 +167,7 @@ Electron · Node 18+ · Express · better-sqlite3 · Graph v21 · ExcelJS
 
 | File | Nội dung |
 |------|----------|
+| `TRANG-THAI-HIEN-TAI.md` | Bản đang check, hash, phần đã đạt và phần chưa test live |
 | `TIEN-DO.md` | Đã làm / chưa làm |
 | `CHECK-BUG.md` | Checklist test |
 | `LICENSE-KEYS.md` | Cấp key |

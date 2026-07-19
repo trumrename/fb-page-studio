@@ -10,6 +10,7 @@ const {
   nativeImage,
   shell,
   dialog,
+  ipcMain,
 } = require("electron");
 const path = require("path");
 const http = require("http");
@@ -57,8 +58,8 @@ function appRoot() {
 
 function findUserDirWithEnv() {
   const candidates = [
-    process.env.PORTABLE_EXECUTABLE_DIR,
     process.env.FB_USER_DIR,
+    process.env.PORTABLE_EXECUTABLE_DIR,
     path.dirname(process.execPath),
     path.join(path.dirname(process.execPath), ".."),
     process.cwd(),
@@ -85,6 +86,12 @@ function findUserDirWithEnv() {
       if (parent === dir) break;
       dir = parent;
     }
+  }
+  // First run of a portable EXE may not have .env/data yet. Persist beside the
+  // real outer EXE, never inside Electron's temporary extraction directory.
+  if (process.env.FB_USER_DIR) return path.resolve(process.env.FB_USER_DIR);
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    return path.resolve(process.env.PORTABLE_EXECUTABLE_DIR);
   }
   return path.dirname(process.execPath);
 }
@@ -375,12 +382,22 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
+      preload: path.join(__dirname, "preload.cjs"),
     },
   });
 
   const url = `http://127.0.0.1:${PORT}/app.html`;
   log("loadURL", url);
+  mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+    log("preload-error", preloadPath, error?.message || String(error));
+  });
+  mainWindow.webContents.on("did-finish-load", () => {
+    mainWindow.webContents
+      .executeJavaScript("typeof window.fbPageStudioDesktop?.pickFolder")
+      .then((kind) => log("folder picker bridge", kind))
+      .catch((error) => log("folder picker bridge check failed", error.message));
+  });
   mainWindow.loadURL(url);
 
   mainWindow.webContents.on("did-fail-load", (_e, code, desc, validatedURL) => {
@@ -442,6 +459,27 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+ipcMain.handle("fbps:pick-folder", async (_event, options = {}) => {
+  const title = String(options.title || "Chọn thư mục").slice(0, 180);
+  let defaultPath = String(options.initialDir || "").trim();
+  if (defaultPath && !fs.existsSync(defaultPath)) defaultPath = path.dirname(defaultPath);
+  if (!defaultPath || !fs.existsSync(defaultPath)) defaultPath = USER_DIR || app.getPath("documents");
+
+  const dialogOptions = {
+    title,
+    defaultPath,
+    buttonLabel: "Chọn thư mục này",
+    properties: ["openDirectory", "createDirectory"],
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled || !result.filePaths?.[0]) {
+    return { ok: false, cancelled: true, path: null };
+  }
+  return { ok: true, cancelled: false, path: path.resolve(result.filePaths[0]) };
+});
 
 function createTray() {
   const icon = loadAppIcon();
@@ -529,9 +567,12 @@ if (!gotLock) {
       createTray();
       if (!fs.existsSync(path.join(USER_DIR, ".env"))) {
         dialog.showMessageBox({
-          type: "warning",
-          title: "Thiếu .env",
-          message: `Đặt file .env vào:\n${USER_DIR}\n\nCần FB_APP_ID, FB_APP_SECRET, APP_BASE_URL, FB_REDIRECT_URI`,
+          type: "info",
+          title: "Thiết lập máy mới",
+          message:
+            "Đây là lần chạy đầu tiên. Không cần tự tạo file .env.\n\n" +
+            "Vào Kết nối Meta → Bước 1, nhập App ID và App Secret. Tool sẽ tự tạo cấu hình, khóa mã hóa và thư mục data cạnh EXE.",
+          detail: `Thư mục lưu dữ liệu:\n${USER_DIR}`,
         });
       }
     } catch (e) {

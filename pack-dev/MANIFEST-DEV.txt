@@ -1,0 +1,11 @@
+Gói DEV (máy admin) — KHÔNG zip gửi khách:
+ - CHAY-NGROK-DOMAIN-CO-DINH.bat
+ - FB-Page-Studio-Desktop.exe
+ - FB-Page-Studio-Desktop.exe.sha256.txt
+ - MANIFEST-DEV.txt
+ - README-DEV.md
+ - VERSION.txt
+
+Source / keys / data thật nằm ở project root, không copy full secret vào đây.
+Admin cấp key: Admin-Quan-Ly\MENU-ADMIN.bat
+Lưu trữ bản cũ: Luu-Tru-Ban-Cu\

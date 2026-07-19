@@ -16,7 +16,9 @@ import { getPostLogCsvPath } from "../services/postLogCsv.js";
 import {
   getActiveTimesForPageRow,
   savePreferredHours,
+  savePreferredHoursBulk,
   getPreferredHours,
+  DEFAULT_PREFERRED_HOURS,
 } from "../services/activeTimes.js";
 import {
   scheduleOnePost,
@@ -26,8 +28,79 @@ import {
 } from "../services/schedule.js";
 import { listMetaAppsPublic } from "../services/metaApps.js";
 import { getFollowerGrowth } from "../services/followerHistory.js";
+import { getAppSetting, saveAppSetting } from "../services/appSettings.js";
 
 const router = Router();
+const POSTING_WORKSPACE_KEY = "posting_workspace_v1";
+
+const DEFAULT_WORKSPACE = Object.freeze({
+  selected_page_ids: [],
+  active_page_id: null,
+  active_view: "configure",
+  bulk: {},
+  rotation: {},
+});
+
+function normalizeWorkspaceState(input = {}) {
+  const db = getDb();
+  const activeIds = new Set(
+    db
+      .prepare(`SELECT id FROM fb_pages WHERE status = 'active'`)
+      .all()
+      .map((row) => Number(row.id))
+  );
+  const selected = [
+    ...new Set(
+      (Array.isArray(input.selected_page_ids) ? input.selected_page_ids : [])
+        .map(Number)
+        .filter((id) => id > 0 && activeIds.has(id))
+    ),
+  ];
+  const activeId = Number(input.active_page_id);
+  const allowedViews = new Set(["configure", "run", "schedule", "monitor"]);
+  return {
+    selected_page_ids: selected,
+    active_page_id: activeIds.has(activeId) ? activeId : selected[0] || null,
+    active_view: allowedViews.has(input.active_view)
+      ? input.active_view
+      : "configure",
+    bulk:
+      input.bulk && typeof input.bulk === "object" && !Array.isArray(input.bulk)
+        ? input.bulk
+        : {},
+    rotation:
+      input.rotation &&
+      typeof input.rotation === "object" &&
+      !Array.isArray(input.rotation)
+        ? input.rotation
+        : {},
+  };
+}
+
+/** Durable Page selection + last-used posting controls. */
+router.get("/workspace-state", (_req, res) => {
+  const saved = getAppSetting(POSTING_WORKSPACE_KEY, DEFAULT_WORKSPACE);
+  const state = normalizeWorkspaceState({ ...DEFAULT_WORKSPACE, ...saved });
+  if (JSON.stringify(saved) !== JSON.stringify(state)) {
+    saveAppSetting(POSTING_WORKSPACE_KEY, state);
+  }
+  res.json({ state });
+});
+
+router.put("/workspace-state", (req, res) => {
+  const current = getAppSetting(POSTING_WORKSPACE_KEY, DEFAULT_WORKSPACE);
+  const incoming = req.body?.state || req.body || {};
+  const merged = {
+    ...DEFAULT_WORKSPACE,
+    ...current,
+    ...incoming,
+    bulk: { ...(current.bulk || {}), ...(incoming.bulk || {}) },
+    rotation: { ...(current.rotation || {}), ...(incoming.rotation || {}) },
+  };
+  const state = normalizeWorkspaceState(merged);
+  saveAppSetting(POSTING_WORKSPACE_KEY, state);
+  res.json({ ok: true, state });
+});
 
 function pageExists(id) {
   return getDb()
@@ -247,8 +320,8 @@ router.get("/defaults", (_req, res) => {
 
 /**
  * GET /api/posting/active-times/:pageRowId
- * Giờ tích cực: Graph insights nếu còn; fallback preferred_hours.
- * Query: force=1 bỏ cache 24h.
+ * Giờ tích cực: preferred hours (chính) → default VN; Graph legacy chỉ nếu bật env.
+ * Query: force=1 bỏ cache insights 24h.
  */
 router.get("/active-times/:pageRowId", async (req, res) => {
   try {
@@ -279,6 +352,33 @@ router.put("/preferred-hours/:pageRowId", (req, res) => {
       ok: true,
       preferred_hours: saved,
       note: "Giờ do bạn đặt — không phải insights Meta (page_fans_online đã deprecate).",
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * PUT /api/posting/preferred-hours/bulk
+ * Body: { page_row_ids: number[], hours: [9,12,19,21] }
+ */
+router.put("/preferred-hours/bulk", (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.page_row_ids)
+      ? req.body.page_row_ids.map(Number).filter((n) => n > 0)
+      : [];
+    if (!ids.length) {
+      return res.status(400).json({ ok: false, error: "Chọn ít nhất 1 page (page_row_ids)" });
+    }
+    const hours =
+      req.body?.hours ??
+      req.body?.preferred_hours ??
+      DEFAULT_PREFERRED_HOURS;
+    const result = savePreferredHoursBulk(ids, hours);
+    res.json({
+      ok: true,
+      ...result,
+      note: "Đã gán giờ ưa thích cho các page — dùng cho mode Giờ tích cực (Meta không còn page_fans_online).",
     });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });

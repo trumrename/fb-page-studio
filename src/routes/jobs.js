@@ -11,6 +11,7 @@ import {
   stopJob,
   pauseJob,
   resumeJob,
+  retryFailedJob,
 } from "../services/jobRunner.js";
 import { scheduleBulk } from "../services/schedule.js";
 import { getReportPaths } from "../services/reportExport.js";
@@ -192,7 +193,7 @@ router.post("/rotation/run", (req, res) => {
   }
 });
 
-/** POST /api/jobs/rotation/run-now — first round now, later rounds scheduled. */
+/** POST /api/jobs/rotation/run-now — local wait, then direct publish for every slot. */
 router.post("/rotation/run-now", (req, res) => {
   try {
     const body = req.body || {};
@@ -212,20 +213,24 @@ router.post("/rotation/run-now", (req, res) => {
     }
     if (!plan.slots.length) return res.status(400).json({ ok: false, error: "Không có Page để chạy", plan });
     const tasks = plan.slots.map((s) => ({
-      kind: s.immediate ? "post" : "schedule",
+      kind: "post",
       page_row_id: s.page_row_id,
       page_name: s.page_name,
       page_id: s.page_id,
+      run_at: s.iso,
       label: s.immediate
-        ? `Vòng ${s.post_round} · đăng ngay · ${s.account_name}`
-        : `Vòng ${s.post_round} · hẹn ${s.local_label} VN · ${s.account_name}`,
-      opts: s.immediate
-        ? { ignore_quota: false, ignore_interval: false, post_type: s.planned_post_type }
-        : { scheduled_publish_time: s.unix, post_type: s.planned_post_type },
+        ? `Vòng ${s.post_round} · đăng trực tiếp ngay · ${s.account_name}`
+        : `Vòng ${s.post_round} · tool chờ ${s.local_label} VN rồi đăng trực tiếp · ${s.account_name}`,
+      opts: {
+        ignore_quota: false,
+        ignore_interval: false,
+        post_type: s.planned_post_type,
+        run_at: s.iso,
+      },
     }));
     const job = startJob({
       type: "rotation_run_now",
-      title: `Chạy ngay · ${plan.summary.posts_per_page_per_day} bài/page · ${plan.summary.accounts} admin`,
+      title: `Đăng trực tiếp local · ${plan.summary.posts_per_page_per_day} bài/page · ${plan.summary.accounts} admin`,
       tasks,
     });
     runNowPlans.delete(planId);
@@ -352,6 +357,24 @@ router.post("/:id/resume", (req, res) => {
   const job = resumeJob(req.params.id);
   if (!job) return res.status(404).json({ error: "Job not found" });
   res.json({ ok: true, job });
+});
+
+/**
+ * POST /api/jobs/:id/retry-failed
+ * Body optional: { task_ids?: string[], page_row_ids?: number[] }
+ * Tạo job mới chỉ gồm các task FAIL (giữ kind + opts).
+ */
+router.post("/:id/retry-failed", (req, res) => {
+  try {
+    const job = retryFailedJob(req.params.id, {
+      task_ids: req.body?.task_ids,
+      page_row_ids: req.body?.page_row_ids,
+    });
+    if (!job) return res.status(404).json({ ok: false, error: "Job not found" });
+    res.json({ ok: true, job, reports: getReportPaths() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
 });
 
 /** GET /api/jobs/:id */

@@ -1,0 +1,77 @@
+/**
+ * Đồng bộ gói DEV (máy admin/lập trình) — không ship khách.
+ *   node scripts/sync-dev-pack.mjs
+ */
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
+import { fileURLToPath } from "url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const out = path.join(root, "pack-dev");
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+
+fs.mkdirSync(out, { recursive: true });
+
+const exeSrc = path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe");
+const exeDest = path.join(out, "FB-Page-Studio-Desktop.exe");
+if (fs.existsSync(exeSrc)) {
+  fs.copyFileSync(exeSrc, exeDest);
+  const hash = crypto.createHash("sha256").update(fs.readFileSync(exeDest)).digest("hex");
+  fs.writeFileSync(
+    path.join(out, "FB-Page-Studio-Desktop.exe.sha256.txt"),
+    `${hash}  FB-Page-Studio-Desktop.exe\n`,
+    "utf8"
+  );
+  console.log("Copied DEV exe", exeSrc);
+} else {
+  console.warn("⚠ Chưa có dist-desktop-oauth EXE — chạy npm run build:desktop trước");
+}
+
+// Shortcut docs (re-write so pack-dev stays current)
+fs.writeFileSync(
+  path.join(out, "VERSION.txt"),
+  [
+    `FB Page Studio — gói DEV`,
+    `version=${pkg.version}`,
+    `built_at=${new Date().toISOString()}`,
+    `github=${pkg.githubRepo || ""}`,
+    `root=${root}`,
+    ``,
+  ].join("\n"),
+  "utf8"
+);
+
+// Keep helper BAT if missing
+const bat = path.join(out, "CHAY-NGROK-DOMAIN-CO-DINH.bat");
+if (!fs.existsSync(bat)) {
+  fs.writeFileSync(
+    bat,
+    [
+      "@echo off",
+      "chcp 65001 >nul",
+      "echo Ngrok da tich hop trong EXE. Mo app → Kết nối Meta → dán token.",
+      "echo Domain: qgroup.ngrok.app",
+      "pause",
+      "",
+    ].join("\r\n"),
+    "utf8"
+  );
+}
+
+const files = fs.readdirSync(out).sort((a, b) => a.localeCompare(b));
+fs.writeFileSync(
+  path.join(out, "MANIFEST-DEV.txt"),
+  [
+    "Gói DEV (máy admin) — KHÔNG zip gửi khách:",
+    ...files.map((f) => ` - ${f}`),
+    "",
+    "Source / keys / data thật nằm ở project root, không copy full secret vào đây.",
+    "Admin cấp key: Admin-Quan-Ly\\MENU-ADMIN.bat",
+    "Lưu trữ bản cũ: Luu-Tru-Ban-Cu\\",
+    "",
+  ].join("\n"),
+  "utf8"
+);
+
+console.log("pack-dev sẵn sàng:", out);

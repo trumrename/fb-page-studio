@@ -1,9 +1,25 @@
 # CHECK-BUG — Checklist kiểm thử FB Page Studio
 
 > Trước mỗi ship / release. Đánh `[x]` khi OK.  
-> **Phiên bản code:** 1.2.7
+> **Phiên bản code:** 1.2.20
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`
+
+## Trạng thái baseline v1.2.20
+
+- [x] `npm test`: **189/189 PASS**
+- [x] Clean runtime: **20 endpoint PASS**
+- [x] Build + pack:all + `release:verify`: **PASS**
+- [x] ZIP khách `FB-Page-Studio-v1.2.20-Windows.zip` + SHA: **PASS**
+- [x] pack-customer không secret (.env/data/src/private key)
+- [x] pack-dev đồng bộ EXE + README
+- [x] UI Direct/Hẹn Facebook tách riêng; retry lỗi job: **PASS (code+API)**
+- [x] Runtime App: v1.2.20 packaged, license commercial
+- [x] Bản cũ gom `Luu-Tru-Ban-Cu\`
+- [ ] Hai App thật so le: **chờ cấu hình App 2**
+- [ ] Update từ GitHub v1.2.20: **sau release**
+
+Xem `TRANG-THAI-HIEN-TAI.md`.
 
 ---
 
@@ -59,6 +75,11 @@ npm test
 
 ## 5. Publish / Schedule / Rotation
 
+- [ ] Tick Page → sang Chạy/Lịch → quay lại vẫn còn đúng Page đã chọn
+- [ ] Reload/đóng mở app giữ Page, Page đang cấu hình, tab, bulk và rotation lần cuối
+- [ ] Sửa config rồi chuyển Page ngay: Page cũ đã tự lưu, không ghi nhầm sang Page mới
+- [ ] Bấm dòng Page vừa mở cấu hình vừa thêm đúng Page đó vào danh sách chạy
+- [ ] Rotation/bulk chỉ nhận Page đã chọn, không rơi về tất cả Page khi checkbox DOM được dựng lại
 - [ ] Caption random · media hash 1 lần  
 - [ ] Rotation preview so-le App1↔App2  
 - [ ] Gap cùng page đúng khung  
@@ -72,6 +93,11 @@ npm test
 - [ ] Bài lỗi không làm media bị ghi nhận là đã chọn thành công
 - [ ] Con trỏ caption độc lập với sequence photo/video/text và giữ đúng sau update
 - [ ] Số media khả dụng không tính file có hash đã dùng
+- [ ] Direct Local: task đầu đăng ngay; task sau tool chờ local rồi đăng trực tiếp, không có `scheduled_publish_time`
+- [ ] Direct Local không đổi khi sửa khung giờ Hẹn Facebook; loại bài/số bài/gap lấy đúng khối Direct
+- [ ] Tổng bài Hẹn Facebook bằng tổng các dòng khung; dòng 0/sai định dạng bị chặn
+- [ ] Nhiều Page dùng cùng Caption folder không nhận trùng cùng vị trí; caption thành công làm số “chưa dùng” giảm live
+- [ ] Popup tối đa 3, có nút ×, tự tắt, nhiều cập nhật được gom và mở lại job không phát lại popup cũ
 
 ## 5.1. Báo cáo / follower
 
@@ -121,6 +147,18 @@ npm test
 | App2 fallback App1 | getMetaApp không fallback |
 | Slot 30 ngày sai ms | `*60*1000` đủ |
 | Update mất data? | Chỉ đổi exe · license trong data/ |
+| Đổi tab/reload mất Page đã chọn | Lưu `posting_workspace_v1` trong SQLite, không đọc checkbox tạm |
+| Sửa config rồi chuyển Page bị mất/ghi nhầm | Snapshot payload + flush đúng `pageId` trước khi chuyển |
+| Máy mới không chọn được Page, API 500 | Schema mới có đủ `active_hours_json`, `active_hours_at`, `preferred_hours_json` |
+| Thiết lập lần đầu ghi nhầm `.env` source | `FB_USER_DIR/FB_EXE_DIR` là đường dẫn bắt buộc |
+| Direct Local lại tạo Facebook scheduled post | Mọi slot Direct là `kind: post`; job chờ local theo `run_at` |
+| Page dùng chung Caption folder vẫn bắt đầu từ caption đầu | Thêm `caption_pool_state`, một con trỏ nguyên tử cho mỗi pool |
+| Số bài Direct mâu thuẫn tổng khung giờ | Tách hai nguồn: Direct dùng số bài riêng; Hẹn Facebook dùng tổng các dòng khung |
+| Popup OK/FAIL phủ kín màn hình | Tối đa 3, có nút đóng, tự hết hạn, gom batch và không replay job cũ |
+| ZIP khó kiểm tra đúng EXE | Gói khách có EXE versioned + SHA-256 sidecar và kiểm tra giải nén/hash |
+| VERSION.txt thư mục App còn v1.2.19 | Đã đồng bộ metadata sang v1.2.20 |
+| Nhiều EXE cũ dễ mở nhầm | Chuyển bản v1.2.16–v1.2.19 vào `_old-versions`, giữ lại để phục hồi |
+| Build lại nhưng release asset vẫn là file cũ cùng version | `release:verify` chặn hash lệch; bắt buộc chạy lại pack → release asset → ZIP → verify sau build cuối |
 
 ---
 

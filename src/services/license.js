@@ -166,24 +166,66 @@ export function getLicenseFilePath() {
 }
 
 /**
+ * Candidate license files when data/license.json is missing (portable EXE
+ * folder vs project root data/, update backup, explicit bootstrap path).
+ */
+function licenseRecoveryCandidates(primary) {
+  const exeDir = path.dirname(path.dirname(primary)); // …/data → parent of data
+  const list = [
+    path.join(exeDir, "license.backup.json"),
+    path.join(exeDir, "license.json"),
+    // Dev / admin: project root data when running from FB-Page-Studio-App/
+    path.join(exeDir, "..", "data", "license.json"),
+    path.join(exeDir, "..", "license.json"),
+    process.env.LICENSE_BOOTSTRAP_PATH
+      ? path.resolve(String(process.env.LICENSE_BOOTSTRAP_PATH))
+      : "",
+  ].filter(Boolean);
+  // de-dupe + drop primary
+  const seen = new Set([path.resolve(primary)]);
+  return list.filter((p) => {
+    const abs = path.resolve(p);
+    if (seen.has(abs)) return false;
+    seen.add(abs);
+    return true;
+  });
+}
+
+/**
  * Ensure license still valid after app update / restart.
  * Does NOT re-prompt if key on disk is still valid (lifetime or not expired).
- * Tries license.backup.json if license.json missing.
+ * Tries license.backup.json and nearby admin/project license files if missing.
  */
 export function ensureLicenseAfterUpdate() {
   const primary = LICENSE_FILE();
-  const backup = path.join(
-    path.dirname(path.dirname(primary)),
-    "license.backup.json"
-  );
 
-  if (!fs.existsSync(primary) && fs.existsSync(backup)) {
-    try {
-      fs.mkdirSync(path.dirname(primary), { recursive: true });
-      fs.copyFileSync(backup, primary);
-      console.log("[license] Restored license.json from license.backup.json");
-    } catch (e) {
-      console.warn("[license] restore backup failed:", e.message);
+  if (!fs.existsSync(primary)) {
+    for (const candidate of licenseRecoveryCandidates(primary)) {
+      if (!fs.existsSync(candidate)) continue;
+      try {
+        const raw = JSON.parse(fs.readFileSync(candidate, "utf8"));
+        const key = String(raw?.key || "").trim();
+        if (!key) continue;
+        const v = verifyLicenseKey(key);
+        if (!v.ok) {
+          console.warn(
+            `[license] Bỏ qua file recovery không hợp lệ: ${candidate} · ${v.error}`
+          );
+          continue;
+        }
+        fs.mkdirSync(path.dirname(primary), { recursive: true });
+        // Normalize into active data/license.json (same machine)
+        saveLicense(key, v.claims);
+        console.log(
+          `[license] Khôi phục license từ ${candidate} → ${primary}`
+        );
+        break;
+      } catch (e) {
+        console.warn(
+          `[license] restore from ${candidate} failed:`,
+          e.message
+        );
+      }
     }
   }
 

@@ -70,14 +70,18 @@ if (fs.existsSync(appAsar)) {
   assert(embeddedPkg.version === pkg.version, "EXE embedded version matches package.json", embeddedPkg.version);
   assert(embeddedMain.includes("app.exit(0)"), "EXE contains forced updater shutdown safeguard");
   assert(embeddedUpdater.includes("no-cache") && embeddedUpdater.includes("Date.now()"), "EXE contains GitHub cache-busting safeguard");
-  assert(embeddedNgrok.includes("await stopNgrok(); stopRequested = false") && embeddedNgrok.includes("child === proc"), "EXE contains safe Ngrok restart logic");
-  assert(embeddedNgrok.includes("find((x) => domainOf(x.public_url) === domain)") && !embeddedNgrok.includes("|| j.tunnels?.[0]"), "EXE only accepts the configured Ngrok domain");
+  assert(/await stopNgrok\(\);\s*stopRequested = false/.test(embeddedNgrok) && embeddedNgrok.includes("child === proc"), "EXE contains safe Ngrok restart logic");
+  assert(embeddedNgrok.includes("domainOf(item.public_url) === domain") && !embeddedNgrok.includes("|| j.tunnels?.[0]"), "EXE only accepts the configured Ngrok domain");
+  assert(embeddedNgrok.includes("`--url=https://${domain}`") && !embeddedNgrok.includes("`--domain=${domain}`"), "EXE uses current Ngrok --url flag");
   assert(embeddedServer.includes('msg?.type === "shutdown"') && embeddedMain.includes('serverProc.send({ type: "shutdown" })'), "EXE shuts Ngrok down through Electron IPC");
 }
 
 if (fs.existsSync(customerVersionFile)) {
-  const m = fs.readFileSync(customerVersionFile, "utf8").match(/^version=(.+)$/m);
+  const versionText = fs.readFileSync(customerVersionFile, "utf8");
+  const m = versionText.match(/^version=(.+)$/m);
   assert(m?.[1]?.trim() === pkg.version, "customer VERSION.txt matches package.json", m?.[1]?.trim() || "missing");
+  const asset = versionText.match(/^asset=(.+)$/m)?.[1]?.trim();
+  assert(asset === path.basename(customerExe), "customer VERSION.txt asset matches versioned EXE", asset || "missing");
 }
 if (fs.existsSync(exe) && fs.existsSync(customerExe)) {
   assert(sha256(exe) === sha256(customerExe), "customer EXE hash matches release EXE");

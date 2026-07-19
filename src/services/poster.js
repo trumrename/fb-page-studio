@@ -33,9 +33,12 @@ import {
   noteGraphFailure,
   clampPageLimits,
   ensureAntiSpamTables,
+  getAntiSpamSettings,
+  normalizeCaption,
 } from "./antiSpam.js";
 import { assertCanPublish as assertLicenseActive } from "./license.js";
 import { withPageOperationLock } from "./pageOperationLock.js";
+import { reserveCaptionSlot } from "./captionPoolState.js";
 
 function todayKey() {
   const d = new Date();
@@ -265,8 +268,15 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
   let mediaSkipped = 0;
   const triedCaptions = [];
   let selectedCaptionSlot = captionSlot;
-  for (let attempt = 0; attempt < 12; attempt++) {
-    selectedCaptionSlot = captionSlot + attempt;
+  const captionPoolTotal = getCaptionStats(cfg).total;
+  const maxCaptionAttempts = Math.max(1, captionPoolTotal || 1);
+  for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
+    const reservation = reserveCaptionSlot({
+      captionsFolder: cfg.captions_folder,
+      captions: cfg.captions,
+      pageRowId,
+    });
+    selectedCaptionSlot = reservation.slot_index;
     caption = pickCaption(
       cfg.captions,
       selectedCaptionSlot,
@@ -315,11 +325,11 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     ) {
       throw new Error(gate.error);
     }
-    if (!caption || attempt === 11) {
+    if (!caption || attempt === maxCaptionAttempts - 1) {
       if (gate.code === "CAPTION_DUP" || triedCaptions.length) {
         throw new Error(
           `Hết caption khả dụng trong kho (đã dùng / trùng trong cửa sổ anti-spam). ` +
-            `Đã thử ${triedCaptions.length} caption. Thêm dòng vào data/media/captions (.txt/.csv).` +
+            `Đã thử ${triedCaptions.length}/${captionPoolTotal || 0} caption. Thêm dòng vào kho Caption (.txt/.csv).` +
             (gate.error ? ` — ${gate.error}` : "")
         );
       }
@@ -593,5 +603,56 @@ export function mediaStats(folder) {
 }
 
 export function getCaptionStats(cfg) {
-  return captionPoolStats(cfg.captions_folder, cfg.captions);
+  const basic = captionPoolStats(cfg.captions_folder, cfg.captions);
+  const fromDisk = loadCaptionsFromDisk(cfg.captions_folder);
+  const inline = Array.isArray(cfg.captions)
+    ? cfg.captions.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const poolByNorm = new Map();
+  for (const caption of [...fromDisk, ...inline]) {
+    const norm = normalizeCaption(caption);
+    if (norm && !poolByNorm.has(norm)) poolByNorm.set(norm, caption);
+  }
+
+  const total = poolByNorm.size;
+  const anti = getAntiSpamSettings();
+  if (!anti.enabled || !anti.block_duplicate_caption || !total) {
+    return {
+      ...basic,
+      total,
+      available: total,
+      used_recent: 0,
+      duplicate_window_hours: Number(anti.caption_dup_window_hours) || 0,
+    };
+  }
+
+  const since = new Date(
+    Date.now() - (Number(anti.caption_dup_window_hours) || 48) * 60 * 60 * 1000
+  ).toISOString();
+  ensureAntiSpamTables();
+  const used = new Set(
+    getDb()
+      .prepare(`SELECT caption_norm FROM caption_recent WHERE created_at >= ?`)
+      .all(since)
+      .map((row) => normalizeCaption(row.caption_norm))
+      .filter(Boolean)
+  );
+  for (const row of getDb()
+    .prepare(
+      `SELECT caption FROM post_logs
+       WHERE status IN ('ok','ok_comment_failed','scheduled')
+         AND created_at >= ? AND caption IS NOT NULL AND trim(caption) != ''`
+    )
+    .all(since)) {
+    const norm = normalizeCaption(row.caption);
+    if (norm) used.add(norm);
+  }
+  const usedRecent = [...poolByNorm.keys()].filter((norm) => used.has(norm)).length;
+  return {
+    ...basic,
+    total,
+    available: Math.max(0, total - usedRecent),
+    used_recent: usedRecent,
+    duplicate_window_hours: Number(anti.caption_dup_window_hours) || 48,
+  };
 }

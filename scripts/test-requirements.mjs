@@ -35,6 +35,8 @@ const need = [
   "src/services/jobRunner.js",
   "src/services/dailyReports.js",
   "src/services/followerHistory.js",
+  "src/services/appSettings.js",
+  "src/services/captionPoolState.js",
   "public/posting.html",
   "public/index.html",
 ];
@@ -64,6 +66,8 @@ check("facebook exchangeCode accepts app creds", fb.includes("appCreds") || fb.i
 
 const db = read("src/db/index.js");
 check("DB migrate meta_app_key", db.includes("meta_app_key") && db.includes("migrateMetaApp"));
+check("DB stores durable application settings", db.includes("CREATE TABLE IF NOT EXISTS app_settings"));
+check("explicit user/EXE directory owns first-run .env", read("src/paths.js").includes("process.env.FB_USER_DIR || process.env.FB_EXE_DIR") && read("src/paths.js").includes("return beside"));
 
 const rot = read("src/services/rotationPlan.js");
 check("rotation auto_groups_by_meta_app", rot.includes("auto_groups_by_meta_app"));
@@ -77,15 +81,27 @@ check("API rotation/plan", jobs.includes("rotation/plan"));
 check("API rotation/run", jobs.includes("rotation/run"));
 check("API rotation/run-now", jobs.includes("rotation/run-now"));
 check("API rotation/matrix", jobs.includes("rotation/matrix"));
+const runNowRoute = jobs.slice(
+  jobs.indexOf('router.post("/rotation/run-now"'),
+  jobs.indexOf('router.post("/bulk-post"')
+);
+check("direct-local route only creates direct post tasks", runNowRoute.includes('kind: "post"') && !runNowRoute.includes('kind: "schedule"'));
+check("direct-local tasks keep local due time without Facebook scheduled_publish_time", runNowRoute.includes("run_at: s.iso") && !runNowRoute.includes("scheduled_publish_time"));
 
 const jr = read("src/services/jobRunner.js");
 check("sequential runner sleep 350ms", jr.includes("sleep(350)"));
+check("job runner waits locally then calls direct publish", jr.includes("waitUntilTaskDue") && jr.includes("Tool đang chờ đến") && jr.includes("runOnePost(task.page_row_id"));
 const pageLock = read("src/services/pageOperationLock.js");
 const poster = read("src/services/poster.js");
 const schedule = read("src/services/schedule.js");
 check("publishing serializes work per Page", pageLock.includes("withPageOperationLock") && poster.includes("withPageOperationLock(pageRowId") && schedule.includes("withPageOperationLock(pageRowId"));
 check("no parallel Promise.all posts in runner", !/Promise\.all\([^)]*runOnePost/.test(jr));
 check("job runner live resource snapshot", jr.includes("refreshResources") && jr.includes("job.resources"));
+check("job runner can retry failed tasks", jr.includes("export function retryFailedJob") && jr.includes("failed_tasks"));
+check("API retry-failed endpoint", jobs.includes("retry-failed") && jobs.includes("retryFailedJob"));
+const dashboardUi = read("public/app.html");
+const postingUi = read("public/posting.html");
+check("UI shows fail list + retry buttons", dashboardUi.includes("failRetryPanel") && dashboardUi.includes("btnRetryAllFailed") && postingUi.includes("liveFailRetry") && postingUi.includes("btnLiveRetryAll"));
 check("job history persists across App restart", jr.includes("jobs-state.json") && jr.includes("restoreJobs") && jr.includes('job.status = "interrupted"'));
 check("media uses random spaced policy", read("src/services/antiSpam.js").includes("pickRandomMediaSpaced") && poster.includes('"random_spaced"') && schedule.includes('"random_spaced"'));
 check("caption uses sequential then shuffled cycles", read("src/services/mediaLibrary.js").includes("stableShuffle") && poster.includes('"sequential_shuffle"') && schedule.includes('"sequential_shuffle"'));
@@ -96,6 +112,7 @@ const secondCaptionCycle = captionSample.map((_, i) => pickCaption(captionSample
 check("caption first cycle preserves order", firstCaptionCycle.join("|") === captionSample.join("|"));
 check("caption next cycle is a full shuffled permutation", new Set(secondCaptionCycle).size === captionSample.length && secondCaptionCycle.some((x, i) => x !== captionSample[i]));
 check("caption cursor is independent from post type cursor", poster.includes("caption_slot_index") && schedule.includes("caption_slot_index") && db.includes("caption_slot_index"));
+check("shared caption folders use one atomic pool cursor", read("src/services/captionPoolState.js").includes("caption_pool_state") && poster.includes("reserveCaptionSlot") && schedule.includes("reserveCaptionSlot") && JSON.parse(read("package.json")).scripts.test.includes("test-caption-pool.mjs"));
 check("media spacing records only successful selections", read("src/services/antiSpam.js").includes("source_folder") && !read("src/services/antiSpam.js").includes("recentMediaByPool"));
 check("resource counts exclude already-used media", poster.includes("countUnusedMedia") && rot.includes("countUnusedMedia"));
 
@@ -109,16 +126,22 @@ check("direct updater exposes progress", updater.includes("getUpdateProgress") &
 check("desktop updater exits Electron before replace", updater.includes("requestUpdateRestart") && read("electron/main.cjs").includes("fbps-apply-update"));
 check("update UI displays live download progress", updateUi.includes("watchUpdateProgress") && updateUi.includes("Đang tải"));
 check("updater bypasses stale GitHub cache", updater.includes('"Cache-Control"') && updater.includes("Date.now()"));
+check("updater prefers exact versioned asset over stale generic EXE", updater.includes("const cleanVersion") && updater.includes("FB-Page-Studio-Desktop-v") && updater.includes("pickReleaseAsset(assets, cfg.asset_name, remoteVersion)"));
 check("updater rolls back and reports replacement failure", updater.includes(":replace_failed") && updater.includes("_update-error.txt") && apiRoutes.includes('"/update/last-error"') && updateUi.includes("showLastUpdateError"));
 check("release gate verifies embedded version and EXE hashes", fs.existsSync(path.join(root, "scripts/verify-release.mjs")) && read("scripts/verify-release.mjs").includes("EXE embedded version") && read("scripts/verify-release.mjs").includes("customer EXE hash"));
 check("tag release workflow runs verification gate", fs.existsSync(path.join(root, ".github/workflows/release-desktop.yml")) && read(".github/workflows/release-desktop.yml").includes("release:verify") && read(".github/workflows/release-desktop.yml").includes("GITHUB_REF_NAME"));
 check("release asset filename includes exact version", fs.existsSync(path.join(root, "scripts/prepare-release-asset.mjs")) && read("scripts/prepare-release-asset.mjs").includes("Desktop-v${pkg.version}.exe") && read(".github/workflows/release-desktop.yml").includes("Desktop-v$version.exe"));
+check("customer pack includes SHA-256 sidecar for its versioned EXE", read("scripts/sync-customer-pack.mjs").includes("sha256") && read("scripts/sync-customer-pack.mjs").includes(".sha256.txt"));
 check("opening new EXE warns when old version is still running", read("electron/main.cjs").includes("additionalData?.version") && read("electron/main.cjs").includes("Đang có một phiên bản FB Page Studio khác chạy nền"));
 const ngrokManager = read("src/services/ngrokManager.js");
-check("Ngrok manager handles token, install and exact domain", ngrokManager.includes("NGROK_AUTHTOKEN") && ngrokManager.includes("ensureExe") && ngrokManager.includes("find((x) => domainOf(x.public_url) === domain)"));
-check("Ngrok restart cannot lose the new child process", ngrokManager.includes("await stopNgrok(); stopRequested = false") && ngrokManager.includes("child === proc"));
+const index = read("public/index.html");
+check("Ngrok manager handles token, install and exact domain", ngrokManager.includes("NGROK_AUTHTOKEN") && ngrokManager.includes("ensureExe") && ngrokManager.includes("domainOf(item.public_url) === domain"));
+check("Ngrok uses current --url flag and explains busy fixed domain", ngrokManager.includes("`--url=https://${domain}`") && !ngrokManager.includes("`--domain=${domain}`") && ngrokManager.includes("ERR_NGROK_334") && ngrokManager.includes("Không bật pooling cho OAuth") && index.includes("domain_busy"));
+check("Ngrok reuses exact local tunnel on the same port", ngrokManager.includes("inspectLocalTunnel") && ngrokManager.includes("local?.same_port") && ngrokManager.includes("đã dùng lại tunnel cục bộ"));
+check("Ngrok restart cannot lose the new child process", /await stopNgrok\(\);\s*stopRequested = false/.test(ngrokManager) && ngrokManager.includes("child === proc"));
 check("Ngrok shuts down through Electron IPC", read("src/server.js").includes('msg?.type === "shutdown"') && read("electron/main.cjs").includes("serverProc.send({ type: \"shutdown\" })"));
 check("customer env example includes official Ngrok setup", read("pack-customer/.env.example").includes("NGROK_AUTHTOKEN") && read("pack-customer/.env.example").includes("NGROK_AUTOSTART=1") && read("pack-customer/.env.example").includes("qgroup.ngrok.app") && read("pack-customer/.env.example").includes("trumrename/fb-page-studio"));
+check("obsolete BAT files cannot collect tokens or delete builds", !read("CAI-NGROK.bat").includes("DAN_TOKEN_NGROK_VAO_DAY") && !read("pack-dev/CHAY-NGROK-DOMAIN-CO-DINH.bat").includes("set /p") && !/rd\s+\/s\s+\/q/i.test(read("XOA-BAN-HONG.bat")));
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));
 check("overdue Facebook schedules reconcile automatically", server.includes("runScheduledReconcile") && server.includes("RECONCILE_MS"));
 check("runtime reports scheduler and config health", server.includes('/api/runtime') && server.includes("config_health") && server.includes("enabled_pages"));
@@ -130,6 +153,10 @@ check("UI Rotation panel", posting.includes("Rotation so-le"));
 check("UI run-now preview + start", posting.includes("btnRotNowPreview") && posting.includes("btnRotNowRun"));
 check("UI App rotation strategies", posting.includes("rotAppStrategy") && posting.includes("per_app") && posting.includes("interleave_apps"));
 check("UI Page/Admin wait range", posting.includes("rotTaskGapMin") && posting.includes("rotTaskGapMax"));
+check("Direct Local has independent post type and same-Page gap controls", ["rotNowPostType", "rotNowGapMin", "rotNowGapMax", "collectRunNowBody"].every((x) => posting.includes(x)));
+const directBody = posting.slice(posting.indexOf("function collectRunNowBody"), posting.indexOf("function applyRotationSettings"));
+check("Direct Local request does not read Facebook window controls", directBody.includes("rotNowPerDay") && !directBody.includes("rotWindows") && !directBody.includes("rotMode") && !directBody.includes("rotDays"));
+check("UI explicitly separates direct local from Facebook scheduling", posting.includes("Không tạo scheduled post trên Facebook") && posting.includes("Không đọc “Khung giờ”"));
 check("UI run-now Media/Posted/Caption pickers", ["btnRotPickMedia", "btnRotPickPosted", "btnRotPickCaptions", "btnRotApplyFolders"].every((x) => posting.includes(x)));
 check("UI live job progress + notifications", ["liveJobBar", "liveJobPct", "liveResources", "liveNotifs", "watchLiveJob"].every((x) => posting.includes(x)));
 check("bulk schedule uses live job runner", posting.includes('"/api/jobs/bulk-schedule"') && posting.includes("watchLiveJob(r.job.id)"));
@@ -138,14 +165,19 @@ check("unsupported Story control is disabled", posting.includes('id="story_enabl
 check("UI profile Meta App badge", posting.includes("meta_app_name") && posting.includes("appKey"));
 check("UI auto meta groups checkbox", posting.includes("rotAutoMeta"));
 check("UI windows + gap settings", posting.includes("rotWindows") && posting.includes("rotGapMin"));
+check("Page selection persists outside transient checkboxes", posting.includes("selectedPageSet") && posting.includes('"/api/posting/workspace-state"') && !posting.includes('querySelectorAll(".pg-check:checked")'));
+check("Page config auto-saves before switching workspaces", posting.includes("queueConfigAutosave") && posting.includes("flushConfigAutosave") && posting.includes("persistPageConfig"));
+check("posting workspaces are visually separated", ["configure", "run", "schedule", "monitor"].every((view) => posting.includes(`data-workspace-view="${view}"`)) && posting.includes("data-workspace-panel"));
+check("rotation always targets explicitly selected Pages", posting.includes('page_row_ids: selectedPageIds()') && posting.includes("Luôn chỉ chạy đúng Page đã chọn"));
 
-const index = read("public/index.html");
 check("OAuth flash escapes URL values", index.includes('escapeHtml(p.get("error"))'));
 check("UI Connect App 1", index.includes("app=app1"));
 check("UI Connect App 2", index.includes("app=app2"));
 check("UI domain setup and Ngrok command", index.includes("oauthDomain") && index.includes("btnSaveOAuthDomain") && index.includes("btnCopyNgrokCommand"));
 check("Ngrok integrated autostart and token recovery", fs.existsSync(path.join(root, "src/services/ngrokManager.js")) && server.includes("startNgrok") && apiRoutes.includes('"/setup/ngrok"') && apiRoutes.includes("NGROK_AUTHTOKEN") && index.includes("btnSaveNgrokToken"));
 check("UI Chrome profile selection", index.includes("oauthBrowserProfile") && index.includes("btnSaveBrowserProfile"));
+check("UI first-run Meta App setup without manual .env", index.includes("firstRunSetup") && index.includes("setupApp1Id") && index.includes("setupApp1Secret") && index.includes("btnSaveFirstRun") && index.includes('"/api/setup/first-run"'));
+check("API first-run setup creates encryption key and updates live config", apiRoutes.includes('"/setup/first-run"') && apiRoutes.includes("crypto.randomBytes(32)") && apiRoutes.includes("config.facebook.appId = app1Id") && apiRoutes.includes("config.tokenEncryptionKey = encryptionKey"));
 check("UI meta app badge on accounts", index.includes("meta_app") || index.includes("appLabel"));
 check("UI exports Page information per App", index.includes("btnExportDailyPages") && index.includes("/api/reports/daily/pages"));
 check("manual Page report refreshes follower data", index.includes("refresh_followers"));
@@ -153,9 +185,20 @@ check("manual Page report refreshes follower data", index.includes("refresh_foll
 const dashboard = read("public/app.html");
 const shell = read("public/js/shell.js");
 const css = read("public/css/app.css");
+const electronMain = read("electron/main.cjs");
+const electronPreload = read("electron/preload.cjs");
+const folderPicker = read("src/services/folderPicker.js");
+check("Ngrok token field is editable and supports clipboard paste", css.includes('input[type="password"]') && index.includes("btnPasteNgrokToken") && index.includes("navigator.clipboard.readText()"));
+check("folder pickers use full Windows Explorer dialog", electronMain.includes("dialog.showOpenDialog") && electronMain.includes('"openDirectory"') && electronMain.includes("sandbox: false") && electronMain.includes("contextIsolation: true") && electronMain.includes("preload.cjs") && electronPreload.includes('ipcRenderer.invoke("fbps:pick-folder"') && posting.includes("fbPageStudioDesktop.pickFolder") && index.includes("fbPageStudioDesktop.pickFolder"));
+check("portable first run persists beside outer EXE instead of Temp extraction", electronMain.includes("process.env.PORTABLE_EXECUTABLE_DIR") && electronMain.includes("never inside Electron's temporary extraction directory") && electronMain.includes("Không cần tự tạo file .env"));
+check("legacy small FolderBrowserDialog cannot return", !folderPicker.includes("FolderBrowserDialog") && folderPicker.includes("System.Windows.Forms.OpenFileDialog"));
+check("fresh database post_logs includes scheduled publish time", /CREATE TABLE IF NOT EXISTS post_logs[\s\S]{0,1200}scheduled_publish_time TEXT/.test(read("src/db/index.js")));
+check("fresh database Page config includes active/preferred hours", /CREATE TABLE IF NOT EXISTS page_post_config[\s\S]{0,1200}active_hours_json TEXT[\s\S]{0,300}preferred_hours_json TEXT/.test(read("src/db/index.js")));
+check("clean runtime smoke test is part of npm test", fs.existsSync(path.join(root, "scripts/test-clean-runtime.mjs")) && JSON.parse(read("package.json")).scripts.test.includes("test-clean-runtime.mjs"));
 check("navigation tabs map to distinct workspaces", shell.includes('dataset.view = view') && shell.includes('itemHash === hash') && css.includes('body[data-view="rotation"]') && css.includes('body[data-view="reports"]'));
 check("dashboard has unique logs target", (dashboard.match(/id="logs"/g) || []).length === 1 && dashboard.includes('id="logsSection"'));
 check("dashboard auto-discovers active jobs", dashboard.includes("discoverJobs") && dashboard.includes("setInterval(discoverJobs"));
+check("dashboard popups are closable, capped and do not replay history", dashboard.includes("toast-close") && dashboard.includes("wrap.children.length >= 3") && dashboard.includes("hydratedNotificationJobs") && dashboard.includes("fresh.length > 3"));
 check("dashboard shows live operation summary", ["opsState", "opsToday", "opsSuccess", "opsFail"].every((x) => dashboard.includes(x)));
 check("dashboard displays Vietnam time", dashboard.includes("fmtVn") && dashboard.includes("Asia/Ho_Chi_Minh"));
 check("dashboard separates created and Facebook publish time", dashboard.includes("Tool thực hiện lúc") && dashboard.includes("Facebook sẽ đăng lúc") && dashboard.includes("scheduleDisplay"));
@@ -422,6 +465,17 @@ passRun(2, () => {
   });
   const times = planTimesForPageDay(s, "2026-07-18");
   assert("P2 4 times from windows", times.length === 4, String(times.length));
+  assert("P2 Facebook-window count is authoritative row sum", s.posts_per_page_per_day === 4, String(s.posts_per_page_per_day));
+  let invalidWindowsRejected = false;
+  try {
+    normalizeSettings({
+      mode: "windows",
+      windows: [{ name: "Sai", start: "07:00", end: "10:00", posts: 0 }],
+    });
+  } catch {
+    invalidWindowsRejected = true;
+  }
+  assert("P2 invalid/zero Facebook windows are rejected", invalidWindowsRejected);
 });
 
 // ---------- PASS 3 ----------

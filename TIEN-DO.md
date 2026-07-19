@@ -1,9 +1,11 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-19** · Code: **1.2.7**
+> Cập nhật: **2026-07-19** · Code: **1.2.20**  
 > **Gốc DEV:** `D:\fb-page-poster\`  
-> **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`  
-> **GitHub:** `trumrename/fb-page-studio` — **push chỉ khi user OK**
+> **Gói KHÁCH:** `pack-customer\` + ZIP `FB-Page-Studio-v1.2.20-Windows.zip`  
+> **Admin:** `Admin-Quan-Ly\` · **Lưu trữ cũ:** `Luu-Tru-Ban-Cu\`  
+> **GitHub:** `trumrename/fb-page-studio`  
+> **Trạng thái nhanh:** `TRANG-THAI-HIEN-TAI.md`
 
 ---
 
@@ -17,13 +19,27 @@
 | Có .exe? | Build ra `dist-desktop-oauth\` | Copy vào pack-customer khi sync |
 | Cấp key? | Có | Chỉ **nhận** key / trial |
 
-Sync gói khách:
+Sync gói khách + dev + ZIP:
 
 ```powershell
 cd D:\fb-page-poster
 npm run build:desktop
-node scripts/sync-customer-pack.mjs
+npm run pack:all
+npm run release:asset
+npm run release:verify
 ```
+
+---
+
+## Mốc v1.2.20 (gần nhất)
+
+- [x] License commercial / recovery dual-data; encryption key mạnh
+- [x] Direct Local vs Hẹn FB; retry task lỗi trên UI tiến trình
+- [x] Active times fallback preferred/preset (Meta gỡ page_fans_online)
+- [x] Ngrok token system import; domain_busy hướng dẫn dashboard
+- [x] Dọn `Luu-Tru-Ban-Cu`; gói `Admin-Quan-Ly` cấp key
+- [x] `pack:all` + ZIP máy khách + release:verify **PASS**
+- [x] Test **189/189**
 
 ---
 
@@ -115,6 +131,49 @@ node scripts/sync-customer-pack.mjs
 - [x] Electron chính thoát trước khi thay EXE; không để BAT/CMD lặp vì file còn bị khóa
 - [x] BAT update chạy nền ẩn, giữ nguyên `.env`, `data` và license
 
+### M. Explorer chọn ổ + kiểm thử môi trường sạch v1.2.18 — 2026-07-19
+- [x] Loại bỏ FolderBrowserDialog kiểu cũ bị thu nhỏ.
+- [x] Electron dùng hộp Explorer chuẩn của Windows qua preload/IPC; hiển thị This PC và đủ ổ C, D, E, F.
+- [x] Media, Posted, Caption và ChromePortable dùng chung một bộ chọn thư mục chuẩn.
+- [x] Browser/server fallback chuyển sang OpenFileDialog, không quay lại Browse For Folder.
+- [x] Sửa database sạch thiếu scheduled_publish_time gây Internal Server Error.
+- [x] Thêm YEU-CAU-BAT-BUOC.md và bắt buộc đọc từ AGENTS.md trước mỗi lần sửa/build.
+- [x] Thêm kiểm tra hồi quy: hộp Explorer đầy đủ, cấm FolderBrowserDialog, database mới có cột lịch.
+- [x] Kiểm thử tự động: **158/158 đạt**.
+- [x] Test trực tiếp EXE v1.2.18 trong thư mục sạch: dashboard OK, không Internal Server Error, chọn Chrome/Media mở Explorer đầy đủ ổ đĩa.
+
+### N. Lưu trạng thái + làm lại workspace đăng bài v1.2.19 — 2026-07-19
+- [x] Thêm bảng SQLite `app_settings`; lựa chọn Page, Page đang mở, tab và điều khiển lịch cuối cùng không còn phụ thuộc checkbox DOM.
+- [x] Đổi tab, tải lại trang và đóng/mở app vẫn giữ đúng Page đã chọn, bulk schedule và rotation draft.
+- [x] Bấm dòng Page = chọn Page cho lần chạy + mở đúng cấu hình; có thanh tóm tắt Page ảnh hưởng luôn hiển thị.
+- [x] Cấu hình Page tự lưu, flush trước khi đổi Page/tab/đóng app; kiểm thử chuyển Page ngay sau khi nhập vẫn không mất dữ liệu.
+- [x] Tách giao diện đăng thành 4 workspace khác nhau: Chọn & cấu hình · Chạy ngay/Rotation · Hẹn giờ hàng loạt · Kết quả/lịch sử.
+- [x] Menu/hash/topbar đồng bộ; bấm mục nào hiển thị đúng tên và đúng panel chức năng đó.
+- [x] Rotation và hẹn lịch luôn dùng đúng Page chọn ở bước 1; không âm thầm rơi về toàn bộ Page.
+- [x] Sửa DB máy mới thiếu `active_hours_json`, `active_hours_at`, `preferred_hours_json` làm `/api/posting/pages` lỗi 500 và không chọn được Page.
+- [x] Sửa đường dẫn `.env` lần đầu: `FB_USER_DIR/FB_EXE_DIR` luôn là nơi lưu, không nhặt nhầm `.env` thư mục source/bundle.
+- [x] Test giao diện thật: chọn Page 2 → đổi số bài → sang tab lịch → reload → giữ đúng Page, tab, lịch và config; chuyển Page tức thì vẫn lưu.
+- [x] Clean runtime: 20 endpoint + DB mới + `.env` mới + workspace persistence PASS.
+- [x] Bộ kiểm thử tự động: **174/174 đạt**.
+- [x] EXE đóng gói v1.2.19 trong thư mục Temp chỉ có EXE: nhận đúng packaged/version, tạo `data` và `.env` cạnh EXE, không sửa `.env` DEV.
+- [x] Release verify: version nhúng, tên asset, hash build/gói khách/sidecar và loại trừ secret đều PASS.
+- [x] ZIP Windows v1.2.19 tạo từ gói khách và giải nén thử PASS: 7 file, EXE 79,711,112 byte, hash khớp build.
+
+### O. Direct Local + caption dùng chung + popup v1.2.20 — 2026-07-19
+- [x] Sửa lỗi Direct Local: mọi task đều là `post`; tool giữ `run_at`, chờ tại máy rồi gọi đăng trực tiếp, không còn đổi task sau thành Facebook schedule.
+- [x] Direct Local có loại bài, số bài và gap cùng Page riêng; không đọc ngầm khung giờ/số ngày của Hẹn Facebook.
+- [x] Hẹn Facebook theo khung giờ lấy tổng bài duy nhất từ tổng các dòng; dòng sai hoặc 0 bài bị chặn rõ.
+- [x] Nhiều Page dùng chung kho caption dùng một con trỏ SQLite nguyên tử; không còn mỗi Page bắt đầu lại caption đầu kho.
+- [x] Caption đăng thành công được note vào anti-spam; số còn lại live = tổng kho trừ caption đã dùng trong cửa sổ chống trùng.
+- [x] Popup Vận hành tối đa 3, có nút đóng, tự hết hạn, gom cập nhật dồn và không phát lại lịch sử job cũ.
+- [x] Test tĩnh/chức năng: 186/186; test caption pool và clean runtime đạt.
+- [x] Test giao diện local: Direct hiện riêng, khối Hẹn Facebook thu gọn; tạo 5 popup liên tiếp chỉ giữ 3 popup có nút đóng.
+- [x] Build/pack/release verify v1.2.20 đạt; EXE build cuối nhúng đúng version và hash `d4d8bee7...34fbbf`.
+- [x] ZIP khách giải nén thử đạt: 8 mục top-level, có EXE versioned + SHA-256 sidecar, hash EXE khớp build.
+- [x] Runtime thật trong `FB-Page-Studio-App` đã được mở: log/API xác nhận packaged v1.2.20; scheduler hiện `enabled_pages=0`, không có lỗi.
+- [x] Đồng bộ `FB-Page-Studio-App\VERSION.txt` lên v1.2.20 và chuyển 4 EXE cũ vào `_old-versions` để tránh mở nhầm.
+- [x] Phát hiện release asset/ZIP cũ cùng version nhưng khác hash sau lần build cuối; đã chạy lại pack → release asset → ZIP → release verify và đồng bộ hash mới.
+
 ---
 
 ## Chưa làm / chờ bạn
@@ -122,8 +181,8 @@ node scripts/sync-customer-pack.mjs
 | Hạng mục | Ai |
 |----------|-----|
 | `FB_APP_ID_2` nếu dùng App 2 | Bạn |
-| Build + sync pack-customer có .exe | Đang thực hiện cho v1.2.2 |
-| Push GH / Release có asset | Đã được user cho phép cho v1.2.2 |
+| Build + sync pack-customer có EXE | Hoàn thành v1.2.20 |
+| Push GH / Release có asset | **Chờ user xác nhận sau khi xem kết quả** |
 | Online revoke license | Sau |
 
 ---

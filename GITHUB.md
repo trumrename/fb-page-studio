@@ -1,110 +1,62 @@
-# Đưa FB Page Studio lên GitHub + bản .exe
+# Quy trình GitHub và phát hành FB Page Studio
 
-**Repo hiện tại:** https://github.com/trumrename/fb-page-studio  
-**Version:** xem `package.json` (1.2.0+)
+Repo: [trumrename/fb-page-studio](https://github.com/trumrename/fb-page-studio)
 
-## 1. Push code
+Version chuẩn: `package.json` → **1.2.20**
+
+## Quy tắc
+
+- Không commit `.env`, `data`, token, App Secret, `keys/license-private.pem`, `keys/issued`, `Luu-Tru-Ban-Cu`, EXE/ZIP binary lớn (gitignore).
+- Asset khách: `FB-Page-Studio-Desktop-vX.Y.Z.exe` (+ optional `FB-Page-Studio-vX.Y.Z-Windows.zip`).
+- Updater ưu tiên asset **đúng version**, không dùng EXE generic làm nguồn chính trên Release.
+
+## Build & đóng gói
 
 ```powershell
 cd D:\fb-page-poster
+npm test
+npm run build:desktop
+npm run pack:all
+npm run release:asset
+npm run release:verify
+```
+
+`release:verify` phải PASS trước khi upload.
+
+## Commit + push
+
+```powershell
+$version = (Get-Content package.json | ConvertFrom-Json).version
 git add -A
 git status
-git commit -m "v1.2.0 multi-app rotation license docs"
+git commit -m "v$version: customer zip, admin pack, retry fails, active-times fallback"
 git push origin main
 ```
 
-> **Không** commit: `.env`, `data/`, `keys/license-private.pem`, `keys/issued/`, token, dist nặng.
-
-## 2. Test trước release
+## Tag + Release
 
 ```powershell
-node scripts/test-requirements.mjs
-# + CHECK-BUG.md
+$version = (Get-Content package.json | ConvertFrom-Json).version
+git tag "v$version"
+git push origin "v$version"
+
+gh release create "v$version" `
+  --title "FB Page Studio v$version" `
+  --notes-file - `
+  "release-assets/FB-Page-Studio-Desktop-v$version.exe" `
+  "release-assets/FB-Page-Studio-Desktop-v$version.exe.sha256.txt" `
+  "release-assets/FB-Page-Studio-v$version-Windows.zip" `
+  "release-assets/FB-Page-Studio-v$version-Windows.zip.sha256.txt"
 ```
 
-## 3. Build desktop
+Hoặc notes ngắn:
 
 ```powershell
-npm install
-npm run build:desktop
-# → dist-desktop/FB-Page-Studio-Desktop.exe (tên theo electron-builder.yml)
+gh release create "v1.2.20" --title "FB Page Studio v1.2.20" --notes "Portable EXE + Windows ZIP. License, Direct Local, retry failed jobs, preferred hours, ngrok domain qgroup.ngrok.app." --latest release-assets/*
 ```
 
-Hoặc portable server cũ:
+## Sau phát hành
 
-```powershell
-npm run build:exe
-```
-
-## 4. GitHub Release
-
-1. Releases → **Draft a new release**  
-2. Tag: `v1.2.0` (= version package.json)  
-3. Title: `FB Page Studio v1.2.0`  
-4. Upload exe — tên asset khớp `updateAsset` trong package.json  
-5. Changelog ngắn: multi-app, rotation, license  
-
-## 5. Cập nhật trong app (tự thông báo)
-
-App **tự check** GitHub Releases khi mở + mỗi 4 giờ:
-
-- Banner vàng: **Có phiên bản mới** → **Cập nhật ngay**
-- Nút topbar `v1.2.0↑ v1.2.1` (nhấp nháy) → bấm = tải + restart
-
-`.env` cạnh exe (optional — đã có default trong code):
-
-```env
-GITHUB_REPO=trumrename/fb-page-studio
-UPDATE_ASSET=FB-Page-Studio-Desktop.exe
-```
-
-**Release bắt buộc có file .exe** tên `FB-Page-Studio-Desktop.exe` (hoặc bất kỳ `.exe` Page Studio).  
-Nếu chỉ tạo tag không upload exe → app báo có bản mới nhưng không auto-cài (mở link GitHub).
-
-```powershell
-npm run build:desktop
-# Upload dist-desktop-oauth\FB-Page-Studio-Desktop.exe vào Release
-gh release upload v1.2.1 "dist-desktop-oauth\FB-Page-Studio-Desktop.exe" --clobber
-```
-
-## 6. License khi ship
-
-- User trial 7 ngày (hoặc cấp key)  
-- Bạn giữ `keys/license-private.pem` offline  
-- Hướng dẫn: `LICENSE-KEYS.md`  
-
-
-App sẽ:
-
-1. Gọi GitHub API `releases/latest`  
-2. So sánh version  
-3. Tải `.exe` mới → thay file → tự mở lại  
-
-## 6. Phát hành bản mới sau này
-
-```powershell
-# Sửa code xong
-# Bump version trong package.json → 1.0.1
-npm run build:exe
-git add . && git commit -m "v1.0.1" && git push
-# GitHub Release tag v1.0.1 + upload FB-Page-Studio.exe mới
-```
-
-User chỉ cần bấm **Cập nhật** trong app.
-
-## 7. Chạy portable
-
-```
-folder/
-  FB-Page-Studio.exe
-  .env                 ← copy từ .env.example, điền FB + GITHUB_REPO
-  data/                ← tự tạo (db, media, exports)
-```
-
-Double-click exe → mở http://localhost:3847  
-
-## Lưu ý bảo mật
-
-- Không đưa `FB_APP_SECRET` lên GitHub  
-- `TOKEN_ENCRYPTION_KEY` nên random riêng mỗi máy  
-- Release Public: ai cũng tải được exe (không kèm secret)  
+- Mở Release → đúng asset versioned  
+- Máy test: `/api/update/check` thấy `1.2.20`  
+- Cập nhật in-app: giữ data + license  

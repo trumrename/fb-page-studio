@@ -60,6 +60,24 @@ function migrate(database) {
       state TEXT PRIMARY KEY,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- Durable UI/workspace state. This is intentionally stored in SQLite
+    -- instead of browser localStorage so selections survive page reloads,
+    -- Electron restarts and customer EXE updates that keep the data folder.
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- One sequential caption cursor per shared caption pool. Pages using the
+    -- same folder must not all restart at caption #1.
+    CREATE TABLE IF NOT EXISTS caption_pool_state (
+      pool_key TEXT PRIMARY KEY,
+      source_label TEXT,
+      next_slot_index INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // Incremental columns for page enrichment (safe on existing DBs)
@@ -138,6 +156,9 @@ function migrate(database) {
       media_folder TEXT,
       posted_folder TEXT,
       captions_folder TEXT,
+      active_hours_json TEXT,
+      active_hours_at TEXT,
+      preferred_hours_json TEXT,
       captions_json TEXT NOT NULL DEFAULT '[]',
       pick_mode TEXT NOT NULL DEFAULT 'sequential',
       comment_enabled INTEGER NOT NULL DEFAULT 0,
@@ -168,6 +189,7 @@ function migrate(database) {
       error TEXT,
       comment_text TEXT,
       comment_id TEXT,
+      scheduled_publish_time TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 

@@ -4,17 +4,19 @@
  *   node scripts/sync-customer-pack.mjs
  *
  * Copy:
- *  - FB-Page-Studio-Desktop.exe (nếu có)
+ *  - FB-Page-Studio-Desktop-vX.Y.Z.exe (nếu có)
  *  - .env.example, README-KHACH, VERSION
  * Không copy: .env secret, private key, data/, source
  */
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const out = path.join(root, "pack-customer");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const customerAssetName = `FB-Page-Studio-Desktop-v${pkg.version}.exe`;
 
 const exeCandidates = [
   path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe"),
@@ -51,7 +53,7 @@ fs.writeFileSync(
     `version=${pkg.version}`,
     `built_at=${new Date().toISOString()}`,
     `github=${pkg.githubRepo || ""}`,
-    `asset=${pkg.updateAsset || "FB-Page-Studio-Desktop.exe"}`,
+    `asset=${customerAssetName}`,
     ``,
   ].join("\n"),
   "utf8"
@@ -71,11 +73,11 @@ let copiedExe = null;
 for (const c of exeCandidates) {
   if (fs.existsSync(c)) {
     for (const entry of fs.readdirSync(out)) {
-      if (/^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe$/i.test(entry)) {
+      if (/^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe(?:\.sha256\.txt)?$/i.test(entry)) {
         try { fs.unlinkSync(path.join(out, entry)); } catch { /* release gate will catch copy failure */ }
       }
     }
-    const dest = path.join(out, `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
+    const dest = path.join(out, customerAssetName);
     fs.copyFileSync(c, dest);
     copiedExe = dest;
     console.log("Copied exe:", c, "→", dest);
@@ -85,6 +87,13 @@ for (const c of exeCandidates) {
 if (!copiedExe) {
   console.warn(
     "⚠ Chưa có file .exe build. Chạy: npm run build:desktop rồi sync lại."
+  );
+} else {
+  const hash = crypto.createHash("sha256").update(fs.readFileSync(copiedExe)).digest("hex");
+  fs.writeFileSync(
+    path.join(out, `${customerAssetName}.sha256.txt`),
+    `${hash}  ${customerAssetName}\n`,
+    "utf8"
   );
 }
 

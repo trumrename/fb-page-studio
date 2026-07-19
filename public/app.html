@@ -8,13 +8,20 @@
   <style>
     .toast-wrap {
       position: fixed; top: 1rem; right: 1rem; z-index: 100;
-      display: flex; flex-direction: column; gap: .5rem; max-width: 380px;
+      display: flex; flex-direction: column; gap: .5rem; width: min(380px, calc(100vw - 2rem));
+      max-height: calc(100vh - 2rem); overflow: hidden; pointer-events: none;
     }
     .toast {
-      padding: .85rem 1rem; border-radius: 12px; border: 1px solid var(--border);
+      position: relative; padding: .85rem 2.5rem .85rem 1rem; border-radius: 12px; border: 1px solid var(--border);
       background: var(--panel); box-shadow: var(--shadow); animation: in .2s ease;
-      font-size: .88rem;
+      font-size: .88rem; pointer-events: auto;
     }
+    .toast-close {
+      position: absolute; top: .35rem; right: .4rem; width: 1.8rem; height: 1.8rem;
+      padding: 0; border: 0; border-radius: 8px; background: rgba(255,255,255,.08);
+      color: inherit; cursor: pointer; font-size: 1rem; line-height: 1;
+    }
+    .toast-close:hover { background: rgba(255,255,255,.17); }
     .toast.success { border-color: rgba(61,214,140,.4); background: var(--ok-soft); }
     .toast.error { border-color: rgba(255,107,122,.4); background: var(--danger-soft); }
     .toast.warn { border-color: rgba(245,197,66,.4); background: var(--warn-soft); }
@@ -31,8 +38,10 @@
     }
     .progress-big.fail > i { background: linear-gradient(90deg, #ff6b7a, #c44); }
     .progress-big.ok > i { background: linear-gradient(90deg, #3dd68c, #1a9); }
-    .task-row { display: grid; grid-template-columns: 1fr 90px 100px; gap: .5rem; align-items: center;
+    .task-row { display: grid; grid-template-columns: 1fr 90px 110px; gap: .5rem; align-items: start;
       padding: .55rem .35rem; border-bottom: 1px solid var(--border); font-size: .82rem; }
+    .task-row.fail-row { background: rgba(255,107,122,.06); }
+    .task-error { color: #ff8a96; font-size: .78rem; margin-top: .25rem; line-height: 1.35; word-break: break-word; }
     .mini-bar { height: 6px; background: rgba(255,255,255,.06); border-radius: 4px; overflow: hidden; }
     .mini-bar > i { display:block; height:100%; background: var(--accent); }
     .page-card {
@@ -42,6 +51,11 @@
     .page-card.running { border-color: rgba(24,119,242,.45); }
     .page-card.ok { border-color: rgba(61,214,140,.35); }
     .page-card.fail { border-color: rgba(255,107,122,.35); }
+    .page-card.partial { border-color: rgba(255,196,90,.4); }
+    .fail-retry-box {
+      margin-top: .85rem; padding: .75rem .85rem; border-radius: 12px;
+      border: 1px solid rgba(255,107,122,.35); background: rgba(255,107,122,.07);
+    }
     .pct { font-weight: 800; font-variant-numeric: tabular-nums; font-size: 1.1rem; }
     .ops-strip { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.7rem;margin:1rem 0; }
     .ops-card { border:1px solid var(--border);border-radius:14px;padding:.8rem .9rem;background:rgba(255,255,255,.025); }
@@ -205,13 +219,25 @@
                 <button type="button" class="btn-warn btn-sm" id="btnJobPause">⏸ Tạm dừng</button>
                 <button type="button" class="btn-ok btn-sm" id="btnJobResume" style="display:none">▶ Tiếp tục</button>
                 <button type="button" class="btn-danger btn-sm" id="btnJobStop">⏹ Dừng</button>
+                <button type="button" class="btn-primary btn-sm" id="btnRetryAllFailed" style="display:none">↻ Đăng lại tất cả lỗi</button>
+              </div>
+
+              <div id="failRetryPanel" class="fail-retry-box" style="display:none">
+                <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:flex-start;flex-wrap:wrap">
+                  <div>
+                    <b style="color:#ff8a96">Danh sách đăng lỗi</b>
+                    <div class="muted" style="font-size:.78rem;margin-top:.2rem" id="failRetrySummary">—</div>
+                  </div>
+                  <button type="button" class="btn-primary btn-sm" id="btnRetryAllFailed2">↻ Đăng lại tất cả lỗi</button>
+                </div>
+                <div id="failRetryList" style="margin-top:.55rem;max-height:220px;overflow:auto"></div>
               </div>
 
               <h3 style="font-size:.85rem;margin:1rem 0 .5rem;color:var(--muted)">Theo page</h3>
               <div id="pageProgress"><p class="muted">Chọn page và bấm chạy.</p></div>
 
               <h3 style="font-size:.85rem;margin:1rem 0 .5rem;color:var(--muted)">Từng nhiệm vụ</h3>
-              <div id="taskList" style="max-height:240px;overflow:auto"></div>
+              <div id="taskList" style="max-height:280px;overflow:auto"></div>
             </div>
           </section>
         </div>
@@ -266,11 +292,30 @@
   <script src="/js/update.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
+    function setText(id, text) {
+      const el = typeof id === "string" ? $(id) : id;
+      if (el) el.textContent = text == null ? "" : String(text);
+    }
+    function setHtml(id, html) {
+      const el = typeof id === "string" ? $(id) : id;
+      if (el) el.innerHTML = html == null ? "" : String(html);
+    }
+    function setClass(id, className) {
+      const el = typeof id === "string" ? $(id) : id;
+      if (el) el.className = className;
+    }
+    function setStyle(id, prop, value) {
+      const el = typeof id === "string" ? $(id) : id;
+      if (el?.style) el.style[prop] = value;
+    }
     let pages = [];
     let currentJobId = null;
     let pollTimer = null;
     let jobsTimer = null;
     let seenNotifs = new Set();
+    const hydratedNotificationJobs = new Set();
+    let lastJobErrorToastAt = 0;
+    let lastJobErrorMsg = "";
 
     async function api(path, opts) {
       const res = await fetch(path, {
@@ -325,11 +370,26 @@
     }
 
     function toast(level, title, body) {
+      const wrap = $("toasts");
+      if (!wrap) return;
+      while (wrap.children.length >= 3) wrap.firstElementChild?.remove();
       const el = document.createElement("div");
       el.className = "toast " + (level === "error" ? "error" : level === "warn" ? "warn" : level === "info" ? "info" : "success");
-      el.innerHTML = `<b>${esc(title)}</b><div class="muted" style="margin-top:.25rem;color:inherit;opacity:.9">${esc(body || "")}</div>`;
-      $("toasts").appendChild(el);
-      setTimeout(() => el.remove(), 7000);
+      el.setAttribute("role", "status");
+      el.innerHTML = `<button type="button" class="toast-close" aria-label="Đóng thông báo">×</button><b>${esc(title)}</b><div class="muted" style="margin-top:.25rem;color:inherit;opacity:.9">${esc(body || "")}</div>`;
+      el.querySelector(".toast-close")?.addEventListener("click", () => el.remove());
+      wrap.appendChild(el);
+      setTimeout(() => el.remove(), level === "error" ? 9000 : 5500);
+    }
+
+    function toastJobError(msg) {
+      const text = String(msg || "unknown");
+      const now = Date.now();
+      // Poll job mỗi 800ms — không spam cùng lỗi DOM/API
+      if (text === lastJobErrorMsg && now - lastJobErrorToastAt < 12000) return;
+      lastJobErrorMsg = text;
+      lastJobErrorToastAt = now;
+      toast("error", "Job error", text);
     }
 
     function selectedIds() {
@@ -402,9 +462,9 @@
         const strategy = s.app_rotation_mode === "interleave_apps" ? "Hai App so le" : "Chạy lần lượt từng App";
         const perDay = Number(s.posts_per_page_per_day || s.posts_per_day || 0);
         const warning = s.app_rotation_mode === "interleave_apps" && appCount < 2 ? " · ⚠ hiện chỉ có 1 Meta App, sẽ chạy như chế độ 1 App" : "";
-        $("rotationSummary").textContent = `${strategy} · ${perDay || "—"} bài/Page/ngày · chờ task ${s.between_tasks_gap_minutes_min || 12}–${s.between_tasks_gap_minutes_max || 25} phút${warning}`;
+        setText("rotationSummary", `${strategy} · ${perDay || "—"} bài/Page/ngày · chờ task ${s.between_tasks_gap_minutes_min || 12}–${s.between_tasks_gap_minutes_max || 25} phút${warning}`);
       } catch (e) {
-        $("rotationSummary").textContent = "Không đọc được cấu hình rotation: " + e.message;
+        setText("rotationSummary", "Không đọc được cấu hình rotation: " + e.message);
       }
     }
 
@@ -507,81 +567,166 @@
 
     function renderJob(job) {
       if (!job) return;
+      try {
       const p = job.progress || {};
-      $("jobTitle").textContent = job.title || job.id;
-      $("jobPct").textContent = (p.percent || 0) + "%";
-      $("jobStats").textContent = ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}`;
-      $("jobStatus").textContent = statusLabel(job.status);
-      $("jobStatus").className = "badge " + (job.status === "ok" ? "on" : ["fail", "stopped", "interrupted"].includes(job.status) ? "err" : "live");
-      $("jobBarFill").style.width = (p.percent || 0) + "%";
-      const bar = $("jobBar");
-      bar.className = "progress-big " + (job.status === "ok" ? "ok" : ["fail", "stopped", "interrupted"].includes(job.status) ? "fail" : "");
-      $("jobCurrent").textContent = p.current_label || (job.status === "paused" ? "⏸ Đang tạm dừng…" : "—");
+      setText("jobTitle", job.title || job.id);
+      setText("jobPct", (p.percent || 0) + "%");
+      setText("jobStats", ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}`);
+      setText("jobStatus", statusLabel(job.status));
+      setClass("jobStatus", "badge " + (job.status === "ok" ? "on" : ["fail", "stopped", "interrupted"].includes(job.status) ? "err" : "live"));
+      setStyle("jobBarFill", "width", (p.percent || 0) + "%");
+      setClass("jobBar", "progress-big " + (job.status === "ok" ? "ok" : ["fail", "stopped", "interrupted"].includes(job.status) ? "fail" : ""));
+      setText("jobCurrent", p.current_label || (job.status === "paused" ? "⏸ Đang tạm dừng…" : "—"));
+      const finished = ["ok", "fail", "partial", "stopped", "interrupted"].includes(job.status);
+      const failedList = job.failed_tasks || (job.tasks || []).filter((t) => t.status === "fail");
+      const canRetry = finished && failedList.length > 0;
       const ctl = $("jobControls");
       if (ctl) {
         const active = ["running", "paused", "queued"].includes(job.status);
-        ctl.style.display = active || job.status === "stopped" ? "flex" : "none";
+        ctl.style.display = active || job.status === "stopped" || canRetry ? "flex" : "none";
         const pause = $("btnJobPause");
         const resume = $("btnJobResume");
         const stop = $("btnJobStop");
+        const retryAll = $("btnRetryAllFailed");
         if (pause) pause.style.display = job.status === "running" ? "inline-block" : "none";
         if (resume) resume.style.display = job.status === "paused" ? "inline-block" : "none";
         if (stop) stop.style.display = active ? "inline-block" : "none";
+        if (retryAll) retryAll.style.display = canRetry ? "inline-block" : "none";
+      }
+
+      // fail panel
+      const failPanel = $("failRetryPanel");
+      if (failPanel) {
+        if (!canRetry) {
+          failPanel.style.display = "none";
+        } else {
+          failPanel.style.display = "block";
+          setText("failRetrySummary", `${failedList.length} nhiệm vụ lỗi · bấm Đăng lại để chạy lại đúng task đó`);
+          const list = $("failRetryList");
+          if (list) {
+            list.innerHTML = failedList.map((t) => {
+              const err = t.error || t.message || "Thất bại";
+              return `<div style="display:grid;grid-template-columns:1fr auto;gap:.5rem;align-items:start;padding:.45rem 0;border-bottom:1px solid rgba(255,107,122,.2)">
+                <div>
+                  <b>${esc(t.page_name || "—")}</b>
+                  <div class="muted" style="font-size:.75rem">${esc(t.label || t.kind || "")}</div>
+                  <div class="task-error">⚠ ${esc(err)}</div>
+                </div>
+                <button type="button" class="btn-primary btn-sm btn-retry-one" data-task-id="${esc(t.id)}" data-job-id="${esc(job.id)}">↻ Đăng lại</button>
+              </div>`;
+            }).join("");
+            list.querySelectorAll(".btn-retry-one").forEach((btn) => {
+              btn.onclick = () => retryFailedTasks(btn.dataset.jobId, { task_ids: [btn.dataset.taskId] });
+            });
+          }
+        }
       }
 
       // pages
       const pp = $("pageProgress");
-      if (!job.pages?.length) pp.innerHTML = "<p class='muted'>—</p>";
-      else {
-        pp.innerHTML = job.pages.map((pg) => `
-          <div class="page-card ${esc(pg.status)}">
-            <div style="display:flex;justify-content:space-between">
-              <b>${esc(pg.page_name)}</b>
-              <span class="badge">${esc(statusLabel(pg.status))} · ${pg.percent}%</span>
-            </div>
-            <div class="mini-bar" style="margin-top:.4rem"><i style="width:${pg.percent}%"></i></div>
-            <div class="muted" style="margin-top:.3rem;font-size:.75rem">OK ${pg.ok} · FAIL ${pg.fail} · ${pg.done}/${pg.total}</div>
-          </div>
-        `).join("");
+      if (pp) {
+        if (!job.pages?.length) pp.innerHTML = "<p class='muted'>—</p>";
+        else {
+          pp.innerHTML = job.pages.map((pg) => {
+            const errBlock = pg.last_error
+              ? `<div class="task-error" style="margin-top:.35rem">⚠ ${esc(pg.last_error)}</div>`
+              : "";
+            const retryBtn =
+              finished && pg.fail > 0 && pg.page_row_id
+                ? `<button type="button" class="btn-primary btn-sm btn-retry-page" data-page-id="${Number(pg.page_row_id)}" data-job-id="${esc(job.id)}" style="margin-top:.4rem">↻ Đăng lại page này (${pg.fail} lỗi)</button>`
+                : "";
+            return `
+            <div class="page-card ${esc(pg.status)}">
+              <div style="display:flex;justify-content:space-between;gap:.5rem">
+                <b>${esc(pg.page_name)}</b>
+                <span class="badge">${esc(statusLabel(pg.status))} · ${pg.percent}%</span>
+              </div>
+              <div class="mini-bar" style="margin-top:.4rem"><i style="width:${pg.percent}%"></i></div>
+              <div class="muted" style="margin-top:.3rem;font-size:.75rem">OK ${pg.ok} · FAIL ${pg.fail} · ${pg.done}/${pg.total}</div>
+              ${errBlock}
+              ${retryBtn}
+            </div>`;
+          }).join("");
+          pp.querySelectorAll(".btn-retry-page").forEach((btn) => {
+            btn.onclick = () =>
+              retryFailedTasks(btn.dataset.jobId, {
+                page_row_ids: [Number(btn.dataset.pageId)],
+              });
+          });
+        }
       }
 
       // tasks
       const tl = $("taskList");
-      tl.innerHTML = (job.tasks || []).map((t) => `
-        <div class="task-row">
-          <div>
-            <b>${esc(t.page_name)}</b>
-            <div class="muted">${esc(t.label)} · ${esc(t.message || "")}</div>
-          </div>
-          <div class="${t.status === "ok" ? "ok" : t.status === "fail" ? "fail" : "muted"}">${esc(statusLabel(t.status))}</div>
-          <div>
-            <div class="mini-bar"><i style="width:${t.percent || 0}%"></i></div>
-            <div class="muted" style="font-size:.7rem;margin-top:.15rem">${t.percent || 0}%</div>
-          </div>
-        </div>
-      `).join("");
+      if (tl) {
+        tl.innerHTML = (job.tasks || []).map((t) => {
+          const isFail = t.status === "fail";
+          const err = isFail ? (t.error || t.message || "Thất bại") : "";
+          const retryBtn =
+            finished && isFail
+              ? `<button type="button" class="btn-primary btn-sm btn-retry-task" data-task-id="${esc(t.id)}" data-job-id="${esc(job.id)}" style="margin-top:.35rem">↻ Đăng lại</button>`
+              : "";
+          return `
+          <div class="task-row ${isFail ? "fail-row" : ""}">
+            <div>
+              <b>${esc(t.page_name)}</b>
+              <div class="muted">${esc(t.label || "")}</div>
+              ${isFail
+                ? `<div class="task-error">⚠ ${esc(err)}</div>${retryBtn}`
+                : `<div class="muted" style="margin-top:.15rem">${esc(t.message || "")}</div>`}
+            </div>
+            <div class="${t.status === "ok" ? "ok" : isFail ? "fail" : "muted"}">${esc(statusLabel(t.status))}</div>
+            <div>
+              <div class="mini-bar"><i style="width:${t.percent || 0}%"></i></div>
+              <div class="muted" style="font-size:.7rem;margin-top:.15rem">${t.percent || 0}%</div>
+            </div>
+          </div>`;
+        }).join("");
+        tl.querySelectorAll(".btn-retry-task").forEach((btn) => {
+          btn.onclick = () => retryFailedTasks(btn.dataset.jobId, { task_ids: [btn.dataset.taskId] });
+        });
+      }
 
-      // notifications → toasts once
-      for (const n of job.notifications || []) {
-        if (seenNotifs.has(n.id)) continue;
-        seenNotifs.add(n.id);
-        toast(n.level === "error" ? "error" : n.level === "warn" ? "warn" : "success", n.title, n.body);
+      // Detailed notifications stay in the panel. Popups only show genuinely
+      // new updates, are batched, capped at 3 and never replay old history.
+      const notifications = job.notifications || [];
+      if (!hydratedNotificationJobs.has(job.id)) {
+        notifications.forEach((n) => seenNotifs.add(n.id));
+        hydratedNotificationJobs.add(job.id);
+      } else {
+        const fresh = notifications.filter((n) => !seenNotifs.has(n.id));
+        fresh.forEach((n) => seenNotifs.add(n.id));
+        if (fresh.length > 3) {
+          const errors = fresh.filter((n) => n.level === "error").length;
+          const successes = fresh.filter((n) => n.level === "success").length;
+          toast(
+            errors ? "error" : "success",
+            `${fresh.length} cập nhật mới`,
+            `OK ${successes} · FAIL ${errors}. Xem chi tiết trong bảng Thông báo bên dưới.`
+          );
+        } else {
+          for (const n of fresh.slice(0, 3).reverse()) {
+            toast(n.level === "error" ? "error" : n.level === "warn" ? "warn" : "success", n.title, n.body);
+          }
+        }
       }
 
       const box = $("notifs");
-      if (!job.notifications?.length) box.innerHTML = "<p class='muted'>—</p>";
-      else {
-        box.innerHTML = job.notifications.map((n) => `
-          <div style="padding:.45rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
-            <span class="${n.level === "error" ? "fail" : n.level === "success" ? "ok" : "muted"}">[${esc(n.level)}]</span>
-            <b>${esc(n.title)}</b>
-            <div class="muted">${esc(n.body)} · ${esc(fmtVn(n.at))} giờ VN</div>
-          </div>
-        `).join("");
+      if (box) {
+        if (!notifications.length) box.innerHTML = "<p class='muted'>—</p>";
+        else {
+          box.innerHTML = notifications.map((n) => `
+            <div style="padding:.45rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
+              <span class="${n.level === "error" ? "fail" : n.level === "success" ? "ok" : "muted"}">[${esc(n.level)}]</span>
+              <b>${esc(n.title)}</b>
+              <div class="muted">${esc(n.body)} · ${esc(fmtVn(n.at))} giờ VN</div>
+            </div>
+          `).join("");
+        }
       }
 
       if (job.report_files?.length) {
-        $("reportPath").textContent = "Đã ghi: " + job.report_files.map((f) => f.split(/[/\\]/).pop()).join(", ");
+        setText("reportPath", "Đã ghi: " + job.report_files.map((f) => f.split(/[/\\]/).pop()).join(", "));
       }
 
       if (["ok", "fail", "partial", "stopped", "interrupted"].includes(job.status)) {
@@ -590,27 +735,56 @@
         loadLogs();
       }
       const active = ["running", "paused", "queued"].includes(job.status);
-      $("opsState").textContent = active ? (job.status === "paused" ? "Tạm dừng" : "Đang chạy") : "Sẵn sàng";
+      setText("opsState", active ? (job.status === "paused" ? "Tạm dừng" : "Đang chạy") : "Sẵn sàng");
+      } catch (e) {
+        console.warn("[renderJob]", e);
+        toastJobError(e.message || String(e));
+      }
     }
+
+    async function retryFailedTasks(jobId, filters = {}) {
+      const id = jobId || currentJobId;
+      if (!id) return toast("error", "Retry", "Chưa có job");
+      const n =
+        (filters.task_ids && filters.task_ids.length) ||
+        (filters.page_row_ids && filters.page_row_ids.length) ||
+        "tất cả";
+      if (!confirm(`Đăng lại ${n === "tất cả" ? "tất cả nhiệm vụ lỗi" : n + " mục lỗi"} của job này?`)) return;
+      try {
+        const r = await api("/api/jobs/" + id + "/retry-failed", {
+          method: "POST",
+          body: JSON.stringify(filters),
+        });
+        toast("success", "Đăng lại", r.job?.title || "Đã tạo job retry");
+        if (r.job?.id) watchJob(r.job.id);
+      } catch (e) {
+        toast("error", "Đăng lại thất bại", e.message);
+      }
+    }
+
+    $("btnRetryAllFailed")?.addEventListener("click", () => retryFailedTasks(currentJobId, {}));
+    $("btnRetryAllFailed2")?.addEventListener("click", () => retryFailedTasks(currentJobId, {}));
 
     async function watchJob(id) {
       if (!id) return;
       if (currentJobId === id && pollTimer) return;
       currentJobId = id;
-      seenNotifs = new Set();
       clearInterval(pollTimer);
       const pull = async () => {
         try {
           const data = await api("/api/jobs/" + id);
           renderJob(data.job);
           if (data.reports) {
-            $("reportPath").textContent =
+            setText(
+              "reportPath",
               (data.reports.csv_exists ? "CSV ✓ " : "CSV — ") +
-              (data.reports.xlsx_exists ? "Excel ✓" : "Excel — ") +
-              " · " + (data.reports.dir || "");
+                (data.reports.xlsx_exists ? "Excel ✓" : "Excel — ") +
+                " · " +
+                (data.reports.dir || "")
+            );
           }
         } catch (e) {
-          toast("error", "Job error", e.message);
+          toastJobError(e.message);
         }
       };
       await pull();
@@ -627,11 +801,11 @@
           await watchJob(target.id);
           toast(active ? "info" : "success", active ? "Đã phát hiện job đang chạy" : "Đã tải job gần nhất", target.title || target.id);
         } else if (!target && !currentJobId) {
-          $("opsState").textContent = "Sẵn sàng";
-          $("jobCurrent").textContent = "Không có job trong bộ nhớ. Hoạt động gần đây vẫn hiển thị ở báo cáo bên dưới.";
+          setText("opsState", "Sẵn sàng");
+          setText("jobCurrent", "Không có job trong bộ nhớ. Hoạt động gần đây vẫn hiển thị ở báo cáo bên dưới.");
         }
       } catch (e) {
-        $("opsState").textContent = "Mất kết nối";
+        setText("opsState", "Mất kết nối");
         toast("error", "Không đọc được tiến trình", e.message);
       }
     }
@@ -642,13 +816,16 @@
         const s = r.scheduler || {};
         const h = r.config_health || {};
         const enabled = Number(s.enabled_pages || 0);
-        $("opsScheduler").textContent = s.running ? `Đang quét ${enabled} Page` : enabled ? `${enabled} Page ON` : "0 Page ON";
-        $("opsScheduler").className = enabled ? "ok" : "";
+        setText("opsScheduler", s.running ? `Đang quét ${enabled} Page` : enabled ? `${enabled} Page ON` : "0 Page ON");
+        setClass("opsScheduler", enabled ? "ok" : "");
         if (!currentJobId) {
-          $("opsState").textContent = s.running ? "Scheduler đang chạy" : enabled ? "Đang chờ lượt quét" : "Chưa bật Page";
-          $("jobCurrent").textContent = enabled
-            ? `Scheduler quét mỗi ${Math.round((s.interval_ms || 60000) / 1000)} giây · lượt gần nhất: ${fmtVn(s.last_finished_at)}`
-            : "Tool đang mở nhưng chưa có Page bật Auto scheduler. Vào Cấu hình Page, bật Auto scheduler và lưu.";
+          setText("opsState", s.running ? "Scheduler đang chạy" : enabled ? "Đang chờ lượt quét" : "Chưa bật Page");
+          setText(
+            "jobCurrent",
+            enabled
+              ? `Scheduler quét mỗi ${Math.round((s.interval_ms || 60000) / 1000)} giây · lượt gần nhất: ${fmtVn(s.last_finished_at)}`
+              : "Tool đang mở nhưng chưa có Page bật Auto scheduler. Vào Cấu hình Page, bật Auto scheduler và lưu."
+          );
         }
         if (s.last_error) toast("error", "Scheduler lỗi", s.last_error);
         const health = $("configHealth");
@@ -660,7 +837,7 @@
             : `<b>Kho nội dung đã đầy đủ:</b> ${h.ready_pages || 0}/${h.total_pages || 0} Page có Media, Caption và Posted hợp lệ.`;
         }
       } catch (e) {
-        $("opsScheduler").textContent = "Mất kết nối";
+        setText("opsScheduler", "Mất kết nối");
       }
     }
 
@@ -715,9 +892,10 @@
         const todayLogs = (data.logs || []).filter((l) => vnDateKey(l.created_at) === today);
         const good = todayLogs.filter((l) => ["ok", "published", "ok_comment_failed"].includes(l.status) || (l.status === "scheduled" && scheduleDisplay(l).future)).length;
         const bad = todayLogs.filter((l) => ["fail", "schedule_fail", "schedule_overdue"].includes(l.status)).length;
-        $("opsToday").textContent = String(todayLogs.length);
-        $("opsSuccess").textContent = String(good);
-        $("opsFail").textContent = String(bad);
+        setText("opsToday", String(todayLogs.length));
+        setText("opsSuccess", String(good));
+        setText("opsFail", String(bad));
+        if (!tb) return;
         if (!data.logs?.length) {
           tb.innerHTML = `<tr><td colspan="7" class="muted">Chưa có log</td></tr>`;
           return;
@@ -741,17 +919,17 @@
       }
     }
 
-    $("btnAll").onclick = () => document.querySelectorAll(".pg").forEach((c) => (c.checked = true));
-    $("btnNone").onclick = () => document.querySelectorAll(".pg").forEach((c) => (c.checked = false));
-    $("btnPost").onclick = runPost;
-    $("btnSched").onclick = runSched;
+    if ($("btnAll")) $("btnAll").onclick = () => document.querySelectorAll(".pg").forEach((c) => (c.checked = true));
+    if ($("btnNone")) $("btnNone").onclick = () => document.querySelectorAll(".pg").forEach((c) => (c.checked = false));
+    if ($("btnPost")) $("btnPost").onclick = runPost;
+    if ($("btnSched")) $("btnSched").onclick = runSched;
 
     Promise.all([api("/api/version"), api("/auth/apps"), api("/api/posting/pages")]).then(([v, apps, pg]) => {
-      $("appVer").textContent = "v" + v.version;
-      $("heroMeta").textContent = `FB Page Studio · ${(apps.apps || []).length} Meta App · ${(pg.pages || []).length} Page`;
+      setText("appVer", "v" + v.version);
+      setText("heroMeta", `FB Page Studio · ${(apps.apps || []).length} Meta App · ${(pg.pages || []).length} Page`);
     }).catch((e) => toast("warn", "Thông tin hệ thống", e.message));
     api("/api/jobs/reports/info").then((r) => {
-      $("reportPath").textContent = r.dir || "data/exports";
+      setText("reportPath", r.dir || "data/exports");
     }).catch(() => {});
 
     loadPages().then(loadLogs).then(discoverJobs).then(loadRuntime).then(loadRotationSummary).catch((e) => toast("error", "Lỗi dashboard", e.message));

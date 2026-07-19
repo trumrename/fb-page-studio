@@ -19,7 +19,11 @@ import {
   getLicenseStatus,
   ensureLicenseAfterUpdate,
 } from "./services/license.js";
-import { startNgrok, stopNgrok } from "./services/ngrokManager.js";
+import {
+  startNgrok,
+  stopNgrok,
+  ensureNgrokTokenFromSystem,
+} from "./services/ngrokManager.js";
 
 const app = express();
 const publicDir = getPublicDir();
@@ -32,6 +36,12 @@ try {
   ensureLicenseAfterUpdate();
 } catch (e) {
   console.warn("[license] ensure after update:", e.message);
+}
+// Admin/dev machines often have token only in system ngrok.yml
+try {
+  ensureNgrokTokenFromSystem();
+} catch (e) {
+  console.warn("[ngrok] bootstrap token:", e.message);
 }
 const dataRoot = config.dataDir || path.dirname(config.databasePath);
 fs.mkdirSync(path.join(dataRoot, "media", "inbox"), { recursive: true });

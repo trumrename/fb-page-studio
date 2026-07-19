@@ -1,7 +1,7 @@
-# PACK DEV — Máy của bạn (nguồn gốc)
+# PACK DEV — Máy admin / lập trình
 
-> **Đây là gói / quy ước cho MÁY LẬP TRÌNH.**  
-> Không zip cả folder này gửi khách.
+> **Không zip cả folder này gửi khách.**  
+> Gửi khách dùng `pack-customer\` hoặc ZIP `FB-Page-Studio-vX.Y.Z-Windows.zip`.
 
 ## Đường dẫn gốc
 
@@ -9,63 +9,51 @@
 D:\fb-page-poster\
 ```
 
-Đây là **file gốc** duy nhất để code, fix, build, cấp license.
+| Thành phần | Đường dẫn |
+|------------|-----------|
+| Source | `src\` · `public\` · `electron\` |
+| Private key cấp license | `keys\license-private.pem` (**không ship**) |
+| Key đã cấp | `keys\issued\` |
+| `.env` Meta | `.env` / `FB-Page-Studio-App\.env` |
+| DB / token | `data\` · `FB-Page-Studio-App\data\` |
+| Build | `dist-desktop-oauth\` |
+| Gói khách | `pack-customer\` |
+| **Admin menu** | `Admin-Quan-Ly\MENU-ADMIN.bat` |
+| **Lưu trữ bản cũ** | `Luu-Tru-Ban-Cu\` |
 
-| Thành phần | Đường dẫn | Ghi chú |
-|------------|-----------|---------|
-| Source code | `D:\fb-page-poster\src\` | Backend |
-| UI | `D:\fb-page-poster\public\` | HTML/CSS/JS |
-| Electron | `D:\fb-page-poster\electron\` | Desktop shell |
-| Private license key | `D:\fb-page-poster\keys\license-private.pem` | **TUYỆT ĐỐI không gửi / không GH** |
-| Key đã cấp | `D:\fb-page-poster\keys\issued\` | Nội bộ |
-| `.env` Meta App | `D:\fb-page-poster\.env` | App ID/Secret của bạn |
-| DB dev | `D:\fb-page-poster\data\` | Token test — không ship |
-| Docs | `TONG-QUAN.md` · `TIEN-DO.md` · `CHECK-BUG.md` | |
-| Build output | `dist-desktop-oauth\` · `dist-desktop\` | Sau `npm run build:desktop` |
-
-## Chỉ có trên máy DEV (không đưa khách)
-
-- `keys/license-private.pem`
-- `keys/issued/*`
-- `.env` (secret thật)
-- `data/app.db` có token FB
-- Toàn bộ source + `node_modules`
-- Script `scripts/gen-license.mjs` (có thể giữ source trên GH nhưng private key thì không)
-
-## Việc làm hàng ngày trên DEV
+## Việc hàng ngày
 
 ```powershell
 cd D:\fb-page-poster
-npm start                    # chạy dev
-npm test                     # rebuild native + chạy toàn bộ kiểm thử
-node scripts/gen-license.mjs --type commercial --holder "KH" --days 365
-npm run build:desktop        # build exe
-node scripts/sync-customer-pack.mjs   # đổ exe + file an toàn sang pack-customer
+npm test
+npm run build:desktop
+npm run pack:all              # customer + dev + ZIP khách
+npm run release:asset
+npm run release:verify
+
+# Cấp key
+npm run license:gen -- --type commercial --holder "KH" --days 365
+npm run license:list
+# hoặc double-click Admin-Quan-Ly\MENU-ADMIN.bat
 ```
 
-## Trạng thái bản v1.2.7
+## v1.2.20 (hiện tại)
 
-- Workspace UI đã tách rõ theo quy trình vận hành.
-- Rotation hỗ trợ từng App và hai App so le; job tuần tự, có tiến trình và thông báo.
-- Có khóa theo Page, khóa scheduler và lưu trạng thái job sau restart.
-- Bài hẹn Facebook được đối soát tự động mỗi 5 phút.
-- Báo cáo ngày nằm trong `data\exports\daily`: Page theo App, lịch sử đăng và follower 1/3/7/30 ngày.
-- Tác vụ cuối ngày chạy theo giờ Việt Nam lúc 23:59.
-- Khi follower trống, kiểm tra token có `pages_show_list`, `pages_read_engagement` và quyền Page tương ứng.
-- Media chọn random có khoảng cách với các lần chọn gần nhất; caption đi lần lượt hết kho rồi trộn cho vòng sau.
-- Màn Connect có Setup domain OAuth, tự ghi callback vào `.env` và đưa lệnh Ngrok cho từng máy.
-- Màn Connect có chọn Chrome Profile để OAuth dùng đúng session Facebook đã login.
-- Đổi Chrome Profile áp dụng ngay cho Connect tiếp theo, không cần restart desktop.
-- Updater tải EXE trực tiếp trong UI có tiến trình; Electron nhả file trước khi thay tại chỗ.
+- License commercial trên máy admin; trial chỉ khi chưa có key
+- Direct Local vs Hẹn giờ Facebook tách rõ
+- Retry task lỗi từ tiến trình job
+- Active times: preferred/preset (Meta deprecate page_fans_online)
+- Ngrok token import từ hệ thống; domain busy có hướng dẫn dashboard
+- Gói khách sạch + ZIP Windows
 
-## Quy tắc với AI / khi fix
+## Quy tắc
 
-1. **Sửa code** trong `D:\fb-page-poster` (gốc).  
-2. **Build xong** → chạy `sync-customer-pack` để cập nhật `pack-customer\`.  
-3. **Không** tự `git push` / tạo Release GH — **hỏi bạn trước**.  
-4. Sau khi bạn OK mới push + upload exe lên Release.
+1. Sửa code ở project root  
+2. Build → `pack:all`  
+3. **Push / Release GH** chỉ khi được đồng ý (lần này user đã yêu cầu)  
+4. Không commit `.env`, `data`, private key, `Luu-Tru-Ban-Cu`, EXE lớn
 
 ## GitHub
 
 - Repo: https://github.com/trumrename/fb-page-studio  
-- Code public/private theo repo — **private key không bao giờ commit**  
+- Asset khách: `FB-Page-Studio-Desktop-vX.Y.Z.exe` + optional ZIP  

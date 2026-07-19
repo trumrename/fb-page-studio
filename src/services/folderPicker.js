@@ -1,6 +1,6 @@
 /**
- * Explorer-style folder picker for selecting media/caption libraries.
- * Works from Node server (including Electron child process).
+ * Explorer-style fallback folder picker for browser/server mode.
+ * Electron uses dialog.showOpenDialog through the preload bridge.
  */
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -21,17 +21,26 @@ export async function pickFolder(opts = {}) {
 
   if (process.platform === "win32") {
     const initLine = initial
-      ? `$f.SelectedPath = '${initial.replace(/'/g, "''")}';`
+      ? `$f.InitialDirectory = '${initial.replace(/'/g, "''")}';`
       : "";
     const ps = [
       "Add-Type -AssemblyName System.Windows.Forms | Out-Null",
-      "$f = New-Object System.Windows.Forms.FolderBrowserDialog",
-      `$f.Description = '${title}'`,
-      "$f.UseDescriptionForTitle = $true",
-      "$f.ShowNewFolderButton = $false",
+      "$f = New-Object System.Windows.Forms.OpenFileDialog",
+      `$f.Title = '${title}'`,
+      "$f.Filter = 'Thư mục|*.folder'",
+      "$f.CheckFileExists = $false",
+      "$f.CheckPathExists = $true",
+      "$f.ValidateNames = $false",
+      "$f.Multiselect = $false",
+      "$f.RestoreDirectory = $true",
+      "$f.FileName = 'Chọn thư mục này'",
       initLine,
       "$r = $f.ShowDialog()",
-      "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }",
+      "if ($r -eq [System.Windows.Forms.DialogResult]::OK) {",
+      "  $picked = $f.FileName",
+      "  if (Test-Path -LiteralPath $picked -PathType Container) { Write-Output $picked }",
+      "  else { Write-Output ([System.IO.Path]::GetDirectoryName($picked)) }",
+      "}",
     ]
       .filter(Boolean)
       .join("; ");
@@ -50,6 +59,6 @@ export async function pickFolder(opts = {}) {
     }
   }
 
-  // Non-Windows: return null — UI keeps manual path
+  // Non-Windows: UI keeps manual path.
   throw new Error("Chọn thư mục GUI hiện hỗ trợ Windows. Gõ đường dẫn tay.");
 }

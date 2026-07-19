@@ -26,6 +26,7 @@ import {
 } from "./antiSpam.js";
 import { listMetaAppsPublic } from "./metaApps.js";
 import { getPagePostConfig, getCaptionStats } from "./poster.js";
+import { captionPoolIdentity } from "./captionPoolState.js";
 
 const SETTINGS_FILE = () =>
   path.join(config.dataDir || path.dirname(config.databasePath), "rotation_settings.json");
@@ -196,22 +197,46 @@ export function normalizeSettings(s) {
     : [];
 
   if (Array.isArray(out.windows) && out.windows.length) {
-    out.windows = out.windows
-      .map((w) => ({
-        name: String(w.name || "Khung"),
-        start: String(w.start || "08:00"),
-        end: String(w.end || "12:00"),
-        posts: clamp(Number(w.posts) || 0, 0, 12),
-      }))
-      .filter((w) => parseHm(w.start) != null && parseHm(w.end) != null);
+    const rawWindows = out.windows;
+    out.windows = rawWindows.map((w) => ({
+      name: String(w?.name || "Khung").trim() || "Khung",
+      start: String(w?.start || "").trim(),
+      end: String(w?.end || "").trim(),
+      posts: Number(w?.posts),
+    }));
+    if (out.mode === "windows") {
+      const invalid = out.windows.find(
+        (w) =>
+          parseHm(w.start) == null ||
+          parseHm(w.end) == null ||
+          !Number.isInteger(w.posts) ||
+          w.posts < 1 ||
+          w.posts > 12
+      );
+      if (invalid) {
+        throw new Error(
+          `Khung giờ không hợp lệ: ${invalid.name} | ${invalid.start} | ${invalid.end} | ${invalid.posts}. ` +
+            "Mỗi dòng cần giờ HH:mm và số bài nguyên từ 1 đến 12."
+        );
+      }
+    } else {
+      out.windows = out.windows.filter(
+        (w) => parseHm(w.start) != null && parseHm(w.end) != null && Number.isFinite(w.posts)
+      );
+    }
   } else {
+    if (out.mode === "windows") {
+      throw new Error("Chế độ khung giờ cần ít nhất một dòng: tên | HH:mm | HH:mm | số bài.");
+    }
     out.windows = DEFAULT_ROTATION.windows.map((w) => ({ ...w }));
   }
 
-  // Sync posts count from windows if windows mode
+  // Facebook-window mode has one authoritative count: the sum of its rows.
+  // Direct-local mode supplies its own count separately in buildRunNowPlan().
   if (out.mode === "windows") {
     const sum = out.windows.reduce((n, w) => n + (w.posts || 0), 0);
-    if (sum > 0) out.posts_per_page_per_day = sum;
+    if (sum < 1) throw new Error("Tổng số bài trong các khung giờ phải lớn hơn 0.");
+    out.posts_per_page_per_day = sum;
   }
 
   out.fixed_gap = {
@@ -658,7 +683,8 @@ export function buildRotationPlan(inputSettings = {}) {
 }
 
 /**
- * Plan "run now": round 1 publishes immediately; later rounds are scheduled.
+ * Plan local direct posting: first task is due now; later tasks wait inside the
+ * running tool and publish directly when their local due time arrives.
  * Order per round depends on app_rotation_mode:
  * - per_app: app → page → admin
  * - interleave_apps: page → admin → app
@@ -795,28 +821,42 @@ export function buildRunNowPlan(inputSettings = {}) {
     warnings.push(`Lịch vượt sang ngày kế tiếp từ vòng ${overflowSlots[0].post_round} (${overflowSlots[0].page_name}); ngày/giờ đã hiển thị đầy đủ trong preview.`);
   }
 
-  // Media requirement by shared folder + type. This prevents multiple pages
-  // from all assuming the same files are independently available.
+  // Media/caption requirements are aggregated by shared pool. Multiple Pages
+  // pointing at one caption folder consume one common sequential pool.
   const mediaNeeds = new Map();
   const captionNeeds = new Map();
+  const captionStatsByPool = new Map();
   for (const s of finalSlots) {
     const cfg = pageConfigs.get(s.page_row_id);
     const type = String(s.planned_post_type || "text").toLowerCase();
-    if (type === "text") {
-      if (!captionNeeds.has(s.page_row_id)) {
-        const stats = getCaptionStats(cfg);
-        captionNeeds.set(s.page_row_id, {
-          page_row_id: s.page_row_id,
-          page_name: s.page_name,
-          folder: cfg?.captions_folder || "",
+    const identity = captionPoolIdentity({
+      captionsFolder: cfg?.captions_folder,
+      captions: cfg?.captions,
+      pageRowId: s.page_row_id,
+    });
+    if (!captionStatsByPool.has(identity.key)) {
+      captionStatsByPool.set(identity.key, getCaptionStats(cfg));
+    }
+    const stats = captionStatsByPool.get(identity.key);
+    const captionRequired = type === "text" || Number(stats?.total) > 0;
+    if (captionRequired) {
+      if (!captionNeeds.has(identity.key)) {
+        captionNeeds.set(identity.key, {
+          pool_key: identity.key,
+          page_names: [],
+          folder: cfg?.captions_folder || identity.source,
           required: 0,
-          available: Number(stats?.total) || 0,
+          available: Number(stats?.available ?? stats?.total) || 0,
+          total: Number(stats?.total) || 0,
+          used_recent: Number(stats?.used_recent) || 0,
+          duplicate_window_hours: Number(stats?.duplicate_window_hours) || 0,
         });
       }
-      captionNeeds.get(s.page_row_id).required += 1;
-      continue;
+      const need = captionNeeds.get(identity.key);
+      need.required += 1;
+      if (!need.page_names.includes(s.page_name)) need.page_names.push(s.page_name);
     }
-    if (!["photo", "image", "video"].includes(type)) continue;
+    if (type === "text" || !["photo", "image", "video"].includes(type)) continue;
     const kind = type === "video" ? "video" : "photo";
     const folder = cfg?.media_folder || "";
     const key = `${path.resolve(folder || ".").toLowerCase()}|${kind}`;
@@ -831,7 +871,11 @@ export function buildRunNowPlan(inputSettings = {}) {
   }
   for (const need of captionNeeds.values()) {
     if (need.available < need.required) {
-      blockers.push(`Thiếu caption cho ${need.page_name}: cần ${need.required}, hiện có ${need.available} trong ${need.folder || "(chưa chọn folder)"}`);
+      blockers.push(
+        `Thiếu caption chưa dùng trong kho chung: cần ${need.required}, hiện còn ${need.available}/${need.total} ` +
+          `trong ${need.folder || "(chưa chọn folder)"}. Đã note ${need.used_recent} caption ` +
+          `trong ${need.duplicate_window_hours || 48}h cho ${need.page_names.length} Page.`
+      );
     }
   }
 
@@ -894,7 +938,7 @@ export function buildRunNowPlan(inputSettings = {}) {
     caption_requirements: [...captionNeeds.values()],
     preview_order: finalSlots.map((s) => ({
       order: s.order,
-      label: `Vòng ${s.post_round} · ${s.planned_post_type} · ${s.group_name} · ${s.account_name} · ${s.page_name} · ${s.immediate ? "ĐĂNG NGAY" : s.local_label + " VN"}`,
+      label: `Vòng ${s.post_round} · ${s.planned_post_type} · ${s.group_name} · ${s.account_name} · ${s.page_name} · ${s.immediate ? "ĐĂNG TRỰC TIẾP NGAY" : "TOOL CHỜ → ĐĂNG TRỰC TIẾP " + s.local_label + " VN"}`,
     })),
   };
 }

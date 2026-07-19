@@ -60,11 +60,15 @@ export function getUpdateConfig() {
 }
 
 /** Prefer portable desktop exe, then legacy names, then any .exe */
-export function pickReleaseAsset(assets, preferredName) {
+export function pickReleaseAsset(assets, preferredName, releaseVersion) {
   const list = Array.isArray(assets) ? assets : [];
   if (!list.length) return null;
   const byName = (n) => list.find((a) => a.name === n);
+  const cleanVersion = String(releaseVersion || "").replace(/^v/i, "");
   const prefer = [
+    cleanVersion
+      ? `FB-Page-Studio-Desktop-v${cleanVersion}.exe`
+      : null,
     preferredName,
     "FB-Page-Studio-Desktop.exe",
     "FB-Page-Studio.exe",
@@ -232,7 +236,7 @@ export async function checkForUpdate() {
   const tag = release.tag_name || release.name || "";
   const remoteVersion = String(tag).replace(/^v/i, "");
   const assets = release.assets || [];
-  const asset = pickReleaseAsset(assets, cfg.asset_name);
+  const asset = pickReleaseAsset(assets, cfg.asset_name, remoteVersion);
 
   const newer = isNewerVersion(remoteVersion, cfg.current_version);
 

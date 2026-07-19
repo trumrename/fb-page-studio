@@ -22,6 +22,7 @@ import {
 } from "../services/export.js";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import {
   getLastUsage,
   usageWarning,
@@ -53,6 +54,7 @@ import {
   getDailyReportFile,
 } from "../services/dailyReports.js";
 import { getNgrokStatus, startNgrok, stopNgrok } from "../services/ngrokManager.js";
+import { listMetaAppsPublic } from "../services/metaApps.js";
 
 const router = Router();
 
@@ -82,6 +84,121 @@ function writeEnvValues(envPath, values) {
   fs.mkdirSync(path.dirname(envPath), { recursive: true });
   fs.writeFileSync(envPath, text, "utf8");
 }
+
+function safeEnvLabel(value, fallback) {
+  return String(value || fallback || "")
+    .replace(/[\r\n=]/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+function encryptionKeyReady(value) {
+  const key = String(value || "").trim();
+  return (
+    key.length >= 32 &&
+    !/change-me|doi-chuoi|dev-only/i.test(key)
+  );
+}
+
+function firstRunStatus() {
+  const apps = listMetaAppsPublic();
+  const app1 = apps.find((app) => app.key === "app1") || null;
+  const app2 = apps.find((app) => app.key === "app2") || null;
+  const accountsCount = listAccounts().length;
+  return {
+    ready: Boolean(app1?.configured),
+    env_exists: fs.existsSync(getEnvPath()),
+    env_path: getEnvPath(),
+    accounts_count: accountsCount,
+    encryption_ready: encryptionKeyReady(config.tokenEncryptionKey),
+    app1,
+    app2,
+  };
+}
+
+router.get("/setup/first-run", (_req, res) => {
+  res.json({ ok: true, ...firstRunStatus() });
+});
+
+router.put("/setup/first-run", (req, res) => {
+  try {
+    const currentApp1Id = String(config.facebook.appId || process.env.FB_APP_ID || "").trim();
+    const currentApp1Secret = String(config.facebook.appSecret || process.env.FB_APP_SECRET || "").trim();
+    const app1Id = String(req.body?.app1_id || currentApp1Id).trim();
+    const app1Secret = String(req.body?.app1_secret || currentApp1Secret).trim();
+    if (!/^\d{5,30}$/.test(app1Id)) {
+      throw new Error("App ID 1 phải là dãy số lấy từ Meta for Developers.");
+    }
+    if (app1Secret.length < 16 || /[\r\n]/.test(app1Secret)) {
+      throw new Error("App Secret 1 chưa hợp lệ.");
+    }
+
+    const removeApp2 = Boolean(req.body?.remove_app2);
+    const currentApp2Id = String(process.env.FB_APP_ID_2 || "").trim();
+    const currentApp2Secret = String(process.env.FB_APP_SECRET_2 || "").trim();
+    const app2Id = removeApp2
+      ? ""
+      : String(req.body?.app2_id || currentApp2Id).trim();
+    const app2Secret = removeApp2
+      ? ""
+      : String(req.body?.app2_secret || currentApp2Secret).trim();
+    if (app2Id && !/^\d{5,30}$/.test(app2Id)) {
+      throw new Error("App ID 2 phải là dãy số hoặc để trống.");
+    }
+    if (app2Id && (app2Secret.length < 16 || /[\r\n]/.test(app2Secret))) {
+      throw new Error("Đã nhập App ID 2 nhưng App Secret 2 chưa hợp lệ.");
+    }
+
+    const accountsCount = listAccounts().length;
+    let encryptionKey = String(config.tokenEncryptionKey || "").trim();
+    const requestedKey = String(req.body?.encryption_key || "").trim();
+    if (requestedKey) {
+      if (requestedKey.length < 32 || /[\r\n]/.test(requestedKey)) {
+        throw new Error("Khóa mã hóa phải có ít nhất 32 ký tự.");
+      }
+      if (accountsCount > 0 && requestedKey !== encryptionKey) {
+        throw new Error("Máy đã có tài khoản Facebook; không được đổi khóa mã hóa vì sẽ làm hỏng token cũ.");
+      }
+      encryptionKey = requestedKey;
+    } else if (!encryptionKeyReady(encryptionKey) && accountsCount === 0) {
+      encryptionKey = crypto.randomBytes(32).toString("hex");
+    }
+
+    const redirectUri = config.facebook.redirectUri;
+    const updates = {
+      PORT: String(config.port),
+      APP_BASE_URL: config.appBaseUrl,
+      FB_APP_ID: app1Id,
+      FB_APP_SECRET: app1Secret,
+      FB_APP_NAME: safeEnvLabel(req.body?.app1_name, process.env.FB_APP_NAME || "App 1"),
+      FB_REDIRECT_URI: redirectUri,
+      FB_APP_ID_2: app2Id,
+      FB_APP_SECRET_2: app2Secret,
+      FB_APP_NAME_2: app2Id
+        ? safeEnvLabel(req.body?.app2_name, process.env.FB_APP_NAME_2 || "App 2")
+        : "",
+      FB_REDIRECT_URI_2: app2Id ? redirectUri : "",
+      TOKEN_ENCRYPTION_KEY: encryptionKey,
+      NGROK_AUTOSTART: String(process.env.NGROK_AUTOSTART || "1"),
+      GITHUB_REPO: process.env.GITHUB_REPO || config.githubRepo || "trumrename/fb-page-studio",
+      UPDATE_ASSET: process.env.UPDATE_ASSET || "FB-Page-Studio-Desktop.exe",
+    };
+    writeEnvValues(getEnvPath(), updates);
+    for (const [key, value] of Object.entries(updates)) process.env[key] = value;
+    config.facebook.appId = app1Id;
+    config.facebook.appSecret = app1Secret;
+    config.facebook.redirectUri = redirectUri;
+    config.tokenEncryptionKey = encryptionKey;
+
+    res.json({
+      ok: true,
+      message: "Đã lưu cấu hình máy mới. Có thể Connect Facebook ngay, không cần sửa .env hoặc khởi động lại.",
+      ...firstRunStatus(),
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
 
 function chromeUserDataDir(value = process.env.FB_CHROME_USER_DATA_DIR) {
   const custom = String(value || "").trim();
@@ -162,7 +279,7 @@ router.put("/setup/domain", async (req, res) => {
       redirect_uri: redirectUri,
       port: config.port,
       app2_updated: Boolean(updates.FB_REDIRECT_URI_2),
-      ngrok_command: `ngrok http --domain=${new URL(origin).hostname} 127.0.0.1:${config.port}`,
+      ngrok_command: `ngrok http --url=${origin} 127.0.0.1:${config.port}`,
       ngrok_status: ngrok.status,
     });
   } catch (e) {

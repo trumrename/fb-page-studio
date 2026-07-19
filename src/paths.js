@@ -103,6 +103,11 @@ export function getPublicDir() {
 
 export function getEnvPath() {
   const beside = path.join(getExeDir(), ".env");
+  // Electron and clean/new-machine launches provide an explicit writable
+  // directory. It remains authoritative even before .env exists; otherwise a
+  // developer/bundle .env can be discovered and the first-run form writes to
+  // the wrong machine folder.
+  if (process.env.FB_USER_DIR || process.env.FB_EXE_DIR) return beside;
   if (fs.existsSync(beside)) return beside;
   const inBundle = path.join(getBundleRoot(), ".env");
   if (fs.existsSync(inBundle)) return inBundle;

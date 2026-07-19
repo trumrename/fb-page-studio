@@ -13,7 +13,7 @@ import {
   validateScheduleUnix,
 } from "./publish.js";
 import { pickCaption } from "./mediaLibrary.js";
-import { getPagePostConfig, savePagePostConfig } from "./poster.js";
+import { getCaptionStats, getPagePostConfig, savePagePostConfig } from "./poster.js";
 import {
   getActiveTimesForPageRow,
   buildSlotsFromActiveHours,
@@ -31,6 +31,7 @@ import {
 } from "./antiSpam.js";
 import { assertCanPublish as assertLicenseActive } from "./license.js";
 import { withPageOperationLock } from "./pageOperationLock.js";
+import { reserveCaptionSlot } from "./captionPoolState.js";
 
 function logScheduled(row) {
   const db = getDb();
@@ -96,17 +97,30 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
   let selectedCaptionSlot = captionSlot;
   let usedPoolCaption = false;
   let mediaPath = null;
-  for (let attempt = 0; attempt < 8; attempt++) {
+  const triedCaptions = [];
+  const captionPoolTotal = getCaptionStats(cfg).total;
+  const maxCaptionAttempts = Math.max(1, captionPoolTotal || 1);
+  for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
+    const manualCaption = opts.caption != null && String(opts.caption).trim();
+    if (!manualCaption) {
+      selectedCaptionSlot = reserveCaptionSlot({
+        captionsFolder: cfg.captions_folder,
+        captions: cfg.captions,
+        pageRowId,
+      }).slot_index;
+    }
     caption =
-      opts.caption != null && String(opts.caption).trim()
+      manualCaption
         ? String(opts.caption).trim()
         : pickCaption(
             cfg.captions,
-            (selectedCaptionSlot = captionSlot + attempt),
+            selectedCaptionSlot,
             "sequential_shuffle",
-            cfg.captions_folder
+            cfg.captions_folder,
+            triedCaptions
           );
-    usedPoolCaption = !(opts.caption != null && String(opts.caption).trim());
+    if (caption && !manualCaption) triedCaptions.push(caption);
+    usedPoolCaption = !manualCaption;
     if (postType === "photo" || postType === "image" || postType === "video") {
       const kind = postType === "video" ? "video" : "photo";
       const picked = pickUnusedMedia(
@@ -128,7 +142,8 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       isSchedule: true,
       scheduledAtUnix: unix,
     });
-    if (gate.ok) break;
+    if (gate.ok && caption) break;
+    if (gate.ok && !caption) break;
     if (
       [
         "GRAPH_BACKOFF",
@@ -141,7 +156,16 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
     ) {
       throw new Error(gate.error);
     }
-    if (attempt === 7) throw new Error(gate.error);
+    if (manualCaption || attempt === maxCaptionAttempts - 1 || !caption) {
+      if (gate.code === "CAPTION_DUP" || triedCaptions.length) {
+        throw new Error(
+          `Hết caption khả dụng trong kho (đã dùng / trùng trong cửa sổ anti-spam). ` +
+            `Đã thử ${triedCaptions.length}/${captionPoolTotal || 0} caption. Thêm dòng vào kho Caption (.txt/.csv).` +
+            (gate.error ? ` — ${gate.error}` : "")
+        );
+      }
+      throw new Error(gate.error || "Không chọn được caption để hẹn giờ");
+    }
     mediaPath = null;
   }
 
@@ -379,6 +403,8 @@ export async function scheduleBulk(body = {}) {
         top_hours: active.top_hours,
         peak_hour: active.peak_hour,
         metric: active.metric,
+        source: active.source || null,
+        auto_seeded_preferred: !!active.auto_seeded_preferred,
         error: active.error || null,
         cached: active.cached,
       };
@@ -390,7 +416,7 @@ export async function scheduleBulk(body = {}) {
           active: activeMeta,
           error:
             active.error ||
-            "Không có giờ tích cực từ Graph — chọn mode fixed hoặc giờ thủ công",
+            "Không có giờ đăng — lưu giờ ưa thích (vd 9,12,19,21) hoặc dùng mode cố định",
         });
         continue;
       }

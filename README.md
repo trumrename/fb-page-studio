@@ -1,26 +1,33 @@
 # FB Page Studio
 
-Tool **multi-account / multi-page** dùng **Facebook Graph API chính thống**:
+Tool **multi-account / multi-page** dùng **Facebook Graph API chính thống** (v1.2.20).
 
-- OAuth multi-account · list page · followers · export  
-- Đăng feed (text/ảnh/video) · caption random `.txt/.csv`  
-- Hẹn giờ FB hàng loạt · giờ ưa thích từng page  
-- **1 file `.exe` portable** + nút **Cập nhật phiên bản** từ GitHub Releases  
+- OAuth multi-account · multi Meta App · list page · followers · export  
+- Đăng feed (text/ảnh/video) · caption pool · anti-spam  
+- **Direct Local** (tool canh giờ) hoặc **hẹn giờ Facebook**  
+- Job tiến trình + **đăng lại task lỗi**  
+- **1 file `.exe` portable** + cập nhật từ GitHub Releases  
 
-## Chạy bằng file .exe (khuyên dùng)
+## Khách (không cần Node)
+
+1. Tải Release: `FB-Page-Studio-Desktop-v1.2.20.exe` hoặc ZIP `FB-Page-Studio-v1.2.20-Windows.zip`  
+2. Chạy EXE → thiết lập Meta App + Ngrok trong UI  
+3. Dán license key (hoặc trial)  
+
+Chi tiết: `pack-customer/README-KHACH.txt` · `HUONG-DAN-MAY-MOI.md`
+
+## Dev / build
 
 ```powershell
 npm install
-npm run build:exe
-# → dist/FB-Page-Studio.exe  (~46 MB)
+npm test
+npm run build:desktop
+npm run pack:all          # pack-customer + pack-dev + ZIP
+npm run release:verify
 ```
 
-1. Copy `dist/FB-Page-Studio.exe` + `.env.example` → 1 folder  
-2. Đổi thành `.env`, điền `FB_APP_*` và `GITHUB_REPO=user/repo`  
-3. Double-click `.exe` → mở http://localhost:3847  
-4. Trong app: nút **v1.0.0** / **Cập nhật phiên bản**  
-
-Hướng dẫn đẩy GitHub + Release: xem **[GITHUB.md](./GITHUB.md)**.
+- Admin cấp key: `Admin-Quan-Ly/MENU-ADMIN.bat`  
+- GitHub release: **[GITHUB.md](./GITHUB.md)**
 
 ---
 

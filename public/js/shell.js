@@ -46,6 +46,7 @@
       <div class="nav-foot">
         <div class="system-pill"><i></i><span id="shellSystemText">Đang kiểm tra hệ thống…</span></div>
         <div class="meta" id="shellClock">Giờ Việt Nam</div>
+        <div class="meta" id="reportPath" style="margin-top:.45rem;word-break:break-word">Báo cáo: data/exports/</div>
       </div>`;
   }
 

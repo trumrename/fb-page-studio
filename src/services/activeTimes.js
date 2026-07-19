@@ -1,14 +1,25 @@
 /**
- * Page "active times" from Graph Insights (when fans are online).
- * Metric: page_fans_online (hourly 0–23). No invented data — empty/error if API fails.
+ * Page "active times" for bulk Facebook scheduling.
+ *
+ * Meta deprecated page_fans_online / page_fans_online_per_day (Graph Insights
+ * error #100 — not a valid metric). There is no official free replacement that
+ * returns fans-online-by-hour for Pages.
+ *
+ * Source order (never invent "Meta insights"):
+ *  1. User preferred_hours on the page (saved)
+ *  2. Optional legacy Graph metrics if env FB_TRY_LEGACY_ONLINE_INSIGHTS=1
+ *  3. Tool default hours (VN-friendly 9,12,19,21) — labeled source=default
  */
 import { graphGetSoft } from "./facebook.js";
 import { getDb } from "../db/index.js";
 import { decryptToken } from "./crypto.js";
 
+/** Default posting hours when Meta has no metric and user has not set preferred. */
+export const DEFAULT_PREFERRED_HOURS = [9, 12, 19, 21];
+
 /**
- * Aggregate hourly scores from page_fans_online values.
- * FB returns value as object: { "0": n, "1": n, ... "23": n } (often PST/PDT).
+ * Aggregate hourly scores from insights values.
+ * FB returns value as object: { "0": n, "1": n, ... "23": n }.
  */
 export function aggregateHourlyScores(insightRows) {
   const hours = Array.from({ length: 24 }, (_, h) => ({
@@ -48,12 +59,44 @@ export function pickTopHours(hourly, n = 3) {
     .map((h) => h.hour);
 }
 
+function resultFromHours(hours, { source, metric, timezone_note, extra = {} }) {
+  const list = parsePreferredHours(hours);
+  return {
+    ok: list.length > 0,
+    source,
+    metric,
+    hourly: list.map((h) => ({ hour: h, score: 1, samples: 0 })),
+    top_hours: list,
+    peak_hour: list[0] ?? null,
+    timezone_note,
+    preferred_hours: list,
+    ...extra,
+  };
+}
+
 /**
- * Fetch active times for a page via Graph insights.
- * Tries page_fans_online then page_follows_online-style fallbacks — never fabricates.
+ * Fetch active times for a page via Graph insights (optional / rarely works).
+ * Default: skip dead metrics unless FB_TRY_LEGACY_ONLINE_INSIGHTS=1.
  */
 export async function fetchActiveTimes(pageId, pageToken) {
+  const tryLegacy =
+    String(process.env.FB_TRY_LEGACY_ONLINE_INSIGHTS || "").trim() === "1";
+  if (!tryLegacy) {
+    return {
+      ok: false,
+      error:
+        "Meta đã deprecate page_fans_online (không còn metric giờ fan online trên Graph).",
+      hourly: [],
+      top_hours: [],
+      peak_hour: null,
+      metric: null,
+      skipped_graph: true,
+      tried: [],
+    };
+  }
+
   const tried = [];
+  // Legacy only — usually returns (#100) invalid metric.
   const metrics = ["page_fans_online", "page_fans_online_per_day"];
 
   for (const metric of metrics) {
@@ -82,7 +125,7 @@ export async function fetchActiveTimes(pageId, pageToken) {
         top_hours: top,
         peak_hour: top[0] ?? null,
         timezone_note:
-          "Giờ Meta thường theo múi giờ page / PST; đối chiếu UI Page Insights. Tool map theo offset bạn chọn khi hẹn.",
+          "Giờ Meta (legacy) — thường theo múi giờ page / PST; đối chiếu UI Page Insights.",
         days_in_response: useRows.reduce(
           (n, row) => n + (row.values?.length || 0),
           0
@@ -96,7 +139,7 @@ export async function fetchActiveTimes(pageId, pageToken) {
     ok: false,
     error:
       tried.map((t) => `${t.metric}: ${t.error || "empty"}`).join(" · ") ||
-      "Không có dữ liệu giờ online (page nhỏ / thiếu read_insights / metric deprecated)",
+      "Không có dữ liệu giờ online (metric deprecated / thiếu quyền)",
     hourly: [],
     top_hours: [],
     peak_hour: null,
@@ -146,8 +189,22 @@ export function getPreferredHours(pageRowId) {
 }
 
 /**
- * Load page row + token, fetch active times, cache on page_post_config.
- * Fallback: preferred_hours (user) if Graph metric deprecated/empty.
+ * Apply the same preferred hours to many pages (bulk schedule helper).
+ */
+export function savePreferredHoursBulk(pageRowIds, hours) {
+  const list = parsePreferredHours(hours);
+  const ids = (pageRowIds || []).map(Number).filter((n) => n > 0);
+  const saved = [];
+  for (const id of ids) {
+    savePreferredHours(id, list);
+    saved.push({ page_row_id: id, preferred_hours: list });
+  }
+  return { hours: list, pages: saved.length, items: saved };
+}
+
+/**
+ * Resolve hours for scheduling without calling Graph on every bulk dry-run.
+ * Preferred → (optional legacy Graph) → default hours.
  */
 export async function getActiveTimesForPageRow(pageRowId, { force = false } = {}) {
   const db = getDb();
@@ -168,14 +225,37 @@ export async function getActiveTimesForPageRow(pageRowId, { force = false } = {}
       `SELECT active_hours_json, active_hours_at, preferred_hours_json FROM page_post_config WHERE page_row_id = ?`
     )
     .get(pageRowId);
-  const preferred = parsePreferredHours(cfg?.preferred_hours_json);
+  let preferred = parsePreferredHours(cfg?.preferred_hours_json);
 
+  // Fast path: user preferred hours (primary after Meta deprecation)
+  if (preferred.length) {
+    const result = resultFromHours(preferred, {
+      source: "preferred",
+      metric: "preferred_hours",
+      timezone_note:
+        "Giờ ưa thích bạn đã lưu cho page (Meta không còn metric fan-online).",
+    });
+    cacheActiveHours(pageRowId, result);
+    return {
+      ...result,
+      page: { id: page.id, page_id: page.page_id, name: page.name },
+      cached: false,
+    };
+  }
+
+  // Cache only successful insights (rare) within 24h
   if (!force && cfg?.active_hours_json) {
     try {
       const cached = JSON.parse(cfg.active_hours_json);
-      if (cached?.ok && Array.isArray(cached.top_hours) && cached.top_hours.length) {
+      if (
+        cached?.ok &&
+        cached?.source === "insights" &&
+        Array.isArray(cached.top_hours) &&
+        cached.top_hours.length
+      ) {
         const ageMs = cfg.active_hours_at
-          ? Date.now() - new Date(cfg.active_hours_at.replace(" ", "T") + "Z").getTime()
+          ? Date.now() -
+            new Date(cfg.active_hours_at.replace(" ", "T") + "Z").getTime()
           : Infinity;
         if (Number.isFinite(ageMs) && ageMs < 24 * 60 * 60 * 1000) {
           return {
@@ -188,56 +268,67 @@ export async function getActiveTimesForPageRow(pageRowId, { force = false } = {}
         }
       }
     } catch {
-      /* refetch */
+      /* refetch / fallback */
     }
   }
 
-  const token = decryptToken(page.page_token_enc);
-  let result = await fetchActiveTimes(page.page_id, token);
-
-  // Graph no longer exposes page_fans_online (deprecated Nov 2025) — use preferred hours
-  if (!result.ok && preferred.length) {
-    result = {
-      ok: true,
-      source: "preferred",
-      metric: "preferred_hours",
-      hourly: preferred.map((h) => ({ hour: h, score: 1, samples: 0 })),
-      top_hours: preferred,
-      peak_hour: preferred[0],
-      timezone_note:
-        "Graph không còn page_fans_online — đang dùng giờ ưa thích bạn đã lưu cho page (không phải data Meta).",
-      preferred_hours: preferred,
-      graph_error: result.error,
-      tried: result.tried,
-    };
-  } else if (result.ok) {
-    result = { ...result, source: "insights", preferred_hours: preferred };
-  } else {
-    result = {
-      ...result,
-      source: "none",
-      preferred_hours: preferred,
-      error:
-        (result.error || "Không có data giờ online") +
-        " · Meta đã deprecate page_fans_online. Hãy LƯU giờ ưa thích cho page (vd 9,12,19,21) rồi bấm lại.",
-    };
+  // Optional legacy Graph (off by default — always #100 nowadays)
+  let graphResult = {
+    ok: false,
+    error:
+      "Meta đã deprecate page_fans_online — dùng giờ ưa thích / default tool.",
+    tried: [],
+  };
+  if (String(process.env.FB_TRY_LEGACY_ONLINE_INSIGHTS || "").trim() === "1") {
+    const token = decryptToken(page.page_token_enc);
+    graphResult = await fetchActiveTimes(page.page_id, token);
   }
 
-  db.prepare(
-    `INSERT INTO page_post_config (page_row_id, active_hours_json, active_hours_at, updated_at)
-     VALUES (?, ?, datetime('now'), datetime('now'))
-     ON CONFLICT(page_row_id) DO UPDATE SET
-       active_hours_json = excluded.active_hours_json,
-       active_hours_at = excluded.active_hours_at,
-       updated_at = datetime('now')`
-  ).run(pageRowId, JSON.stringify(result));
+  let result;
+  if (graphResult.ok && graphResult.top_hours?.length) {
+    result = {
+      ...graphResult,
+      source: "insights",
+      preferred_hours: preferred,
+    };
+  } else {
+    // Tool default — auto-seed preferred so next bulk dry-run is silent & editable
+    const defaults = [...DEFAULT_PREFERRED_HOURS];
+    preferred = savePreferredHours(pageRowId, defaults);
+    result = resultFromHours(preferred, {
+      source: "default",
+      metric: "default_preferred_hours",
+      timezone_note:
+        "Meta không còn page_fans_online. Tool đã gán preset giờ VN 9,12,19,21 cho page này — sửa trong config page nếu muốn.",
+      extra: {
+        auto_seeded_preferred: true,
+        graph_error: graphResult.error || null,
+        tried: graphResult.tried || [],
+      },
+    });
+  }
+
+  cacheActiveHours(pageRowId, result);
 
   return {
     ...result,
-    preferred_hours: preferred,
+    preferred_hours: preferred.length ? preferred : result.top_hours,
     page: { id: page.id, page_id: page.page_id, name: page.name },
     cached: false,
   };
+}
+
+function cacheActiveHours(pageRowId, result) {
+  getDb()
+    .prepare(
+      `INSERT INTO page_post_config (page_row_id, active_hours_json, active_hours_at, updated_at)
+       VALUES (?, ?, datetime('now'), datetime('now'))
+       ON CONFLICT(page_row_id) DO UPDATE SET
+         active_hours_json = excluded.active_hours_json,
+         active_hours_at = excluded.active_hours_at,
+         updated_at = datetime('now')`
+    )
+    .run(pageRowId, JSON.stringify(result));
 }
 
 /**
@@ -269,7 +360,6 @@ export function buildSlotsFromActiveHours(topHours, opts = {}) {
   for (let day = 0; day < daysAhead; day++) {
     for (const hour of hours) {
       // Construct wall time in target TZ → convert to real UTC ms
-      // UTC ms = Date.UTC(y,m,d,hour,0,0) - offsetMin*60*1000
       const base = new Date(Date.UTC(y0, m0, d0 + day, hour, 0, 0));
       const realMs = base.getTime() - offsetMin * 60 * 1000;
       if (realMs < minMs || realMs > maxMs) continue;
@@ -277,7 +367,7 @@ export function buildSlotsFromActiveHours(topHours, opts = {}) {
     }
   }
 
-  return slots.sort((a, b) => a - b);
+  return slots.sort((a, b) => a.getTime() - b.getTime());
 }
 
 /**
