@@ -5,7 +5,7 @@
 | | |
 |--|--|
 | **Tên** | FB Page Studio |
-| **Phiên bản** | **1.2.4** |
+| **Phiên bản** | **1.2.5** |
 | **Máy DEV (gốc)** | `D:\fb-page-poster\` |
 | **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` |
 | **Ghi chú DEV** | `D:\fb-page-poster\pack-dev\README-DEV.md` |
@@ -105,6 +105,9 @@ Bài hẹn giờ được đối soát thủ công hoặc tự động mỗi 5 p
 
 ### Setup domain OAuth nhiều máy
 Trong màn **Connect & chọn Page**, nhập một domain HTTPS để tool tự cập nhật `APP_BASE_URL` và Redirect URI cho App 1/App 2, đồng thời đưa đúng lệnh Ngrok. Nhiều máy có thể đăng song song; một domain chỉ được một máy dùng tại thời điểm Connect/Reconnect Facebook.
+
+### Chrome Profile OAuth
+Chọn Chrome Profile đã đăng nhập Facebook ngay trong app. Tool mở một tab OAuth mới trong đúng profile đó, nên dùng lại session Facebook thay vì profile Chrome mặc định/trống.
 
 ---
 

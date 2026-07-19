@@ -1,6 +1,6 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-19** · Code: **1.2.4**
+> Cập nhật: **2026-07-19** · Code: **1.2.5**
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`  
 > **GitHub:** `trumrename/fb-page-studio` — **push chỉ khi user OK**
@@ -99,6 +99,12 @@ node scripts/sync-customer-pack.mjs
 - [x] Tự cập nhật `APP_BASE_URL` + `FB_REDIRECT_URI` cho App 1/App 2
 - [x] Hiển thị/copy đúng lệnh Ngrok theo cổng của máy
 - [x] Nhắc rõ nhiều máy đăng song song được; domain OAuth chỉ chiếm khi Connect Facebook
+
+### J. Chrome Profile OAuth v1.2.5
+- [x] Liệt kê profile Chrome có trên máy và lưu profile được chọn cho Connect Facebook
+- [x] Mở OAuth bằng `--profile-directory`, dùng lại session Facebook của profile đã login
+- [x] Không cố chiếm tab Chrome đang click (Chrome không cho app ngoài can thiệp tab đó)
+- [x] Kiểm thử tự động: **140/140 đạt**
 
 ---
 

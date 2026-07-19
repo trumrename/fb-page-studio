@@ -81,6 +81,29 @@ function writeEnvValues(envPath, values) {
   fs.writeFileSync(envPath, text, "utf8");
 }
 
+function chromeUserDataDir() {
+  const custom = String(process.env.FB_CHROME_USER_DATA_DIR || "").trim();
+  if (custom) return path.resolve(custom);
+  return path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data");
+}
+
+function listChromeProfiles() {
+  const userDataDir = chromeUserDataDir();
+  if (!userDataDir || !fs.existsSync(userDataDir)) return { user_data_dir: userDataDir, profiles: [] };
+  const profiles = fs.readdirSync(userDataDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && (entry.name === "Default" || /^Profile \d+$/i.test(entry.name)))
+    .map((entry) => {
+      let name = entry.name;
+      try {
+        const pref = JSON.parse(fs.readFileSync(path.join(userDataDir, entry.name, "Preferences"), "utf8"));
+        name = pref?.profile?.name || name;
+      } catch { /* profile may not have Preferences yet */ }
+      return { directory: entry.name, name };
+    })
+    .sort((a, b) => a.directory.localeCompare(b.directory, undefined, { numeric: true }));
+  return { user_data_dir: userDataDir, profiles };
+}
+
 /** Domain OAuth local setup — never returns App Secret or encryption keys. */
 router.get("/setup/domain", (_req, res) => {
   res.json({
@@ -120,6 +143,29 @@ router.put("/setup/domain", (req, res) => {
       app2_updated: Boolean(updates.FB_REDIRECT_URI_2),
       ngrok_command: `ngrok http --domain=${new URL(origin).hostname} 127.0.0.1:${config.port}`,
     });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.get("/setup/browser", (_req, res) => {
+  const found = listChromeProfiles();
+  res.json({
+    ...found,
+    selected_profile: String(process.env.FB_CHROME_PROFILE || "").trim(),
+  });
+});
+
+router.put("/setup/browser", (req, res) => {
+  try {
+    const wanted = String(req.body?.profile || "").trim();
+    const found = listChromeProfiles();
+    if (wanted && !found.profiles.some((p) => p.directory === wanted)) {
+      throw new Error("Chrome Profile không tồn tại trên máy này");
+    }
+    writeEnvValues(getEnvPath(), { FB_CHROME_PROFILE: wanted });
+    process.env.FB_CHROME_PROFILE = wanted;
+    res.json({ ok: true, selected_profile: wanted, restart_required: true });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }

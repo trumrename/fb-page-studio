@@ -15,8 +15,9 @@ const path = require("path");
 const http = require("http");
 const fs = require("fs");
 const { spawn } = require("child_process");
+const dotenv = require("dotenv");
 
-const PORT = Number(process.env.PORT || 3847);
+let PORT = Number(process.env.PORT || 3847);
 
 let mainWindow = null;
 let tray = null;
@@ -167,13 +168,24 @@ function openInPreferredBrowser(url) {
   for (const exe of candidates) {
     if (!exe || !fs.existsSync(exe)) continue;
     try {
-      // New tab in existing browser process when possible
-      spawn(exe, [url], {
+      const isChrome = /(?:^|\\)chrome(?:\.exe)?$/i.test(exe);
+      const profile = String(process.env.FB_CHROME_PROFILE || "").trim();
+      const userData = String(process.env.FB_CHROME_USER_DATA_DIR || "").trim();
+      // Chrome does not allow an external app to take over the active tab.
+      // Passing the profile opens a new tab with that profile's FB cookies.
+      const args = isChrome && profile
+        ? [
+            ...(userData ? [`--user-data-dir=${userData}`] : []),
+            `--profile-directory=${profile}`,
+            url,
+          ]
+        : [url];
+      spawn(exe, args, {
         detached: true,
         stdio: "ignore",
         windowsHide: false,
       }).unref();
-      log("openInPreferredBrowser", exe, url.slice(0, 80));
+      log("openInPreferredBrowser", exe, profile ? `profile=${profile}` : "profile=auto", url.slice(0, 80));
       return true;
     } catch (e) {
       log("openInPreferredBrowser fail", exe, e.message);
@@ -241,6 +253,9 @@ function startBackend() {
     log("WARN missing .env at", envPath);
   } else {
     log("Found .env");
+    dotenv.config({ path: envPath, override: true, quiet: true });
+    PORT = Number(process.env.PORT || 3847);
+    log("Loaded .env PORT", String(PORT));
   }
 
   const serverJs = path.join(appRoot(), "src", "server.js");

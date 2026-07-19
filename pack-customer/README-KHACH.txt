@@ -47,7 +47,7 @@ SAI:   "Source code (zip)" / "Source code (tar.gz)"
 - Machine ID: trong app → License (gửi admin nếu key gắn máy)
 - Báo lỗi: version trên nút topbar (v1.x.x) + mô tả
 
-6) CÁC KHU VỰC CHÍNH (v1.2.4)
+6) CÁC KHU VỰC CHÍNH (v1.2.5)
 --------------------------------
 - Tổng quan: tình trạng app, lịch và cảnh báo.
 - Kết nối: phân biệt App, Admin/Profile và danh sách Page.
@@ -65,5 +65,8 @@ trước; caption chạy lần lượt đến hết kho, sau đó trộn và xoa
 
 Setup domain: vào Connect & chọn Page, dán domain HTTPS rồi bấm Lưu. Tool tự
 ghi Redirect URI và hiện lệnh Ngrok; không cần sửa .env bằng tay.
+
+Nếu Connect mở Chrome chưa đăng nhập: trong cùng khu Setup, chọn đúng Chrome
+Profile đang có Facebook đã login, lưu rồi khởi động lại tool một lần.
 
 Admin / chủ tool: xem pack-dev\README-DEV.md trên máy dev.

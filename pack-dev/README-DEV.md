@@ -43,7 +43,7 @@ npm run build:desktop        # build exe
 node scripts/sync-customer-pack.mjs   # đổ exe + file an toàn sang pack-customer
 ```
 
-## Trạng thái bản v1.2.4
+## Trạng thái bản v1.2.5
 
 - Workspace UI đã tách rõ theo quy trình vận hành.
 - Rotation hỗ trợ từng App và hai App so le; job tuần tự, có tiến trình và thông báo.
@@ -54,6 +54,7 @@ node scripts/sync-customer-pack.mjs   # đổ exe + file an toàn sang pack-cust
 - Khi follower trống, kiểm tra token có `pages_show_list`, `pages_read_engagement` và quyền Page tương ứng.
 - Media chọn random có khoảng cách với các lần chọn gần nhất; caption đi lần lượt hết kho rồi trộn cho vòng sau.
 - Màn Connect có Setup domain OAuth, tự ghi callback vào `.env` và đưa lệnh Ngrok cho từng máy.
+- Màn Connect có chọn Chrome Profile để OAuth dùng đúng session Facebook đã login.
 
 ## Quy tắc với AI / khi fix
 

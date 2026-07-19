@@ -94,6 +94,14 @@
               <button class="btn-ghost" id="btnCopyNgrokCommand" type="button" disabled>Copy lệnh Ngrok</button>
             </div>
             <div id="oauthDomainStatus" class="muted" style="margin-top:.75rem;font-size:.84rem"></div>
+            <hr style="border:0;border-top:1px solid rgba(255,255,255,.08);margin:1rem 0" />
+            <div class="toolbar" style="align-items:end">
+              <label style="flex:1;min-width:260px">Chrome Profile đã login Facebook
+                <select id="oauthBrowserProfile"><option value="">Tự động (profile mặc định)</option></select>
+              </label>
+              <button class="btn-ghost" id="btnSaveBrowserProfile" type="button">Dùng profile này</button>
+            </div>
+            <div id="oauthBrowserStatus" class="muted" style="margin-top:.75rem;font-size:.84rem">Chọn profile đang có tab Facebook đã login. Tool sẽ mở tab mới trong profile đó; Chrome không cho app chiếm tab bạn vừa click.</div>
           </div>
         </section>
 
@@ -284,6 +292,36 @@
       if (!ngrokCommand) return;
       try { await navigator.clipboard.writeText(ngrokCommand); alert("Đã copy lệnh Ngrok."); }
       catch { prompt("Copy lệnh này:", ngrokCommand); }
+    };
+
+    async function loadBrowserProfiles() {
+      const r = await api("/api/setup/browser");
+      const select = $("oauthBrowserProfile");
+      select.innerHTML = '<option value="">Tự động (profile mặc định)</option>';
+      for (const p of r.profiles || []) {
+        const o = document.createElement("option");
+        o.value = p.directory;
+        o.textContent = `${p.name} — ${p.directory}`;
+        if (p.directory === r.selected_profile) o.selected = true;
+        select.appendChild(o);
+      }
+      if (!(r.profiles || []).length) {
+        $("oauthBrowserStatus").textContent = "Không tìm thấy Chrome Profile trên máy này. Hãy mở Chrome và login Facebook trước.";
+      }
+    }
+
+    $("btnSaveBrowserProfile").onclick = async () => {
+      const btn = $("btnSaveBrowserProfile");
+      btn.disabled = true;
+      try {
+        const r = await api("/api/setup/browser", {
+          method: "PUT",
+          body: JSON.stringify({ profile: $("oauthBrowserProfile").value }),
+        });
+        $("oauthBrowserStatus").innerHTML = `<b style="color:#34d399">Đã lưu Chrome Profile ${escapeHtml(r.selected_profile || "tự động")}.</b> Khởi động lại tool một lần, sau đó Connect Facebook sẽ mở tab mới với session Facebook của profile này.`;
+      } catch (e) {
+        $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`;
+      } finally { btn.disabled = false; }
     };
 
     async function loadAccounts() {
@@ -537,7 +575,7 @@
     };
 
     async function refreshAll() {
-      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadOAuthDomain()]);
+      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadOAuthDomain(), loadBrowserProfiles()]);
     }
 
     showFlash();

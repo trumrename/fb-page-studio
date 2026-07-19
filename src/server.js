@@ -84,6 +84,7 @@ if (!fs.existsSync(exampleBeside)) {
       "UPDATE_ASSET=FB-Page-Studio-Desktop.exe",
       "# Optional: full path to browser for OAuth (default: Chrome then Edge)",
       "# BROWSER_PATH=C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe",
+      "# FB_CHROME_PROFILE=Profile 1  (chọn profile đã login Facebook)",
       "",
     ].join("\n");
     fs.writeFileSync(exampleBeside, sample, "utf8");
