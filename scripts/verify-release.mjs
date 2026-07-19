@@ -48,7 +48,7 @@ const lock = json(path.join(root, "package-lock.json"));
 const exe = path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe");
 const versionedExe = path.join(root, "dist-desktop-oauth", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
 const checksumFile = `${versionedExe}.sha256.txt`;
-const customerExe = path.join(root, "pack-customer", "FB-Page-Studio-Desktop.exe");
+const customerExe = path.join(root, "pack-customer", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
 const appAsar = path.join(root, "dist-desktop-oauth", "win-unpacked", "resources", "app.asar");
 const customerVersionFile = path.join(root, "pack-customer", "VERSION.txt");
 

@@ -70,7 +70,12 @@ const envEx = path.join(root, "pack-customer", ".env.example");
 let copiedExe = null;
 for (const c of exeCandidates) {
   if (fs.existsSync(c)) {
-    const dest = path.join(out, path.basename(c));
+    for (const entry of fs.readdirSync(out)) {
+      if (/^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe$/i.test(entry)) {
+        try { fs.unlinkSync(path.join(out, entry)); } catch { /* release gate will catch copy failure */ }
+      }
+    }
+    const dest = path.join(out, `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
     fs.copyFileSync(c, dest);
     copiedExe = dest;
     console.log("Copied exe:", c, "→", dest);

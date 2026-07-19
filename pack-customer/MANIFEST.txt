@@ -1,8 +1,6 @@
 Nội dung gói khách (không secret):
  - .env.example
- - CAI-NGROK.bat
- - CHAY-NGROK-DOMAIN-CO-DINH.bat
- - FB-Page-Studio-Desktop.exe
+ - FB-Page-Studio-Desktop-v1.2.16.exe
  - HUONG-DAN-MAY-MOI.md
  - MANIFEST.txt
  - media-sample

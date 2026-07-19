@@ -4,27 +4,26 @@ Phiên bản gói: xem file VERSION.txt (đồng bộ khi build)
 
 QUAN TRONG — TAI TREN GITHUB:
 -----------------------------
-DUNG:  Assets → FB-Page-Studio-v1.2.x-Windows.zip  HOAC  FB-Page-Studio-Desktop.exe
+DUNG:  Assets → FB-Page-Studio-Desktop-vX.Y.Z.exe
 SAI:   "Source code (zip)" / "Source code (tar.gz)"
        = ma nguon lap trinh, KHONG phai ban cai, co the thay file cu/hong, KHONG co app.exe
 
 1) CÀI ĐẶT NHANH
 ----------------
 - Copy cả thư mục này sang máy khách (hoặc chỉ file .exe + .env).
-- Đặt file FB-Page-Studio-Desktop.exe vào folder riêng (vd D:\FB-Page-Studio\).
+- Đặt file FB-Page-Studio-Desktop-vX.Y.Z.exe vào folder riêng (vd D:\FB-Page-Studio\).
 - Copy .env.example thành .env cạnh file .exe
 - Điền FB_APP_ID, FB_APP_SECRET, FB_REDIRECT_URI (Meta App của chủ tool / khách).
-- Chạy FB-Page-Studio-Desktop.exe
-- Máy mới có domain cố định: mở `CHAY-NGROK-DOMAIN-CO-DINH.bat`, dán Authtoken trực tiếp vào cửa sổ CMD rồi Enter. Không cần Edit BAT. File tự tải Ngrok nếu máy chưa có, luôn chạy `qgroup.ngrok.app` và không tạo domain ngẫu nhiên.
-- Cửa sổ BAT luôn giữ mở khi có lỗi; log nằm tại `ngrok-startup.log` cạnh BAT.
-- Có thể đặt tool trong đường dẫn chứa khoảng trắng; BAT gọi CMD theo đường dẫn đầy đủ.
-- Hỗ trợ cả tên folder có dấu ngoặc như `Windows (1)`; không giải thích dấu ngoặc như cú pháp CMD.
+- Chạy duy nhất file FB-Page-Studio-Desktop-vX.Y.Z.exe.
+- Vào Kết nối Meta, dán Authtoken Ngrok rồi bấm "Lưu token & mở server".
+- Tool tự tải Ngrok nếu máy chưa có, tự mở tunnel theo domain và tự đóng khi thoát EXE.
+- Nếu token sai hoặc bị thu hồi, giao diện sẽ yêu cầu nhập token mới.
 - Mở menu License → dán KEY do admin cấp (hoặc dùng trial).
 
 2) CẤU TRÚC KHUYẾN NGHỊ TRÊN MÁY KHÁCH
 --------------------------------------
   D:\FB-Page-Studio\
-    FB-Page-Studio-Desktop.exe
+    FB-Page-Studio-Desktop-vX.Y.Z.exe
     .env
     data\                 (tự tạo: DB, license.json, media…)
     license.backup.json   (tự tạo khi kích hoạt key)
@@ -47,7 +46,7 @@ SAI:   "Source code (zip)" / "Source code (tar.gz)"
 - Machine ID: trong app → License (gửi admin nếu key gắn máy)
 - Báo lỗi: version trên nút topbar (v1.x.x) + mô tả
 
-6) CÁC KHU VỰC CHÍNH (v1.2.7)
+6) CÁC KHU VỰC CHÍNH (v1.2.16)
 --------------------------------
 - Tổng quan: tình trạng app, lịch và cảnh báo.
 - Kết nối: phân biệt App, Admin/Profile và danh sách Page.
@@ -63,8 +62,8 @@ Page cho tài khoản đã Connect; tool không tự điền số giả.
 Quy tắc tài nguyên: media được chọn ngẫu nhiên và tránh các file gần lần chọn
 trước; caption chạy lần lượt đến hết kho, sau đó trộn và xoay vòng tiếp.
 
-Setup domain: vào Connect & chọn Page, dán domain HTTPS rồi bấm Lưu. Tool tự
-ghi Redirect URI và hiện lệnh Ngrok; không cần sửa .env bằng tay.
+Setup domain: vào Connect & chọn Page, dán domain HTTPS + Authtoken rồi lưu.
+Tool tự ghi Redirect URI, tự tải/chạy Ngrok; không cần CMD hoặc BAT.
 
 Nếu Connect mở Chrome chưa đăng nhập: trong cùng khu Setup, chọn đúng Chrome
 Profile đang có Facebook đã login, lưu rồi bấm Connect ngay.

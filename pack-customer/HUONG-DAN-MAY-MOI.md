@@ -1,502 +1,121 @@
-# Hướng dẫn cài đặt FB Page Studio — MÁY MỚI (chi tiết)
+# FB Page Studio — hướng dẫn máy mới
 
-> Phiên bản gói: xem file `VERSION.txt` trong zip  
-> App: **FB-Page-Studio-Desktop.exe**  
-> GitHub Release: https://github.com/trumrename/fb-page-studio/releases  
+## 1. Chỉ cần một EXE
 
----
+Tải đúng asset GitHub có dạng:
 
-## Mục lục
+`FB-Page-Studio-Desktop-vX.Y.Z.exe`
 
-1. [Bạn cần chuẩn bị gì](#1-ban-can-chuan-bi-gi)  
-2. [Tải app (đúng file)](#2-tai-app-dung-file)  
-3. [Cài đặt file trên máy](#3-cai-dat-file-tren-may)  
-4. [Tài khoản Facebook + Meta Developers](#4-tai-khoan-facebook--meta-developers)  
-5. [Cài Ngrok (bắt buộc khi Connect)](#5-cai-ngrok-bat-buoc-khi-connect)  
-6. [File `.env` — điền từng dòng](#6-file-env--dien-tung-dong)  
-7. [Thứ tự chạy: App → Ngrok → Meta → Connect](#7-thu-tu-chay)  
-8. [License (bản quyền)](#8-license-ban-quyen)  
-9. [Sau khi Connect: page, kho media, caption](#9-sau-khi-connect)  
-10. [Cập nhật app sau này](#10-cap-nhat-app-sau-nay)  
-11. [Lỗi thường gặp](#11-loi-thuong-gap)  
-12. [Giải thích nhanh: Ngrok / Meta](#12-giai-thich-nhanh)  
+Không tải `Source code.zip`. Không cần chạy BAT, CMD hoặc server riêng.
 
----
-
-## 1. Bạn cần chuẩn bị gì
-
-| Thứ | Bắt buộc? | Link / ghi chú |
-|-----|-----------|----------------|
-| Windows 10/11 64-bit | Có | — |
-| File app từ admin / GitHub | Có | Xem mục 2 |
-| Tài khoản Facebook | Có | https://www.facebook.com |
-| Meta for Developers (tạo/dùng App) | Có | https://developers.facebook.com |
-| Ngrok (tài khoản + cài tool) | Có* | https://ngrok.com — *cần khi Connect OAuth HTTPS |
-| Chrome (khuyên) | Nên | https://www.google.com/chrome/ |
-| Key license do admin cấp | Tuỳ | Không có → dùng trial ~7 ngày |
-
-**Admin (máy gốc) gửi cho bạn:**
-
-- File `FB-Page-Studio-Desktop.exe` (hoặc zip Windows)  
-- `FB_APP_ID` + `FB_APP_SECRET` (hoặc thêm bạn làm Tester trên App của họ)  
-- (Tuỳ) **License key**  
-- **Không** cần: source code, `license-private.pem`
-
----
-
-## 2. Tải app (đúng file)
-
-### Link Release
-
-https://github.com/trumrename/fb-page-studio/releases  
-
-Chọn bản mới nhất (vd **v1.2.2**):
-https://github.com/trumrename/fb-page-studio/releases/tag/v1.2.2
-
-### Trong mục **Assets** — TẢI CÁI NÀY
-
-| File | Mô tả |
-|------|--------|
-| **FB-Page-Studio-v…-Windows.zip** | **Khuyên dùng** — có exe + hướng dẫn |
-| **FB-Page-Studio-Desktop.exe** | Chỉ file app |
-
-### KHÔNG tải (dễ nhầm)
-
-| File GitHub tự hiện | Là gì |
-|---------------------|--------|
-| **Source code (zip)** | Mã nguồn lập trình — **không phải** bản cài |
-| **Source code (tar.gz)** | Cũng là source |
-
-Tải Source code → không có app đúng, có thể thấy file cũ/hỏng → **đừng dùng**.
-
----
-
-## 3. Cài đặt file trên máy
-
-1. Tạo thư mục, ví dụ:
-
-```
-D:\FB-Page-Studio\
-```
-
-2. Giải nén zip vào đó (hoặc copy file exe vào).
-
-3. Cấu trúc tối thiểu:
-
-```
-D:\FB-Page-Studio\
-  FB-Page-Studio-Desktop.exe
-  .env.example
-  HUONG-DAN-MAY-MOI.md
-  README-KHACH.txt
-  VERSION.txt
-```
-
-4. Copy file `.env.example` → đổi tên thành **`.env`**  
-   (cùng thư mục với file `.exe` — **rất quan trọng**)
-
-5. Chưa cần chạy app vội — làm tiếp Meta + Ngrok + điền `.env`.
-
----
-
-## 4. Tài khoản Facebook + Meta Developers
-
-### 4.1. Facebook
-
-- Đăng ký / đăng nhập: https://www.facebook.com  
-- Nick này phải **quản lý fanpage** (Admin / Editor) bạn muốn đăng.  
-- Nên bật 2FA (Authenticator) nếu Meta yêu cầu.
-
-### 4.2. Meta for Developers — vào đây
-
-1. Mở: https://developers.facebook.com  
-2. Đăng nhập **cùng** (hoặc nick admin App).  
-3. Lần đầu: có thể hiện “Get Started” / xác nhận tài khoản developer.
-
-### 4.3. Hai trường hợp
-
-#### A) Admin đã có Meta App — bạn chỉ Connect (phổ biến)
-
-Admin làm giúp:
-
-1. Vào App: https://developers.facebook.com/apps/  
-2. Chọn App → **App roles** → **Roles**  
-   https://developers.facebook.com/apps/ → chọn app → menu trái **App roles**  
-3. **Add People** → thêm Facebook của bạn với vai trò **Tester** (hoặc Developer)  
-4. Bạn vào Facebook → **Thông báo** → **Accept** lời mời Tester  
-
-Bạn nhận từ admin: `FB_APP_ID`, `FB_APP_SECRET` (để ghi `.env`).
-
-#### B) Tự tạo Meta App mới
-
-1. https://developers.facebook.com/apps/create/  
-2. Chọn loại phù hợp (thường **Business** / **Other** tùy giao diện Meta lúc đó)  
-3. Đặt tên app → Create  
-4. **Add product** → **Facebook Login** → **Set up** → Web  
-5. Lấy **App ID** và **App Secret**:  
-   - **App settings** → **Basic**: https://developers.facebook.com/apps/  
-   - Chọn app → **Settings** → **Basic**  
-   - App ID hiển thị sẵn; App Secret bấm **Show** (cần mật khẩu FB)  
-6. **Facebook Login** → **Settings**:  
-   - **Valid OAuth Redirect URIs** — sẽ dán URI ngrok ở mục 7 (làm sau khi có URL ngrok)
-
-### 4.4. Quyền (Permissions) gợi ý
-
-Trong `.env` thường có (khớp tool):
+Tạo một thư mục riêng, ví dụ:
 
 ```text
-pages_show_list
-pages_manage_posts
-pages_read_engagement
-pages_manage_engagement
-read_insights
-public_profile
+D:\FB-Page-Studio\
+  FB-Page-Studio-Desktop-v1.2.16.exe
+  .env
+  data\
 ```
 
-App **Dev mode**: chỉ user **Admin/Developer/Tester** của app login được.
+Luôn đặt EXE mới cạnh `.env` và `data` để giữ cấu hình, license, token Facebook và lịch đăng.
 
----
+## 2. Tạo `.env`
 
-## 5. Cài Ngrok (bắt buộc khi Connect)
-
-### Ngrok dùng để làm gì?
-
-Facebook chỉ gọi được địa chỉ **HTTPS công khai**.  
-App chạy trong máy (`127.0.0.1:3847`) → internet không vào trực tiếp.  
-
-**Ngrok** tạo link dạng `https://xxxx.ngrok-free.app` trỏ về máy bạn:
-
-```
-Facebook → https://xxxx.ngrok… → ngrok → app :3847
-```
-
-### 5.1. Đăng ký Ngrok
-
-1. Mở: https://ngrok.com  
-2. **Sign up** (đăng ký): https://dashboard.ngrok.com/signup  
-3. Đăng nhập dashboard: https://dashboard.ngrok.com  
-
-### 5.2. Lấy Authtoken
-
-1. Vào: https://dashboard.ngrok.com/get-started/your-authtoken  
-2. Copy **Your Authtoken** (chuỗi dài)
-
-### 5.3. Cài Ngrok trên Windows
-
-**Cách 0 — File `.bat` tự động (khuyên dùng)**
-
-1. Lấy token: https://dashboard.ngrok.com/get-started/your-authtoken  
-2. Mở file **`CAI-NGROK.bat`** (cùng folder app / trong zip) bằng Notepad  
-3. Sửa dòng:
-
-```bat
-set "NGROK_TOKEN=DAN_TOKEN_NGROK_VAO_DAY"
-```
-
-thành token thật, **Lưu**  
-4. Chạy **`CAI-NGROK.bat`** (chuột phải → Run as administrator nếu cần)  
-5. Script sẽ: tải `ngrok.exe` (nếu chưa có) → lưu token → hỏi rồi bật tunnel `127.0.0.1:3847`  
-
-**Cách 1 — Tải file thủ công**
-
-1. https://ngrok.com/download  
-2. Chọn **Windows** → Download  
-3. Giải nén ra folder, ví dụ `C:\ngrok\ngrok.exe`  
-4. Mở PowerShell:
-
-```powershell
-cd C:\ngrok
-.\ngrok config add-authtoken DÁN_TOKEN_VÀO_ĐÂY
-```
-
-**Cách 2 — Winget (nếu có)**
-
-```powershell
-winget install ngrok.ngrok
-ngrok config add-authtoken DÁN_TOKEN_VÀO_ĐÂY
-```
-
-### 5.4. Chạy Ngrok (sau khi app đã mở — xem mục 7)
-
-```powershell
-ngrok http 127.0.0.1:3847
-```
-
-**Lưu ý:** gõ **`127.0.0.1`**, không gõ `localhost` (tránh lỗi `[::1]` / ERR_NGROK_8012).
-
-Cửa sổ ngrok hiện dòng **Forwarding**:
-
-```text
-https://abcd-1234.ngrok-free.app  →  http://127.0.0.1:3847
-```
-
-Copy phần `https://abcd-1234.ngrok-free.app` (URL **máy bạn lần này**).
-
-**Ngrok free:** mỗi lần tắt/mở có thể **đổi URL** → phải cập nhật `.env` + Meta (mục 7).
-
----
-
-## 6. File `.env` — điền từng dòng
-
-Mở file `.env` bằng Notepad (cùng folder với `.exe`).
-
-### Mẫu đầy đủ
+Copy `.env.example` thành `.env`, sau đó điền tối thiểu:
 
 ```env
 PORT=3847
+APP_BASE_URL=https://qgroup.ngrok.app
+NGROK_AUTHTOKEN=
+NGROK_AUTOSTART=1
 
-# === ĐỔI THEO NGROK MÁY NÀY (sau khi chạy ngrok) ===
-APP_BASE_URL=https://abcd-1234.ngrok-free.app
-FB_REDIRECT_URI=https://abcd-1234.ngrok-free.app/auth/facebook/callback
-
-# === COPY TỪ ADMIN / MÁY GỐC (giữ nguyên App ID) ===
-FB_APP_ID=dán_App_ID_vào_đây
-FB_APP_SECRET=dán_App_Secret_vào_đây
-FB_APP_NAME=App 1
-
-# App 2 (nếu admin có) — bỏ comment và điền
-# FB_APP_ID_2=
-# FB_APP_SECRET_2=
-# FB_APP_NAME_2=App 2
-
-FB_GRAPH_VERSION=v21.0
-FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile
-
-# Chuỗi ngẫu nhiên dài > 32 ký tự (copy máy gốc hoặc tự tạo)
-TOKEN_ENCRYPTION_KEY=doi-thanh-chuoi-ngau-nhien-dai-hon-32-ky-tu!!
-
-GITHUB_REPO=trumrename/fb-page-studio
-UPDATE_ASSET=FB-Page-Studio-Desktop.exe
+FB_APP_ID=
+FB_APP_SECRET=
+FB_REDIRECT_URI=https://qgroup.ngrok.app/auth/facebook/callback
+TOKEN_ENCRYPTION_KEY=doi-chuoi-ngau-nhien-dai-hon-32-ky-tu!!
 ```
 
-### Copy `.env` từ máy cũ?
+Có thể để trống `NGROK_AUTHTOKEN` và nhập token trên giao diện khi mở tool.
 
-| Được giữ | Phải đổi trên máy mới |
-|----------|------------------------|
-| `FB_APP_ID` / `SECRET` | `APP_BASE_URL` |
-| `TOKEN_ENCRYPTION_KEY` | `FB_REDIRECT_URI` |
-| `GITHUB_REPO` | (theo URL ngrok **đang chạy trên máy này**) |
+## 3. Ngrok đã tích hợp trong EXE
 
----
+1. Mở EXE.
+2. Vào **Kết nối Meta**.
+3. Kiểm tra domain OAuth.
+4. Dán Authtoken Ngrok.
+5. Bấm **Lưu token & mở server**.
 
-## 7. Thứ tự chạy
+Tool sẽ tự:
 
-Làm **đúng thứ tự** — hay sai → lỗi ngrok 8012 sau khi Accept Facebook.
+- tìm `ngrok.exe` cạnh EXE, trong thư mục `ngrok`, hoặc PATH;
+- tải Ngrok Windows amd64 nếu máy chưa có;
+- lưu token vào `.env`;
+- mở tunnel đúng domain và port `3847`;
+- đóng Ngrok khi thoát tool;
+- yêu cầu token mới nếu token sai hoặc bị thu hồi.
 
-### Bước 1 — Mở app
+Không mở thêm `ngrok.exe`, BAT hoặc CMD. Một domain cố định chỉ nên chạy trên một máy tại thời điểm Connect Facebook.
 
-1. Chạy `FB-Page-Studio-Desktop.exe`  
-2. **Giữ cửa sổ app** (không tắt)  
-3. Kiểm tra: http://127.0.0.1:3847/app.html  
-   - Vào được = app OK  
+## 4. Cấu hình Meta App
 
-### Bước 2 — Mở Ngrok
-
-```powershell
-ngrok http 127.0.0.1:3847
-```
-
-Copy URL `https://....ngrok-free.app`
-
-### Bước 3 — Sửa `.env`
-
-```env
-APP_BASE_URL=https://....ngrok-free.app
-FB_REDIRECT_URI=https://....ngrok-free.app/auth/facebook/callback
-```
-
-Lưu file.
-
-### Bước 4 — Meta: thêm Redirect URI
-
-1. https://developers.facebook.com/apps/ → chọn App  
-2. **Facebook Login** → **Settings**  
-   (hoặc tìm **Valid OAuth Redirect URIs**)  
-3. **Thêm** đúng:
+Trong Meta for Developers, thêm đúng URI:
 
 ```text
-https://....ngrok-free.app/auth/facebook/callback
+https://qgroup.ngrok.app/auth/facebook/callback
 ```
 
-4. **Save changes**  
-5. Có thể **giữ** URI máy cũ nếu máy cũ còn dùng (thêm, không xóa lung tung)
+URI trên Meta phải trùng hoàn toàn `FB_REDIRECT_URI` trong `.env` và domain hiển thị trong tool.
 
-### Bước 5 — Restart app
+## 5. Kết nối Facebook bằng Chrome/ChromePortable
 
-- Tắt Page Studio → mở lại  
-- Ngrok **vẫn chạy**  
-- http://127.0.0.1:3847/app.html vẫn OK  
+- Chrome thường: chọn profile trong danh sách.
+- ChromePortable: chọn thư mục gốc `GoogleChromePortable` hoặc `Data\profile`, sau đó bấm **Quét profile**.
+- Chọn profile đang đăng nhập Facebook rồi bấm Connect App.
 
-### Bước 6 — Connect Facebook
+Tool mở tab OAuth mới bằng cookie của profile đã chọn; không chiếm tab Facebook đang mở.
 
-1. Trong app: **Pages / Connect** → **+ App 1**  
-2. Chrome mở (ưu tiên) → login / Accept  
-3. **Lúc bấm Accept:** app + ngrok **phải còn mở**  
-4. Thấy trang **Đã kết nối** + nút **Quay về Pages**  
+## 6. Cập nhật phiên bản
 
-Nếu ra trang đỏ **ERR_NGROK_8012** → app không chạy trên 3847 hoặc ngrok sai (xem mục 11).
+- Nút version trong tool kiểm tra GitHub và tải trực tiếp.
+- EXE tải thủ công luôn có version trong tên.
+- Nếu còn bản cũ chạy nền, EXE mới sẽ cảnh báo. Hãy Thoát tool ở khay hệ thống hoặc tắt các tiến trình FB Page Studio trong Task Manager rồi mở lại.
+- Không xóa `.env`, `data` hoặc `license.json` khi cập nhật.
 
----
+## 7. Kiểm tra nhanh
 
-## 8. License (bản quyền)
+- Nút version hiển thị đúng bản vừa tải.
+- Ngrok hiển thị **Ngrok đang chạy** và đúng Public URL.
+- Meta App, Admin/Profile và Page hiển thị đúng.
+- Thư mục media/caption đúng ổ máy này.
+- Giờ hiển thị theo Việt Nam.
 
-1. Menu **License**  
-2. **Trial:** dùng thử có giới hạn account/page  
-3. **Có key:** dán key admin cấp → **Kích hoạt**  
-4. **Machine ID:** hiện trên trang License — gửi admin nếu key gắn máy  
+## 8. Lỗi thường gặp
 
-Cấp key (chỉ máy admin):
+### Token Ngrok sai hoặc bị thu hồi
 
-```powershell
-cd D:\fb-page-poster
-node scripts/gen-license.mjs --type employee --holder "Ten-NV" --days 90 --max-accounts 15 --max-pages 50
-```
+Dán token mới tại **Kết nối Meta → Ngrok Authtoken**. Tool tự ghi lại `.env` và mở lại tunnel.
 
----
+### Domain đã chạy trên máy khác — ERR_NGROK_334
 
-## 9. Sau khi Connect
+Tắt Ngrok/tool trên máy đang giữ domain, sau đó bấm **Mở lại Ngrok** trên máy cần Connect.
 
-### 9.1. Đồng bộ page
+### ERR_NGROK_8012
 
-- **Pages** → Sync list / Sync details  
+Đảm bảo tool đang chạy port `3847`. Ngrok tích hợp luôn trỏ về `127.0.0.1:3847`.
 
-### 9.2. Kho media & caption
+### Mở EXE mới nhưng vẫn thấy version cũ
 
-1. Menu **Cấu hình đăng**  
-2. **Chọn 1 page** bên trái  
-3. Cột phải:  
-   - **📂 Chọn ổ/folder** → kho **ảnh/video**  
-   - **📂 Chọn folder** → kho **caption** (file `.txt` / `.csv`)  
-   - Folder **posted** (sau khi đăng)  
-4. **Lưu config**  
+Bản cũ còn chạy trong RAM. Thoát ở khay hệ thống hoặc Task Manager rồi mở lại EXE có version mới.
 
-**Caption `.txt`:** mỗi dòng = 1 caption.  
+### Không lấy được Page
 
-Mặc định nếu không chọn: `data\media\inbox`, `data\media\captions` cạnh exe.
+Kiểm tra quyền Meta App, vai trò Tester/Developer khi App đang Development và các quyền Facebook Page đã được cấp.
 
-### 9.3. Đăng bài
+## 9. Không gửi cho khách
 
-- **Vận hành** → chọn page → Đăng ngay / Hẹn giờ  
-- Job: **Tạm dừng / Tiếp tục / Dừng**  
+- `.env` đã chứa App Secret/token;
+- thư mục `data` từ máy DEV;
+- private license key;
+- source code và `node_modules`.
 
----
-
-## 10. Cập nhật app sau này
-
-1. App tự báo nếu GitHub có bản mới  
-2. Bấm **Cập nhật ngay** (cần tải đúng **Desktop.exe** từ Assets)  
-3. Hoặc tải zip mới → ghi đè `.exe`  
-4. **Giữ** folder `data\` và `.env` (key, page, log không mất)  
-
-Release: https://github.com/trumrename/fb-page-studio/releases  
-
----
-
-## 11. Lỗi thường gặp
-
-### ERR_NGROK_8012 (sau Accept login)
-
-| Nguyên nhân | Cách xử lý |
-|-------------|------------|
-| App chưa mở / đã tắt | Mở lại app, giữ cửa sổ |
-| http://127.0.0.1:3847 không vào được | Xem log `desktop-startup.log` |
-| `ngrok http localhost:3847` | Đổi: `ngrok http 127.0.0.1:3847` |
-| Copy `.env` URL ngrok máy cũ | Đổi URL ngrok máy này + Meta |
-| Meta thiếu Redirect URI mới | Thêm URI đúng 100% |
-
-### Invalid OAuth redirect URI
-
-- So khớp **từng ký tự** URI trên Meta với `FB_REDIRECT_URI`  
-- Có `https://`, có path `/auth/facebook/callback`  
-
-### Không thấy page sau Connect
-
-- Nick có quyền page?  
-- Đã Accept lời mời **Tester**?  
-- Bấm Sync list  
-
-### Có Page nhưng không lấy được follower
-
-- Connect lại và chấp nhận tối thiểu `pages_show_list`, `pages_read_engagement`.
-- Nick Facebook phải có quyền xem/đọc nội dung và thông tin của chính Page đó.
-- Nếu Meta App đang ở Dev mode, nick phải là Admin/Developer/Tester và đã nhận lời mời.
-- Sau khi cấp quyền, vào Kết nối/Báo cáo và refresh lại Page. Các mốc 1/3/7/30 ngày chỉ xuất hiện sau khi đã có snapshot đủ số ngày.
-
-### Zip không có exe / file lạ
-
-- Đã tải nhầm **Source code (zip)**  
-- Tải lại **Assets** → `…-Windows.zip`  
-
-### App đen / không mở
-
-- `.env` phải **cạnh** `.exe`  
-- Xem `desktop-startup.log`  
-
----
-
-## 12. Giải thích nhanh
-
-### Ngrok
-
-Tạo HTTPS tạm để Facebook **gọi về app trên máy bạn** lúc Connect.  
-Không thay Meta App, không lưu fanpage.
-
-### Mỗi máy / mỗi lần mở ngrok free
-
-| Việc | Có phải làm lại? |
-|------|------------------|
-| Tạo Meta App mới | **Không** (dùng chung App ID) |
-| Thêm Tester | **1 lần / nick** |
-| URL ngrok trong `.env` | **Có** nếu URL đổi |
-| Thêm Redirect URI trên Meta | **Có** nếu URL ngrok **mới chưa** có trong list |
-
-Muốn ít đụng Meta: dùng ngrok **domain cố định** (trả phí) — 1 URI dùng mãi.
-
-### Sơ đồ
-
-```
-[Facebook Login]
-       │
-       ▼
-https://xxx.ngrok-free.app/auth/.../callback
-       │
-       ▼
-    [Ngrok trên máy]
-       │
-       ▼
-http://127.0.0.1:3847  ← FB-Page-Studio-Desktop.exe (phải đang mở)
-```
-
----
-
-## Checklist in 1 phút trước Connect
-
-- [ ] Tải đúng **Assets** (không phải Source code)  
-- [ ] `.exe` + `.env` cùng folder  
-- [ ] App mở, http://127.0.0.1:3847/app.html OK  
-- [ ] `ngrok http 127.0.0.1:3847` đang chạy  
-- [ ] `.env` URL = ngrok **hiện tại**  
-- [ ] Meta đã **Save** Redirect URI đó  
-- [ ] Nick là **Tester**  
-- [ ] License trial hoặc đã dán key  
-
----
-
-## Link tổng hợp
-
-| Việc | Link |
-|------|------|
-| Tải app (Release) | https://github.com/trumrename/fb-page-studio/releases |
-| Facebook | https://www.facebook.com |
-| Meta Developers | https://developers.facebook.com |
-| Tạo / quản lý App | https://developers.facebook.com/apps/ |
-| Ngrok trang chủ | https://ngrok.com |
-| Ngrok đăng ký | https://dashboard.ngrok.com/signup |
-| Ngrok authtoken | https://dashboard.ngrok.com/get-started/your-authtoken |
-| Ngrok download | https://ngrok.com/download |
-| Chrome | https://www.google.com/chrome/ |
-| Kiểm tra app local | http://127.0.0.1:3847/app.html |
-
----
-
-**Hết.** Làm theo mục **7 (Thứ tự chạy)** là quan trọng nhất trên máy mới.
+Gói khách chỉ cần EXE versioned, `.env.example`, hướng dẫn và media mẫu.
