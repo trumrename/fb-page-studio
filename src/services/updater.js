@@ -109,6 +109,8 @@ function fetchJson(url, headers = {}) {
         headers: {
           "User-Agent": "FB-Page-Studio-Updater",
           Accept: "application/vnd.github+json",
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+          Pragma: "no-cache",
           ...headers,
         },
       },
@@ -202,7 +204,10 @@ export async function checkForUpdate() {
     };
   }
 
-  const url = `https://api.github.com/repos/${parsed.owner}/${parsed.name}/releases/latest`;
+  // Some ISP/proxy caches keep GitHub's /releases/latest response for too long.
+  // A cache-busting query plus no-cache headers ensures a newly published
+  // version is visible immediately from customer machines.
+  const url = `https://api.github.com/repos/${parsed.owner}/${parsed.name}/releases/latest?ts=${Date.now()}`;
   let release;
   try {
     release = await fetchJson(url);

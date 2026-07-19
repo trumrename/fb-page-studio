@@ -24,6 +24,7 @@ let tray = null;
 let serverProc = null;
 let USER_DIR = null;
 let logFile = null;
+let applyingUpdate = false;
 
 function log(...args) {
   const line = `[${new Date().toISOString()}] ${args.join(" ")}\n`;
@@ -324,6 +325,8 @@ function startBackend() {
       return;
     }
     log("Update ready; Electron will quit before replacement", batPath);
+    if (applyingUpdate) return;
+    applyingUpdate = true;
     setTimeout(() => {
       try {
         spawn("cmd.exe", ["/c", batPath], {
@@ -339,7 +342,14 @@ function startBackend() {
       if (serverProc && !serverProc.killed) {
         try { serverProc.kill(); } catch { /* ignore */ }
       }
-      app.quit();
+      // Portable Electron may keep the outer EXE locked when a renderer/tray
+      // delays normal app.quit(). Destroy all UI resources, then terminate the
+      // Electron process immediately so the hidden updater can replace the EXE.
+      try { if (tray) { tray.destroy(); tray = null; } } catch { /* ignore */ }
+      try {
+        for (const win of BrowserWindow.getAllWindows()) win.destroy();
+      } catch { /* ignore */ }
+      app.exit(0);
     }, 150);
   });
 
