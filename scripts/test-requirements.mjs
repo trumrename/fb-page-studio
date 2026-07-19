@@ -100,6 +100,8 @@ check("media spacing records only successful selections", read("src/services/ant
 check("resource counts exclude already-used media", poster.includes("countUnusedMedia") && rot.includes("countUnusedMedia"));
 
 const server = read("src/server.js");
+const apiRoutes = read("src/routes/api.js");
+check("OAuth domain setup saves only public callback fields", apiRoutes.includes('"/setup/domain"') && apiRoutes.includes("APP_BASE_URL") && apiRoutes.includes("FB_REDIRECT_URI") && apiRoutes.includes("normalizeOAuthOrigin"));
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));
 check("overdue Facebook schedules reconcile automatically", server.includes("runScheduledReconcile") && server.includes("RECONCILE_MS"));
 check("runtime reports scheduler and config health", server.includes('/api/runtime') && server.includes("config_health") && server.includes("enabled_pages"));
@@ -124,6 +126,7 @@ const index = read("public/index.html");
 check("OAuth flash escapes URL values", index.includes('escapeHtml(p.get("error"))'));
 check("UI Connect App 1", index.includes("app=app1"));
 check("UI Connect App 2", index.includes("app=app2"));
+check("UI domain setup and Ngrok command", index.includes("oauthDomain") && index.includes("btnSaveOAuthDomain") && index.includes("btnCopyNgrokCommand"));
 check("UI meta app badge on accounts", index.includes("meta_app") || index.includes("appLabel"));
 check("UI exports Page information per App", index.includes("btnExportDailyPages") && index.includes("/api/reports/daily/pages"));
 check("manual Page report refreshes follower data", index.includes("refresh_followers"));

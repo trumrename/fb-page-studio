@@ -47,7 +47,7 @@ SAI:   "Source code (zip)" / "Source code (tar.gz)"
 - Machine ID: trong app → License (gửi admin nếu key gắn máy)
 - Báo lỗi: version trên nút topbar (v1.x.x) + mô tả
 
-6) CÁC KHU VỰC CHÍNH (v1.2.3)
+6) CÁC KHU VỰC CHÍNH (v1.2.4)
 --------------------------------
 - Tổng quan: tình trạng app, lịch và cảnh báo.
 - Kết nối: phân biệt App, Admin/Profile và danh sách Page.
@@ -62,5 +62,8 @@ Page cho tài khoản đã Connect; tool không tự điền số giả.
 
 Quy tắc tài nguyên: media được chọn ngẫu nhiên và tránh các file gần lần chọn
 trước; caption chạy lần lượt đến hết kho, sau đó trộn và xoay vòng tiếp.
+
+Setup domain: vào Connect & chọn Page, dán domain HTTPS rồi bấm Lưu. Tool tự
+ghi Redirect URI và hiện lệnh Ngrok; không cần sửa .env bằng tay.
 
 Admin / chủ tool: xem pack-dev\README-DEV.md trên máy dev.

@@ -82,6 +82,21 @@
         </div>
         <p id="usageHint" class="muted" style="margin:-.35rem 0 1rem;font-size:.8rem"></p>
 
+        <section class="panel" id="domainSetup" style="margin-bottom:1rem">
+          <h2 class="panel-hd">Thiết lập domain OAuth cho máy này <span class="badge">Setup nhanh</span></h2>
+          <div class="panel-body">
+            <p class="muted" style="margin-top:0">Dán domain Ngrok cố định hoặc domain tạm. Tool tự cập nhật <code>APP_BASE_URL</code> và Redirect URI cho App 1/App 2; không hiển thị App Secret.</p>
+            <div class="toolbar" style="align-items:end">
+              <label style="flex:1;min-width:260px">Domain HTTPS
+                <input id="oauthDomain" type="text" placeholder="qgroup.ngrok.app hoặc https://xxx.ngrok-free.dev" autocomplete="off" />
+              </label>
+              <button class="btn-ok" id="btnSaveOAuthDomain" type="button">Lưu domain máy này</button>
+              <button class="btn-ghost" id="btnCopyNgrokCommand" type="button" disabled>Copy lệnh Ngrok</button>
+            </div>
+            <div id="oauthDomainStatus" class="muted" style="margin-top:.75rem;font-size:.84rem"></div>
+          </div>
+        </section>
+
         <div class="grid-2">
           <section class="panel">
             <h2 class="panel-hd">Accounts <span id="accCount" class="badge">0</span></h2>
@@ -234,6 +249,42 @@
         /* ignore */
       }
     }
+
+    let ngrokCommand = "";
+    async function loadOAuthDomain() {
+      const r = await api("/api/setup/domain");
+      const origin = r.origin || "";
+      $("oauthDomain").value = origin.replace(/^https:\/\//, "");
+      ngrokCommand = origin ? `ngrok http --domain=${new URL(origin).hostname} 127.0.0.1:${r.port || 3847}` : "";
+      $("btnCopyNgrokCommand").disabled = !ngrokCommand;
+      $("oauthDomainStatus").innerHTML = origin
+        ? `Đang dùng: <b>${escapeHtml(origin)}</b><br/>Redirect URI: <code>${escapeHtml(r.redirect_uri || "")}</code><br/><span class="muted">Chỉ một máy cần giữ domain khi Connect Facebook. Các máy đã Connect vẫn đăng bài song song không cần Ngrok.</span>`
+        : "Chưa có domain OAuth.";
+    }
+
+    $("btnSaveOAuthDomain").onclick = async () => {
+      const btn = $("btnSaveOAuthDomain");
+      btn.disabled = true;
+      try {
+        const r = await api("/api/setup/domain", {
+          method: "PUT",
+          body: JSON.stringify({ domain: $("oauthDomain").value.trim() }),
+        });
+        ngrokCommand = r.ngrok_command;
+        $("btnCopyNgrokCommand").disabled = false;
+        $("oauthDomainStatus").innerHTML = `<b style="color:#34d399">Đã lưu domain cho máy này.</b><br/>Redirect URI: <code>${escapeHtml(r.redirect_uri)}</code><br/>Lệnh: <code>${escapeHtml(r.ngrok_command)}</code>${r.app2_updated ? "<br/>App 2 cũng đã cập nhật Redirect URI." : ""}`;
+      } catch (e) {
+        $("oauthDomainStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`;
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    $("btnCopyNgrokCommand").onclick = async () => {
+      if (!ngrokCommand) return;
+      try { await navigator.clipboard.writeText(ngrokCommand); alert("Đã copy lệnh Ngrok."); }
+      catch { prompt("Copy lệnh này:", ngrokCommand); }
+    };
 
     async function loadAccounts() {
       const { accounts } = await api("/api/accounts");
@@ -486,7 +537,7 @@
     };
 
     async function refreshAll() {
-      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint()]);
+      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadOAuthDomain()]);
     }
 
     showFlash();

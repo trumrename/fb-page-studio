@@ -1,7 +1,7 @@
 # CHECK-BUG — Checklist kiểm thử FB Page Studio
 
 > Trước mỗi ship / release. Đánh `[x]` khi OK.  
-> **Phiên bản code:** 1.2.3
+> **Phiên bản code:** 1.2.4
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`
 
@@ -51,6 +51,8 @@ npm test
 - [ ] App 2 (nếu có env) Connect đúng  
 - [ ] App 2 chưa config → lỗi, không login nhầm App 1  
 - [ ] 2FA external browser OK  
+- [ ] Lưu domain HTTPS trong màn Connect cập nhật đúng APP_BASE_URL + Redirect URI App 1/App 2
+- [ ] Lệnh Ngrok hiển thị đúng domain/cổng, không lộ App Secret
 
 ---
 

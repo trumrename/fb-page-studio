@@ -28,7 +28,7 @@ import {
   refreshAppUsageFromMeta,
 } from "../services/rateLimit.js";
 import { config } from "../config.js";
-import { isPackaged, getExeDir, debugPaths } from "../paths.js";
+import { isPackaged, getExeDir, getEnvPath, debugPaths } from "../paths.js";
 import {
   checkForUpdate,
   applyUpdate,
@@ -53,6 +53,77 @@ import {
 } from "../services/dailyReports.js";
 
 const router = Router();
+
+function normalizeOAuthOrigin(input) {
+  let raw = String(input || "").trim();
+  if (!raw) throw new Error("Nhập domain Ngrok, ví dụ qgroup.ngrok.app");
+  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+  let url;
+  try { url = new URL(raw); }
+  catch { throw new Error("Domain không hợp lệ"); }
+  if (url.protocol !== "https:") throw new Error("OAuth Facebook cần domain HTTPS");
+  if (!url.hostname || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    throw new Error("Chỉ nhập domain, không thêm path, query hoặc tài khoản");
+  }
+  return url.origin;
+}
+
+function writeEnvValues(envPath, values) {
+  const exists = fs.existsSync(envPath);
+  let text = exists ? fs.readFileSync(envPath, "utf8") : "";
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  for (const [key, value] of Object.entries(values)) {
+    const pattern = new RegExp(`^(\\s*${key}\\s*=).*?$`, "m");
+    if (pattern.test(text)) text = text.replace(pattern, `$1${value}`);
+    else text += `${text && !text.endsWith("\n") ? newline : ""}${key}=${value}${newline}`;
+  }
+  fs.mkdirSync(path.dirname(envPath), { recursive: true });
+  fs.writeFileSync(envPath, text, "utf8");
+}
+
+/** Domain OAuth local setup — never returns App Secret or encryption keys. */
+router.get("/setup/domain", (_req, res) => {
+  res.json({
+    origin: config.appBaseUrl,
+    redirect_uri: config.facebook.redirectUri,
+    port: config.port,
+    app2_configured: Boolean(process.env.FB_APP_ID_2),
+    env_exists: fs.existsSync(getEnvPath()),
+  });
+});
+
+router.put("/setup/domain", (req, res) => {
+  try {
+    const origin = normalizeOAuthOrigin(req.body?.domain || req.body?.origin);
+    const redirectUri = `${origin}/auth/facebook/callback`;
+    const envPath = getEnvPath();
+    const updates = {
+      APP_BASE_URL: origin,
+      FB_REDIRECT_URI: redirectUri,
+    };
+    // App 2 must use the same callback unless the user deliberately configures
+    // a different one later. This avoids App 2 silently keeping an old domain.
+    if (process.env.FB_APP_ID_2 || process.env.FB_REDIRECT_URI_2) {
+      updates.FB_REDIRECT_URI_2 = redirectUri;
+    }
+    writeEnvValues(envPath, updates);
+    process.env.APP_BASE_URL = origin;
+    process.env.FB_REDIRECT_URI = redirectUri;
+    if (updates.FB_REDIRECT_URI_2) process.env.FB_REDIRECT_URI_2 = redirectUri;
+    config.appBaseUrl = origin;
+    config.facebook.redirectUri = redirectUri;
+    res.json({
+      ok: true,
+      origin,
+      redirect_uri: redirectUri,
+      port: config.port,
+      app2_updated: Boolean(updates.FB_REDIRECT_URI_2),
+      ngrok_command: `ngrok http --domain=${new URL(origin).hostname} 127.0.0.1:${config.port}`,
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
 
 router.get("/reports/daily/info", (_req, res) => {
   res.json(dailyReportInfo());

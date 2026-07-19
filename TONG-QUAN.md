@@ -5,7 +5,7 @@
 | | |
 |--|--|
 | **Tên** | FB Page Studio |
-| **Phiên bản** | **1.2.3** |
+| **Phiên bản** | **1.2.4** |
 | **Máy DEV (gốc)** | `D:\fb-page-poster\` |
 | **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` |
 | **Ghi chú DEV** | `D:\fb-page-poster\pack-dev\README-DEV.md` |
@@ -102,6 +102,9 @@ Giao diện tách rõ **Tổng quan → Kết nối → Cấu hình Page → Xoa
 
 ### Đồng bộ bài hẹn giờ Facebook
 Bài hẹn giờ được đối soát thủ công hoặc tự động mỗi 5 phút. Khi Facebook xác nhận đã đăng, lịch sử chuyển từ `scheduled` sang `published`; thời gian quá khứ không được coi là một lịch hẹn mới hợp lệ.
+
+### Setup domain OAuth nhiều máy
+Trong màn **Connect & chọn Page**, nhập một domain HTTPS để tool tự cập nhật `APP_BASE_URL` và Redirect URI cho App 1/App 2, đồng thời đưa đúng lệnh Ngrok. Nhiều máy có thể đăng song song; một domain chỉ được một máy dùng tại thời điểm Connect/Reconnect Facebook.
 
 ---
 

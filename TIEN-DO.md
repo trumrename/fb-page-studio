@@ -1,6 +1,6 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-18** · Code: **1.2.3**
+> Cập nhật: **2026-07-19** · Code: **1.2.4**
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`  
 > **GitHub:** `trumrename/fb-page-studio` — **push chỉ khi user OK**
@@ -93,6 +93,12 @@ node scripts/sync-customer-pack.mjs
 - [x] Tách con trỏ caption khỏi vòng loại bài; migration giữ đúng vị trí đang chạy
 - [x] Chỉ ghi lịch sử media gần nhau sau khi Facebook nhận bài thành công
 - [x] Số media khả dụng loại trừ hash đã dùng; bộ kiểm thử sau rà soát: **136/136 đạt**
+
+### I. Setup domain OAuth v1.2.4
+- [x] Nhập domain HTTPS ngay trong app, không cần sửa `.env` thủ công
+- [x] Tự cập nhật `APP_BASE_URL` + `FB_REDIRECT_URI` cho App 1/App 2
+- [x] Hiển thị/copy đúng lệnh Ngrok theo cổng của máy
+- [x] Nhắc rõ nhiều máy đăng song song được; domain OAuth chỉ chiếm khi Connect Facebook
 
 ---
 
