@@ -1,6 +1,6 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-19** · Code: **1.2.5**
+> Cập nhật: **2026-07-19** · Code: **1.2.6**
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`  
 > **GitHub:** `trumrename/fb-page-studio` — **push chỉ khi user OK**
@@ -105,6 +105,10 @@ node scripts/sync-customer-pack.mjs
 - [x] Mở OAuth bằng `--profile-directory`, dùng lại session Facebook của profile đã login
 - [x] Không cố chiếm tab Chrome đang click (Chrome không cho app ngoài can thiệp tab đó)
 - [x] Kiểm thử tự động: **140/140 đạt**
+
+### K. Áp dụng profile không restart v1.2.6
+- [x] Electron đọc lại lựa chọn Chrome Profile trước mỗi lần mở OAuth
+- [x] Lưu profile xong bấm Connect ngay, không cần tắt/mở tool
 
 ---
 

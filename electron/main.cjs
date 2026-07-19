@@ -137,15 +137,27 @@ function loadAppIcon() {
   return img.isEmpty() ? undefined : img;
 }
 
+// Browser choice is read fresh before each OAuth launch. The setup page can
+// therefore change profile without restarting the desktop application.
+function readBrowserEnv() {
+  try {
+    const envPath = path.join(USER_DIR || findUserDirWithEnv(), ".env");
+    return dotenv.parse(fs.readFileSync(envPath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Open OAuth / external URL in a real browser that keeps Facebook login cookies.
  * Prefer Chrome (user usually has tabs logged in) → Edge → Firefox → system default.
  * Opening chrome.exe with a URL reuses the running Chrome instance + profile.
  */
 function openInPreferredBrowser(url) {
+  const browserEnv = readBrowserEnv();
   const candidates = [];
-  if (process.env.BROWSER_PATH) candidates.push(process.env.BROWSER_PATH);
-  if (process.env.FB_BROWSER_PATH) candidates.push(process.env.FB_BROWSER_PATH);
+  if (browserEnv.BROWSER_PATH || process.env.BROWSER_PATH) candidates.push(browserEnv.BROWSER_PATH || process.env.BROWSER_PATH);
+  if (browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH) candidates.push(browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH);
 
   const local = process.env.LOCALAPPDATA || "";
   const pf = process.env.ProgramFiles || "C:\\Program Files";
@@ -169,8 +181,8 @@ function openInPreferredBrowser(url) {
     if (!exe || !fs.existsSync(exe)) continue;
     try {
       const isChrome = /(?:^|\\)chrome(?:\.exe)?$/i.test(exe);
-      const profile = String(process.env.FB_CHROME_PROFILE || "").trim();
-      const userData = String(process.env.FB_CHROME_USER_DATA_DIR || "").trim();
+      const profile = String(browserEnv.FB_CHROME_PROFILE || process.env.FB_CHROME_PROFILE || "").trim();
+      const userData = String(browserEnv.FB_CHROME_USER_DATA_DIR || process.env.FB_CHROME_USER_DATA_DIR || "").trim();
       // Chrome does not allow an external app to take over the active tab.
       // Passing the profile opens a new tab with that profile's FB cookies.
       const args = isChrome && profile

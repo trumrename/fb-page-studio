@@ -1,7 +1,7 @@
 # CHECK-BUG — Checklist kiểm thử FB Page Studio
 
 > Trước mỗi ship / release. Đánh `[x]` khi OK.  
-> **Phiên bản code:** 1.2.5
+> **Phiên bản code:** 1.2.6
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`
 

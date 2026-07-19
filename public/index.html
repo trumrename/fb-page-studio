@@ -318,7 +318,7 @@
           method: "PUT",
           body: JSON.stringify({ profile: $("oauthBrowserProfile").value }),
         });
-        $("oauthBrowserStatus").innerHTML = `<b style="color:#34d399">Đã lưu Chrome Profile ${escapeHtml(r.selected_profile || "tự động")}.</b> Khởi động lại tool một lần, sau đó Connect Facebook sẽ mở tab mới với session Facebook của profile này.`;
+        $("oauthBrowserStatus").innerHTML = `<b style="color:#34d399">Đã lưu Chrome Profile ${escapeHtml(r.selected_profile || "tự động")}.</b> Bấm Connect Facebook ngay — không cần khởi động lại tool.`;
       } catch (e) {
         $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`;
       } finally { btn.disabled = false; }

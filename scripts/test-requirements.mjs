@@ -102,7 +102,7 @@ check("resource counts exclude already-used media", poster.includes("countUnused
 const server = read("src/server.js");
 const apiRoutes = read("src/routes/api.js");
 check("OAuth domain setup saves only public callback fields", apiRoutes.includes('"/setup/domain"') && apiRoutes.includes("APP_BASE_URL") && apiRoutes.includes("FB_REDIRECT_URI") && apiRoutes.includes("normalizeOAuthOrigin"));
-check("OAuth browser profile setup", apiRoutes.includes('"/setup/browser"') && apiRoutes.includes("listChromeProfiles") && read("electron/main.cjs").includes("--profile-directory"));
+check("OAuth browser profile setup", apiRoutes.includes('"/setup/browser"') && apiRoutes.includes("listChromeProfiles") && read("electron/main.cjs").includes("--profile-directory") && read("electron/main.cjs").includes("readBrowserEnv"));
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));
 check("overdue Facebook schedules reconcile automatically", server.includes("runScheduledReconcile") && server.includes("RECONCILE_MS"));
 check("runtime reports scheduler and config health", server.includes('/api/runtime') && server.includes("config_health") && server.includes("enabled_pages"));
