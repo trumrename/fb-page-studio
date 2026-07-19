@@ -21,22 +21,17 @@ export async function pickFolder(opts = {}) {
 
   if (process.platform === "win32") {
     const initLine = initial
-      ? `$f.InitialDirectory = '${initial.replace(/'/g, "''")}';`
+      ? `$f.SelectedPath = '${initial.replace(/'/g, "''")}';`
       : "";
     const ps = [
       "Add-Type -AssemblyName System.Windows.Forms | Out-Null",
-      "$f = New-Object System.Windows.Forms.OpenFileDialog",
-      `$f.Title = '${title}'`,
-      "$f.Filter = 'Thư mục|*.folder'",
-      "$f.FileName = 'Chọn thư mục này'",
-      "$f.CheckFileExists = $false",
-      "$f.CheckPathExists = $true",
-      "$f.ValidateNames = $false",
-      "$f.DereferenceLinks = $true",
-      "$f.RestoreDirectory = $true",
+      "$f = New-Object System.Windows.Forms.FolderBrowserDialog",
+      `$f.Description = '${title}'`,
+      "$f.UseDescriptionForTitle = $true",
+      "$f.ShowNewFolderButton = $false",
       initLine,
       "$r = $f.ShowDialog()",
-      "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output ([System.IO.Path]::GetDirectoryName($f.FileName)) }",
+      "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }",
     ]
       .filter(Boolean)
       .join("; ");
