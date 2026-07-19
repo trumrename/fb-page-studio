@@ -82,14 +82,21 @@ function writeEnvValues(envPath, values) {
   fs.writeFileSync(envPath, text, "utf8");
 }
 
-function chromeUserDataDir() {
-  const custom = String(process.env.FB_CHROME_USER_DATA_DIR || "").trim();
-  if (custom) return path.resolve(custom);
-  return path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data");
+function chromeUserDataDir(value = process.env.FB_CHROME_USER_DATA_DIR) {
+  const custom = String(value || "").trim();
+  if (!custom) return path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data");
+  const raw = path.resolve(custom);
+  // ChromePortable normally keeps the Chrome user-data root in Data\profile.
+  // Accept its root folder too so the user does not need to hunt for the
+  // technical subfolder by hand.
+  for (const candidate of [raw, path.join(raw, "Data", "profile"), path.join(raw, "profile")]) {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return candidate;
+  }
+  return raw;
 }
 
-function listChromeProfiles() {
-  const userDataDir = chromeUserDataDir();
+function listChromeProfiles(userDataOverride) {
+  const userDataDir = chromeUserDataDir(userDataOverride);
   if (!userDataDir || !fs.existsSync(userDataDir)) return { user_data_dir: userDataDir, profiles: [] };
   const profiles = fs.readdirSync(userDataDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && (entry.name === "Default" || /^Profile \d+$/i.test(entry.name)))
@@ -154,21 +161,42 @@ router.get("/setup/browser", (_req, res) => {
   res.json({
     ...found,
     selected_profile: String(process.env.FB_CHROME_PROFILE || "").trim(),
+    custom_user_data_dir: String(process.env.FB_CHROME_USER_DATA_DIR || "").trim(),
   });
+});
+
+router.post("/setup/browser/scan", (req, res) => {
+  const requested = String(req.body?.user_data_dir || "").trim();
+  const found = listChromeProfiles(requested);
+  if (!found.profiles.length) {
+    return res.status(400).json({
+      ok: false,
+      error: "Không thấy Chrome profile ở thư mục này. Với ChromePortable, chọn thư mục ChromePortable hoặc ChromePortable\\Data\\profile.",
+    });
+  }
+  res.json({ ok: true, ...found });
 });
 
 router.put("/setup/browser", (req, res) => {
   try {
     const wanted = String(req.body?.profile || "").trim();
-    const found = listChromeProfiles();
+    const requestedDataDir = String(req.body?.user_data_dir || "").trim();
+    const found = listChromeProfiles(requestedDataDir);
     if (wanted && !found.profiles.some((p) => p.directory === wanted)) {
       throw new Error("Chrome Profile không tồn tại trên máy này");
     }
-    writeEnvValues(getEnvPath(), { FB_CHROME_PROFILE: wanted });
+    if (!found.profiles.length) {
+      throw new Error("Không thấy Chrome profile ở thư mục này. Với ChromePortable, chọn thư mục ChromePortable hoặc ChromePortable\\Data\\profile.");
+    }
+    writeEnvValues(getEnvPath(), {
+      FB_CHROME_PROFILE: wanted,
+      FB_CHROME_USER_DATA_DIR: requestedDataDir ? found.user_data_dir : "",
+    });
     process.env.FB_CHROME_PROFILE = wanted;
+    process.env.FB_CHROME_USER_DATA_DIR = requestedDataDir ? found.user_data_dir : "";
     // Electron reads this .env file again at every OAuth launch, so the user
     // can test the chosen profile immediately without restarting the tool.
-    res.json({ ok: true, selected_profile: wanted, restart_required: false });
+    res.json({ ok: true, selected_profile: wanted, user_data_dir: found.user_data_dir, restart_required: false });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }

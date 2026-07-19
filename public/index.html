@@ -95,6 +95,13 @@
             </div>
             <div id="oauthDomainStatus" class="muted" style="margin-top:.75rem;font-size:.84rem"></div>
             <hr style="border:0;border-top:1px solid rgba(255,255,255,.08);margin:1rem 0" />
+            <div class="toolbar" style="align-items:end;margin-bottom:.6rem">
+              <label style="flex:1;min-width:260px">Thư mục dữ liệu Chrome / ChromePortable <span class="muted">(nếu dùng ChromePortable)</span>
+                <input id="oauthBrowserDataDir" type="text" placeholder="Để trống = Chrome thường; hoặc chọn thư mục ChromePortable" autocomplete="off" />
+              </label>
+              <button class="btn-ghost" id="btnChooseBrowserData" type="button">Chọn thư mục</button>
+              <button class="btn-ghost" id="btnScanBrowserData" type="button">Quét profile</button>
+            </div>
             <div class="toolbar" style="align-items:end">
               <label style="flex:1;min-width:260px">Chrome Profile đã login Facebook
                 <select id="oauthBrowserProfile"><option value="">Tự động (profile mặc định)</option></select>
@@ -294,8 +301,7 @@
       catch { prompt("Copy lệnh này:", ngrokCommand); }
     };
 
-    async function loadBrowserProfiles() {
-      const r = await api("/api/setup/browser");
+    function renderBrowserProfiles(r) {
       const select = $("oauthBrowserProfile");
       select.innerHTML = '<option value="">Tự động (profile mặc định)</option>';
       for (const p of r.profiles || []) {
@@ -306,9 +312,28 @@
         select.appendChild(o);
       }
       if (!(r.profiles || []).length) {
-        $("oauthBrowserStatus").textContent = "Không tìm thấy Chrome Profile trên máy này. Hãy mở Chrome và login Facebook trước.";
+        $("oauthBrowserStatus").textContent = "Không tìm thấy Chrome Profile. Với ChromePortable, bấm Chọn thư mục rồi chọn ChromePortable hoặc ChromePortable\\Data\\profile.";
       }
     }
+
+    async function loadBrowserProfiles() {
+      const r = await api("/api/setup/browser");
+      $("oauthBrowserDataDir").value = r.custom_user_data_dir || "";
+      renderBrowserProfiles(r);
+    }
+
+    $("btnChooseBrowserData").onclick = async () => {
+      const r = await api("/api/system/pick-folder", { method:"POST", body: JSON.stringify({ title:"Chọn thư mục ChromePortable hoặc Data\\profile", initial_dir: $("oauthBrowserDataDir").value }) });
+      if (r.path) $("oauthBrowserDataDir").value = r.path;
+    };
+
+    $("btnScanBrowserData").onclick = async () => {
+      try {
+        const r = await api("/api/setup/browser/scan", { method:"POST", body: JSON.stringify({ user_data_dir: $("oauthBrowserDataDir").value.trim() }) });
+        renderBrowserProfiles(r);
+        $("oauthBrowserStatus").textContent = `Đã tìm thấy ${(r.profiles || []).length} profile. Chọn profile có Facebook đã login rồi bấm Dùng profile này.`;
+      } catch (e) { $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`; }
+    };
 
     $("btnSaveBrowserProfile").onclick = async () => {
       const btn = $("btnSaveBrowserProfile");
@@ -316,7 +341,7 @@
       try {
         const r = await api("/api/setup/browser", {
           method: "PUT",
-          body: JSON.stringify({ profile: $("oauthBrowserProfile").value }),
+          body: JSON.stringify({ profile: $("oauthBrowserProfile").value, user_data_dir: $("oauthBrowserDataDir").value.trim() }),
         });
         $("oauthBrowserStatus").innerHTML = `<b style="color:#34d399">Đã lưu Chrome Profile ${escapeHtml(r.selected_profile || "tự động")}.</b> Bấm Connect Facebook ngay — không cần khởi động lại tool.`;
       } catch (e) {
