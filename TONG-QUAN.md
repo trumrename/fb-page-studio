@@ -10,6 +10,8 @@
 | **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` (+ ZIP `FB-Page-Studio-v1.2.21-Windows.zip`) |
 | **Ghi chú DEV** | `D:\fb-page-poster\pack-dev\README-DEV.md` |
 | **Admin cấp key** | `D:\fb-page-poster\Admin-Quan-Ly\MENU-ADMIN.bat` |
+| **Server trung tâm (web)** | `DEPLOY_MODE=central` · `HUONG-DAN-SERVER-TRUNG-TAM.md` |
+| **EXE + bỏ Ngrok** | `OAUTH_RELAY=1` · `oauth-relay/` · `HUONG-DAN-OAUTH-RELAY.md` · `.env.customer-relay.example` |
 | **Lưu trữ bản cũ** | `D:\fb-page-poster\Luu-Tru-Ban-Cu\` |
 | **GitHub** | https://github.com/trumrename/fb-page-studio |
 | **Docs** | `TRANG-THAI-HIEN-TAI.md` · `TIEN-DO.md` · `CHECK-BUG.md` · `BAO-CAO-TEST.md` |
@@ -31,7 +33,7 @@
 - ZIP khách: `pack-customer\FB-Page-Studio-v1.2.21-Windows.zip` (cũng có trong `release-assets\`)
 - Gói khách sạch: `npm run pack:all` · gate: `npm run release:verify`
 - Bản cũ: `Luu-Tru-Ban-Cu\` (không còn rải trong App folder)
-- Test: **209/209 PASS** · npm audit 0 · License commercial Owner-Dev
+- Test: **210/210 PASS** · npm audit 0 · License commercial Owner-Dev
 
 ---
 

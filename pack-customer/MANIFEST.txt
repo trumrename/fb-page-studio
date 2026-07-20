@@ -1,11 +1,14 @@
-Nội dung gói khách (không secret):
+Gói khách — không secret:
  - .env.example
- - FB-Page-Studio-Desktop-v1.2.21.exe
- - FB-Page-Studio-Desktop-v1.2.21.exe.sha256.txt
+ - .env.public
+ - FB-Page-Studio-Desktop-v1.2.22.exe
+ - FB-Page-Studio-Desktop-v1.2.22.exe.sha256.txt
  - HUONG-DAN-MAY-MOI.md
+ - HUONG-DAN-OAUTH-RELAY.md
  - MANIFEST.txt
  - media-sample
  - README-KHACH.txt
  - VERSION.txt
 
-CẤM có trong gói khách: license-private.pem, .env có secret, data/app.db token, source src/
+CẤM trong gói khách: FB_APP_SECRET, NGROK_AUTHTOKEN, license-private.pem, data/app.db, .env đầy secret
+Connect: OAUTH_RELAY + relay RELAY_EXCHANGE=1

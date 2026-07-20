@@ -23,10 +23,20 @@ function expiresAtFromSeconds(expiresIn) {
  * @param {string} code
  * @param {{ metaAppKey?: string, app?: object }} [opts] — which Meta App issued the code
  */
-export async function connectFromOAuthCode(code, opts = {}) {
+/**
+ * Persist user token + sync pages (shared by code-exchange and relay claim).
+ */
+export async function connectFromUserToken(userToken, opts = {}) {
   const metaAppKey = String(opts.metaAppKey || opts.meta_app_key || "app1");
   const app = opts.app || {};
-  // Prefer explicit app credentials from metaApps
+  let token = String(userToken || "").trim();
+  if (!token) throw new Error("Thiếu user access token");
+
+  let expiresAt =
+    opts.expiresAt ||
+    expiresAtFromSeconds(opts.expires_in) ||
+    null;
+
   const creds =
     app.appId && app.appSecret
       ? {
@@ -36,28 +46,20 @@ export async function connectFromOAuthCode(code, opts = {}) {
         }
       : null;
 
-  const short = await exchangeCodeForToken(code, creds);
-  if (!short.access_token) {
-    throw new Error("No access_token from code exchange");
-  }
-
-  let userToken = short.access_token;
-  let expiresAt = expiresAtFromSeconds(short.expires_in);
-
-  try {
-    const long = await exchangeLongLivedUserToken(short.access_token, creds);
-    if (long.access_token) {
-      userToken = long.access_token;
-      expiresAt = expiresAtFromSeconds(long.expires_in);
+  if (creds && opts.upgradeLongLived !== false) {
+    try {
+      const long = await exchangeLongLivedUserToken(token, creds);
+      if (long.access_token) {
+        token = long.access_token;
+        expiresAt = expiresAtFromSeconds(long.expires_in) || expiresAt;
+      }
+    } catch (e) {
+      console.warn("[accounts] long-lived exchange failed:", e.message);
     }
-  } catch (e) {
-    // Keep short-lived if exchange fails (still usable briefly)
-    console.warn("[accounts] long-lived exchange failed:", e.message);
   }
 
-  const me = await getMe(userToken);
-  const picture =
-    me.picture?.data?.url || me.picture?.url || null;
+  const me = await getMe(token);
+  const picture = me.picture?.data?.url || me.picture?.url || null;
 
   const db = getDb();
   const existing = db
@@ -66,7 +68,6 @@ export async function connectFromOAuthCode(code, opts = {}) {
     )
     .get(me.id, metaAppKey);
 
-  // License gate: new accounts only
   if (!existing) {
     const n = db
       .prepare(
@@ -93,10 +94,10 @@ export async function connectFromOAuthCode(code, opts = {}) {
       me.name || null,
       me.email || null,
       picture,
-      encryptToken(userToken),
+      encryptToken(token),
       expiresAt,
       metaAppKey,
-      app.appId || null,
+      app.appId || opts.appId || null,
       accountId
     );
   } else {
@@ -112,15 +113,15 @@ export async function connectFromOAuthCode(code, opts = {}) {
         me.name || null,
         me.email || null,
         picture,
-        encryptToken(userToken),
+        encryptToken(token),
         expiresAt,
         metaAppKey,
-        app.appId || null
+        app.appId || opts.appId || null
       );
     accountId = info.lastInsertRowid;
   }
 
-  const pages = await syncPagesForAccount(accountId, userToken);
+  const pages = await syncPagesForAccount(accountId, token);
 
   return {
     account: getAccountPublic(accountId),
@@ -128,6 +129,37 @@ export async function connectFromOAuthCode(code, opts = {}) {
     sync_summary: pages.sync_summary || null,
     meta_app_key: metaAppKey,
   };
+}
+
+export async function connectFromOAuthCode(code, opts = {}) {
+  const metaAppKey = String(opts.metaAppKey || opts.meta_app_key || "app1");
+  const app = opts.app || {};
+  const creds =
+    app.appId && app.appSecret
+      ? {
+          appId: app.appId,
+          appSecret: app.appSecret,
+          redirectUri: app.redirectUri,
+        }
+      : null;
+
+  if (!creds?.appSecret) {
+    throw new Error(
+      "Thiếu App Secret trên máy này. Gói khách dùng OAuth relay (ticket) — không đổi code local."
+    );
+  }
+
+  const short = await exchangeCodeForToken(code, creds);
+  if (!short.access_token) {
+    throw new Error("No access_token from code exchange");
+  }
+
+  return connectFromUserToken(short.access_token, {
+    metaAppKey,
+    app,
+    expires_in: short.expires_in,
+    upgradeLongLived: true,
+  });
 }
 
 /**

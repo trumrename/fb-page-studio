@@ -142,11 +142,21 @@ check("opening new EXE warns when old version is still running", read("electron/
 const ngrokManager = read("src/services/ngrokManager.js");
 const index = read("public/index.html");
 check("Ngrok manager handles token, install and exact domain", ngrokManager.includes("NGROK_AUTHTOKEN") && ngrokManager.includes("ensureExe") && ngrokManager.includes("domainOf(item.public_url) === domain"));
+check("Ngrok rejects localhost custom hostname before spawning", ngrokManager.includes("isLocalHostname") && ngrokManager.includes("status: \"needs_domain\"") && ngrokManager.includes("ERR_NGROK_314") && apiRoutes.includes("Không được dùng localhost làm domain OAuth/Ngrok"));
 check("Ngrok uses current --url flag and explains busy fixed domain", ngrokManager.includes("`--url=https://${domain}`") && !ngrokManager.includes("`--domain=${domain}`") && ngrokManager.includes("ERR_NGROK_334") && ngrokManager.includes("Không bật pooling cho OAuth") && index.includes("domain_busy"));
 check("Ngrok reuses exact local tunnel on the same port", ngrokManager.includes("inspectLocalTunnel") && ngrokManager.includes("local?.same_port") && ngrokManager.includes("đã dùng lại tunnel cục bộ"));
 check("Ngrok restart cannot lose the new child process", /await stopNgrok\(\);\s*stopRequested = false/.test(ngrokManager) && ngrokManager.includes("child === proc"));
 check("Ngrok shuts down through Electron IPC", read("src/server.js").includes('msg?.type === "shutdown"') && read("electron/main.cjs").includes("serverProc.send({ type: \"shutdown\" })"));
-check("customer env example includes official Ngrok setup", read("pack-customer/.env.example").includes("NGROK_AUTHTOKEN") && read("pack-customer/.env.example").includes("NGROK_AUTOSTART=1") && read("pack-customer/.env.example").includes("qgroup.ngrok.app") && read("pack-customer/.env.example").includes("trumrename/fb-page-studio"));
+const customerEnvEx = read("pack-customer/.env.example");
+check(
+  "customer env is public-safe (relay, no secret values)",
+  customerEnvEx.includes("OAUTH_RELAY=1") &&
+    customerEnvEx.includes("NGROK_AUTOSTART=0") &&
+    customerEnvEx.includes("FB_APP_ID=") &&
+    customerEnvEx.includes("trumrename/fb-page-studio") &&
+    !/FB_APP_SECRET=\s*[A-Za-z0-9]{10,}/.test(customerEnvEx) &&
+    !/NGROK_AUTHTOKEN=\s*[A-Za-z0-9]{10,}/.test(customerEnvEx)
+);
 check("obsolete BAT files cannot collect tokens or delete builds", !read("CAI-NGROK.bat").includes("DAN_TOKEN_NGROK_VAO_DAY") && !read("pack-dev/CHAY-NGROK-DOMAIN-CO-DINH.bat").includes("set /p") && !/rd\s+\/s\s+\/q/i.test(read("XOA-BAN-HONG.bat")));
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));
 check("overdue Facebook schedules reconcile automatically", server.includes("runScheduledReconcile") && server.includes("RECONCILE_MS"));
@@ -198,6 +208,8 @@ const css = read("public/css/app.css");
 const electronMain = read("electron/main.cjs");
 const electronPreload = read("electron/preload.cjs");
 const folderPicker = read("src/services/folderPicker.js");
+check("Chrome setup scans multiple folders or drives", apiRoutes.includes("scanChromeProfiles") && apiRoutes.includes("scanned_directories") && index.includes("Chọn nhiều thư mục/ổ") && electronMain.includes("multiSelections") && electronPreload.includes("multiple: Boolean"));
+check("Chrome setup binds each profile to its nearby executable", apiRoutes.includes("chromeExecutables") && apiRoutes.includes("FB_BROWSER_PATH") && index.includes("browser_path: chosen?.browser_path") && apiRoutes.includes("rankBrowserForProfile") && electronMain.includes("chromeportable"));
 check("Ngrok token field is editable and supports clipboard paste", css.includes('input[type="password"]') && index.includes("btnPasteNgrokToken") && index.includes("navigator.clipboard.readText()"));
 check("folder pickers use full Windows Explorer dialog", electronMain.includes("dialog.showOpenDialog") && electronMain.includes('"openDirectory"') && electronMain.includes("sandbox: false") && electronMain.includes("contextIsolation: true") && electronMain.includes("preload.cjs") && electronPreload.includes('ipcRenderer.invoke("fbps:pick-folder"') && posting.includes("fbPageStudioDesktop.pickFolder") && index.includes("fbPageStudioDesktop.pickFolder"));
 check("Electron blocks external navigation and unsafe URL protocols", electronMain.includes("Never let an external origin replace the trusted local dashboard") && electronMain.includes("blocked protocol") && electronMain.includes("['http:', 'https:']"));
@@ -214,6 +226,12 @@ check("dashboard popups are closable, capped and do not replay history", dashboa
 check("dashboard shows live operation summary", ["opsState", "opsToday", "opsSuccess", "opsFail"].every((x) => dashboard.includes(x)));
 check("dashboard displays Vietnam time", dashboard.includes("fmtVn") && dashboard.includes("Asia/Ho_Chi_Minh"));
 check("Ngrok public host exposes only Facebook OAuth callback", server.includes("isFacebookCallback") && server.includes("isLocalHost") && server.includes("status(403)"));
+check("central deploy mode exists", fs.existsSync(path.join("src", "services", "deployMode.js")) && read("src/services/deployMode.js").includes("isCentralDeploy"));
+check("media upload for central server", read("src/routes/api.js").includes("/media/upload") && fs.existsSync(path.join("src", "services", "mediaUpload.js")));
+check("central server docs", fs.existsSync("HUONG-DAN-SERVER-TRUNG-TAM.md") && fs.existsSync(".env.central.example"));
+check("oauth relay for EXE without ngrok", fs.existsSync("oauth-relay/server.mjs") && fs.existsSync("HUONG-DAN-OAUTH-RELAY.md") && read("src/routes/auth.js").includes("nanoid(32)}.${config.port}"));
+check("relay-complete for customer pack without secret", read("src/routes/auth.js").includes("relay-complete") && read("src/services/accounts.js").includes("connectFromUserToken"));
+check("two packs internal vs customer", fs.existsSync("scripts/sync-internal-pack.mjs") && fs.existsSync("HAI-GOI-NOI-BO-VA-KHACH.md") && read("oauth-relay/server.mjs").includes("RELAY_EXCHANGE"));
 check("dashboard separates created and Facebook publish time", dashboard.includes("Tool thực hiện lúc") && dashboard.includes("Facebook sẽ đăng lúc") && dashboard.includes("scheduleDisplay"));
 check("dashboard shows scheduler and config health", dashboard.includes("opsScheduler") && dashboard.includes("configHealth") && dashboard.includes("loadRuntime"));
 check("dashboard explains operation per Page", dashboard.includes("pageOperationRows") && dashboard.includes("Profile / Admin") && dashboard.includes("Giờ ưu tiên VN") && dashboard.includes("total_planned_today"));

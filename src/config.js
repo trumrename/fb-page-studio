@@ -1,5 +1,7 @@
 import dotenv from "dotenv";
 import path from "path";
+import fs from "fs";
+import crypto from "crypto";
 import {
   getDataDir,
   getEnvPath,
@@ -7,6 +9,31 @@ import {
   getPackageJson,
 } from "./paths.js";
 
+// Customer pack ships .env.public (no secrets). Promote to .env on first run.
+function ensureEnvFromPublic() {
+  try {
+    const envPath = getEnvPath();
+    if (fs.existsSync(envPath)) return;
+    const dir = path.dirname(envPath);
+    const pub = path.join(dir, ".env.public");
+    if (!fs.existsSync(pub)) return;
+    let text = fs.readFileSync(pub, "utf8");
+    if (!/^TOKEN_ENCRYPTION_KEY=\s*\S+/m.test(text)) {
+      const key = crypto.randomBytes(32).toString("hex");
+      if (/^TOKEN_ENCRYPTION_KEY=/m.test(text)) {
+        text = text.replace(/^TOKEN_ENCRYPTION_KEY=.*$/m, `TOKEN_ENCRYPTION_KEY=${key}`);
+      } else {
+        text += `\nTOKEN_ENCRYPTION_KEY=${key}\n`;
+      }
+    }
+    fs.writeFileSync(envPath, text, "utf8");
+    console.log("[config] Created .env from .env.public (auto encryption key if empty)");
+  } catch (e) {
+    console.warn("[config] ensureEnvFromPublic:", e.message);
+  }
+}
+
+ensureEnvFromPublic();
 // Load .env from beside .exe (portable) or project root
 dotenv.config({ path: getEnvPath() });
 
@@ -21,9 +48,21 @@ function required(name, fallback) {
 const pkg = getPackageJson();
 const dataDir = getDataDir();
 
+const deployModeRaw = String(process.env.DEPLOY_MODE || "portable")
+  .trim()
+  .toLowerCase();
+const deployMode =
+  deployModeRaw === "central" ||
+  deployModeRaw === "server" ||
+  deployModeRaw === "web"
+    ? "central"
+    : "portable";
+
 export const config = {
   port: Number(process.env.PORT || 3847),
   appBaseUrl: required("APP_BASE_URL", `http://localhost:${process.env.PORT || 3847}`),
+  /** portable = EXE local · central = domain + web clients */
+  deployMode,
   databasePath: process.env.DATABASE_PATH
     ? path.resolve(process.env.DATABASE_PATH)
     : path.join(dataDir, "app.db"),

@@ -1,4 +1,4 @@
-# Trạng thái hiện tại — FB Page Studio v1.2.21
+# Trạng thái hiện tại — FB Page Studio v1.2.22
 
 **Cập nhật:** 2026-07-20
 
@@ -6,20 +6,20 @@
 
 | | |
 |--|--|
-| EXE mới | `FB-Page-Studio-App\FB-Page-Studio-Desktop-v1.2.21.exe` |
-| Runtime đang mở lúc build | v1.2.20 · cần đóng rồi mở v1.2.21 để nạp code mới |
+| EXE mới | `dist-desktop-oauth\FB-Page-Studio-Desktop-v1.2.22.exe` / `pack-customer\FB-Page-Studio-Desktop-v1.2.22.exe` |
+| Runtime đang mở lúc build | v1.2.20 · cần đóng rồi mở v1.2.22 để nạp code mới |
 | License | commercial · Owner-Dev · unlimited |
-| Test | **209/209 PASS** |
+| Test | **218/218 PASS** |
 | release:verify | **PASS** |
-| EXE SHA-256 | `A8DE714F3B68A6D827084EBC7E87F33EABD67BBFA4115A51D799A2C93F48D662` |
-| ZIP SHA-256 | `3A29B9AA21B287F9ED11B5AE5704D530EEA104149B99C75BE5ED5B5BA64C4DF6` |
+| EXE SHA-256 | `2B6FFFB9352317C0A7320E72F1A8EA497BB9A44D71087D5F6D09087794B3A995` |
+| ZIP SHA-256 | `161C1961181EA5533EEF5E0558EE205158928BE76429C087A9E9F63E5B6C570D` |
 
 ## Gói phân phối
 
 | Gói | Path |
 |-----|------|
 | Khách (folder) | `pack-customer\` |
-| **ZIP máy khách** | `pack-customer\FB-Page-Studio-v1.2.21-Windows.zip` |
+| **ZIP máy khách** | `pack-customer\FB-Page-Studio-v1.2.22-Windows.zip` |
 | Release staging | `release-assets\` (EXE + ZIP + sha256) |
 | DEV | `pack-dev\` |
 | Admin key | `Admin-Quan-Ly\MENU-ADMIN.bat` |

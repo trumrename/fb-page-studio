@@ -203,10 +203,22 @@ function openInPreferredBrowser(url) {
     path.join(pf86, "Mozilla Firefox", "firefox.exe")
   );
 
-  for (const exe of candidates) {
-    if (!exe || !fs.existsSync(exe)) continue;
+  for (const rawExe of candidates) {
+    if (!rawExe || !fs.existsSync(rawExe)) continue;
     try {
-      const isChrome = /(?:^|\\)chrome(?:\.exe)?$/i.test(exe);
+      // ChromePortable.exe is a launcher; profile flags are reliable on the real
+      // chrome.exe under App\Chrome-bin. Resolve when possible.
+      let exe = rawExe;
+      if (/chromeportable\.exe$/i.test(rawExe)) {
+        const portableChrome = [
+          path.join(path.dirname(rawExe), "App", "Chrome-bin", "chrome.exe"),
+          path.join(path.dirname(rawExe), "App", "Chrome", "chrome.exe"),
+          path.join(path.dirname(rawExe), "chrome.exe"),
+        ].find((candidate) => fs.existsSync(candidate));
+        if (portableChrome) exe = portableChrome;
+      }
+      const base = path.basename(exe).toLowerCase();
+      const isChrome = base === "chrome.exe" || base === "chromeportable.exe";
       const profile = String(browserEnv.FB_CHROME_PROFILE || process.env.FB_CHROME_PROFILE || "").trim();
       // Supplying only --profile-directory is unreliable when Chrome is already
       // running: Windows can forward the URL to a different active Chrome
@@ -220,10 +232,12 @@ function openInPreferredBrowser(url) {
       ).trim();
       // Chrome does not allow an external app to take over the active tab.
       // Passing the profile opens a new tab with that profile's FB cookies.
-      const args = isChrome && profile
+      // Keep --user-data-dir even when profile is empty so ChromePortable roots
+      // still isolate from the system Chrome User Data.
+      const args = isChrome
         ? [
             ...(userData ? [`--user-data-dir=${userData}`] : []),
-            `--profile-directory=${profile}`,
+            ...(profile ? [`--profile-directory=${profile}`] : []),
             url,
           ]
         : [url];
@@ -235,7 +249,7 @@ function openInPreferredBrowser(url) {
       log("openInPreferredBrowser", exe, profile ? `profile=${profile}` : "profile=auto", url.slice(0, 80));
       return true;
     } catch (e) {
-      log("openInPreferredBrowser fail", exe, e.message);
+      log("openInPreferredBrowser fail", rawExe, e.message);
     }
   }
 
@@ -475,7 +489,7 @@ ipcMain.handle("fbps:pick-folder", async (_event, options = {}) => {
     title,
     defaultPath,
     buttonLabel: "Chọn thư mục này",
-    properties: ["openDirectory", "createDirectory"],
+    properties: ["openDirectory", "createDirectory", ...(options.multiple ? ["multiSelections"] : [])],
   };
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, dialogOptions)
@@ -483,7 +497,8 @@ ipcMain.handle("fbps:pick-folder", async (_event, options = {}) => {
   if (result.canceled || !result.filePaths?.[0]) {
     return { ok: false, cancelled: true, path: null };
   }
-  return { ok: true, cancelled: false, path: path.resolve(result.filePaths[0]) };
+  const paths = result.filePaths.map((item) => path.resolve(item));
+  return { ok: true, cancelled: false, path: paths[0], paths };
 });
 
 function createTray() {

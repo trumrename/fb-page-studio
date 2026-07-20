@@ -1,8 +1,8 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-20** · Code: **1.2.21**
+> Cập nhật: **2026-07-20** · Code: **1.2.22**
 > **Gốc DEV:** `D:\fb-page-poster\`  
-> **Gói KHÁCH:** `pack-customer\` + ZIP `FB-Page-Studio-v1.2.21-Windows.zip`
+> **Gói KHÁCH:** `pack-customer\` + ZIP `FB-Page-Studio-v1.2.22-Windows.zip`
 > **Admin:** `Admin-Quan-Ly\` · **Lưu trữ cũ:** `Luu-Tru-Ban-Cu\`  
 > **GitHub:** `trumrename/fb-page-studio`  
 > **Trạng thái nhanh:** `TRANG-THAI-HIEN-TAI.md`
@@ -203,6 +203,16 @@ npm run release:verify
 - [x] Build Electron 42.7, pack khách/dev, ZIP và release verify lại sau source cuối.
 - [x] EXE ở build/customer/dev/release/App cùng SHA-256 `A8DE714F...48D662`; ZIP 8 file giải nén đạt.
 
+### Q. Hotfix Ngrok localhost v1.2.22 — 2026-07-20
+
+- [x] Không cho `localhost`/loopback làm custom hostname Ngrok.
+- [x] Domain OAuth local bị từ chối rõ ràng từ API.
+- [x] ERR_NGROK_314 được chuyển thành trạng thái `needs_domain`, không spawn tunnel sai.
+- [x] Chọn đồng thời nhiều thư mục/ổ chứa Chrome; quét đệ quy và phân biệt profile bằng đường dẫn đầy đủ.
+- [x] Mỗi profile quét được gắn với Chrome/ChromePortable executable gần nhất để Connect mở đúng bản Chrome.
+- [x] Test hồi quy **218/218 PASS**, clean runtime 20 endpoint PASS.
+- [x] Build/pack/ZIP/release verify v1.2.22 PASS; EXE SHA-256 `2B6FFFB9...3A995`.
+
 ---
 
 ## Chưa làm / chờ bạn
@@ -210,7 +220,7 @@ npm run release:verify
 | Hạng mục | Ai |
 |----------|-----|
 | `FB_APP_ID_2` nếu dùng App 2 | Bạn |
-| Build + sync pack-customer có EXE | Hoàn thành v1.2.21 |
+| Build + sync pack-customer có EXE | Hoàn thành v1.2.22 |
 | Push GH / Release có asset | **Chờ user xác nhận sau khi xem kết quả** |
 | Online revoke license | Sau |
 

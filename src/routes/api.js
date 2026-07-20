@@ -47,6 +47,12 @@ import {
   ensureAntiSpamTables,
 } from "../services/antiSpam.js";
 import { pickFolder } from "../services/folderPicker.js";
+import multer from "multer";
+import {
+  saveUploadedFile,
+  listInbox,
+} from "../services/mediaUpload.js";
+import { isCentralDeploy } from "../services/deployMode.js";
 import {
   exportPageInfoDaily,
   exportPostingHistoryDaily,
@@ -55,6 +61,14 @@ import {
 } from "../services/dailyReports.js";
 import { getNgrokStatus, startNgrok, stopNgrok } from "../services/ngrokManager.js";
 import { listMetaAppsPublic } from "../services/metaApps.js";
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: Number(process.env.MAX_UPLOAD_MB || 80) * 1024 * 1024,
+    files: 40,
+  },
+});
 
 const router = Router();
 
@@ -68,6 +82,10 @@ function normalizeOAuthOrigin(input) {
   if (url.protocol !== "https:") throw new Error("OAuth Facebook cần domain HTTPS");
   if (!url.hostname || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
     throw new Error("Chỉ nhập domain, không thêm path, query hoặc tài khoản");
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname.endsWith(".localhost")) {
+    throw new Error("Không được dùng localhost làm domain OAuth/Ngrok. Hãy nhập domain HTTPS công khai, ví dụ qgroup.ngrok.app");
   }
   return url.origin;
 }
@@ -242,6 +260,75 @@ function listChromeProfiles(userDataOverride) {
   return { user_data_dir: userDataDir, profiles };
 }
 
+function splitChromeScanRoots(value) {
+  const values = Array.isArray(value) ? value : String(value || "").split(/[;\r\n|]+/);
+  return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean).map((item) => path.resolve(item)))];
+}
+
+function looksLikeChromeUserDataRoot(dir, names) {
+  // Prefer strong Chrome markers to avoid random folders named "Default".
+  if (names.includes("Local State")) return true;
+  const profileDirs = names.filter((name) => name === "Default" || /^Profile \d+$/i.test(name));
+  return profileDirs.some((name) => {
+    try { return fs.existsSync(path.join(dir, name, "Preferences")); } catch { return false; }
+  });
+}
+
+function rankBrowserForProfile(userDataDir, chromeExecutables) {
+  const dataParts = String(userDataDir || "").toLowerCase().split(path.sep);
+  return chromeExecutables.map((exe) => {
+    const exeParts = exe.toLowerCase().split(path.sep);
+    let common = 0;
+    while (common < dataParts.length && common < exeParts.length && dataParts[common] === exeParts[common]) common++;
+    const base = path.basename(exe).toLowerCase();
+    // Prefer real chrome.exe over ChromePortable.exe launcher (flags are reliable there).
+    const kind = base === "chrome.exe" ? 0 : base === "chromeportable.exe" ? 1 : 2;
+    return { exe, common, kind, len: exe.length };
+  }).sort((a, b) => b.common - a.common || a.kind - b.kind || a.len - b.len);
+}
+
+function scanChromeProfiles(rootsValue) {
+  const roots = splitChromeScanRoots(rootsValue);
+  if (!roots.length) return listChromeProfiles();
+  const found = [];
+  const chromeExecutables = [];
+  const queue = roots.map((dir) => ({ dir, depth: 0 }));
+  const seen = new Set();
+  const skipped = new Set(["$recycle.bin", "system volume information", "windows", "node_modules", ".git"]);
+  while (queue.length && seen.size < 6000) {
+    const { dir, depth } = queue.shift();
+    const key = dir.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    const names = entries.map((entry) => entry.name);
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isFile() && /^(chrome|chromeportable)\.exe$/i.test(entry.name)) chromeExecutables.push(full);
+    }
+    if (looksLikeChromeUserDataRoot(dir, names)) {
+      const listed = listChromeProfiles(dir);
+      // Always store the resolved user-data root (ChromePortable may remap to Data\profile).
+      for (const profile of listed.profiles) {
+        found.push({ ...profile, user_data_dir: listed.user_data_dir });
+      }
+      // Do not walk Cache/Code Cache/GPUCache inside the profile tree — burns the 6000 budget.
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || depth >= 7 || skipped.has(entry.name.toLowerCase())) continue;
+      queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
+    }
+  }
+  for (const profile of found) {
+    const ranked = rankBrowserForProfile(profile.user_data_dir, chromeExecutables);
+    profile.browser_path = ranked[0]?.exe || "";
+  }
+  const unique = [...new Map(found.map((item) => [`${item.user_data_dir}\u0000${item.directory}`, item])).values()];
+  return { roots, scanned_directories: seen.size, profiles: unique };
+}
+
 /** Domain OAuth local setup — never returns App Secret or encryption keys. */
 router.get("/setup/domain", (_req, res) => {
   res.json({
@@ -313,20 +400,28 @@ router.post("/setup/ngrok/stop", async (_req, res) => { await stopNgrok(); res.j
 
 router.get("/setup/browser", (_req, res) => {
   const found = listChromeProfiles();
+  const selectedBrowserPath = String(process.env.FB_BROWSER_PATH || "").trim();
   res.json({
     ...found,
+    // Attach root on each row so the UI can show full path (same shape as /scan).
+    profiles: found.profiles.map((profile) => ({
+      ...profile,
+      user_data_dir: found.user_data_dir,
+      browser_path: selectedBrowserPath,
+    })),
     selected_profile: String(process.env.FB_CHROME_PROFILE || "").trim(),
     custom_user_data_dir: String(process.env.FB_CHROME_USER_DATA_DIR || "").trim(),
+    browser_path: selectedBrowserPath,
   });
 });
 
 router.post("/setup/browser/scan", (req, res) => {
-  const requested = String(req.body?.user_data_dir || "").trim();
-  const found = listChromeProfiles(requested);
+  const requested = req.body?.roots || req.body?.user_data_dirs || req.body?.user_data_dir;
+  const found = scanChromeProfiles(requested);
   if (!found.profiles.length) {
     return res.status(400).json({
       ok: false,
-      error: "Không thấy Chrome profile ở thư mục này. Với ChromePortable, chọn thư mục ChromePortable hoặc ChromePortable\\Data\\profile.",
+      error: "Không thấy Chrome profile. Hãy chọn một hoặc nhiều thư mục/ổ chứa ChromePortable, hoặc chọn trực tiếp Data\\profile.",
     });
   }
   res.json({ ok: true, ...found });
@@ -335,7 +430,23 @@ router.post("/setup/browser/scan", (req, res) => {
 router.put("/setup/browser", (req, res) => {
   try {
     const wanted = String(req.body?.profile || "").trim();
-    const requestedDataDir = String(req.body?.user_data_dir || "").trim();
+    let requestedDataDir = String(req.body?.user_data_dir || "").trim();
+    // Multi-root scan strings (a;b|c) cannot be a single --user-data-dir. Use the first root only
+    // when the UI forgot to pick a concrete profile after multi-select.
+    if (/[;|\r\n]/.test(requestedDataDir)) {
+      requestedDataDir = requestedDataDir.split(/[;\r\n|]+/).map((item) => item.trim()).filter(Boolean)[0] || "";
+    }
+    let requestedBrowserPath = String(req.body?.browser_path || "").trim();
+    // Prefer real chrome.exe next to ChromePortable.exe so Connect can pass profile flags reliably.
+    if (/chromeportable\.exe$/i.test(requestedBrowserPath)) {
+      const dir = path.dirname(requestedBrowserPath);
+      const realChrome = [
+        path.join(dir, "App", "Chrome-bin", "chrome.exe"),
+        path.join(dir, "App", "Chrome", "chrome.exe"),
+        path.join(dir, "chrome.exe"),
+      ].find((candidate) => fs.existsSync(candidate));
+      if (realChrome) requestedBrowserPath = realChrome;
+    }
     const found = listChromeProfiles(requestedDataDir);
     if (wanted && !found.profiles.some((p) => p.directory === wanted)) {
       throw new Error("Chrome Profile không tồn tại trên máy này");
@@ -346,12 +457,14 @@ router.put("/setup/browser", (req, res) => {
     writeEnvValues(getEnvPath(), {
       FB_CHROME_PROFILE: wanted,
       FB_CHROME_USER_DATA_DIR: requestedDataDir ? found.user_data_dir : "",
+      FB_BROWSER_PATH: requestedBrowserPath,
     });
     process.env.FB_CHROME_PROFILE = wanted;
     process.env.FB_CHROME_USER_DATA_DIR = requestedDataDir ? found.user_data_dir : "";
+    process.env.FB_BROWSER_PATH = requestedBrowserPath;
     // Electron reads this .env file again at every OAuth launch, so the user
     // can test the chosen profile immediately without restarting the tool.
-    res.json({ ok: true, selected_profile: wanted, user_data_dir: found.user_data_dir, restart_required: false });
+    res.json({ ok: true, selected_profile: wanted, user_data_dir: found.user_data_dir, browser_path: requestedBrowserPath, restart_required: false });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
@@ -401,13 +514,75 @@ router.post("/system/pick-folder", async (req, res) => {
   }
 });
 
+/**
+ * POST /api/media/upload — web/central: upload ảnh/video/caption lên server
+ * multipart field: files (multiple) or file
+ * query/body target: auto | inbox | captions
+ */
+router.post("/media/upload", (req, res) => {
+  const allow =
+    isCentralDeploy() || String(process.env.ALLOW_MEDIA_UPLOAD || "") === "1";
+  if (!allow) {
+    return res.status(403).json({
+      ok: false,
+      error:
+        "Upload media chỉ bật ở DEPLOY_MODE=central (hoặc ALLOW_MEDIA_UPLOAD=1).",
+    });
+  }
+  upload.any()(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ ok: false, error: err.message || String(err) });
+    }
+    try {
+      const target = String(req.body?.target || req.query?.target || "auto");
+      const files = [...(req.files || []), req.file].filter(Boolean);
+      if (!files.length) {
+        return res.status(400).json({ ok: false, error: "Chọn ít nhất 1 file" });
+      }
+      const saved = [];
+      const errors = [];
+      for (const f of files) {
+        try {
+          saved.push(saveUploadedFile(f, { target }));
+        } catch (e) {
+          errors.push({ name: f.originalname, error: e.message });
+        }
+      }
+      const inbox = listInbox(50);
+      res.json({
+        ok: saved.length > 0,
+        saved,
+        errors,
+        inbox,
+        defaults: {
+          media_folder: inbox.folder,
+          posted_folder: inbox.posted_folder,
+          captions_folder: inbox.captions_folder,
+        },
+      });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+});
+
+/** GET /api/media/inbox — list file trên server */
+router.get("/media/inbox", (_req, res) => {
+  try {
+    res.json({ ok: true, ...listInbox(200) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
 /** GET /api/health */
 router.get("/health", (_req, res) => {
   res.json({
     ok: true,
     service: "fb-page-studio",
     version: config.version,
-    phase: "auth+pages+enrich+publish",
+    phase: "multi-app + rotation + license",
+    deploy_mode: config.deployMode,
     fb_configured: !!(config.facebook.appId && config.facebook.appSecret),
   });
 });

@@ -82,6 +82,10 @@ function domainOf(v) {
     return "";
   }
 }
+function isLocalHostname(domain) {
+  const host = String(domain || "").toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".localhost");
+}
 function findExe() {
   const local = [
     path.join(getExeDir(), "ngrok.exe"),
@@ -189,6 +193,13 @@ function classifyFailure(detail, domain) {
         " (hoặc tắt app/ngrok trên máy kia) rồi bấm Mở lại Ngrok. Không bật pooling cho OAuth vì callback có thể về sai máy.",
     };
   }
+  if (/ERR_NGROK_314|custom hostname.+localhost|only paid plans may create endpoints/i.test(text)) {
+    return {
+      status: "needs_domain",
+      message: "APP_BASE_URL đang là localhost; hãy nhập domain Ngrok công khai trước khi mở tunnel.",
+      last_error: "Không được dùng localhost làm custom hostname Ngrok. Ví dụ: https://qgroup.ngrok.app",
+    };
+  }
   return {
     status: "error",
     message: "Không thể tự mở Ngrok.",
@@ -242,6 +253,16 @@ export async function startNgrok({
       auth = String(boot.token || "").trim();
     }
     if (!domain) throw new Error("Chưa có domain Ngrok hợp lệ");
+    if (isLocalHostname(domain)) {
+      update({
+        status: "needs_domain",
+        message: "Chưa cấu hình domain Ngrok công khai; không thể mở tunnel với localhost.",
+        domain,
+        public_url: "",
+        last_error: "APP_BASE_URL đang là localhost. Vào Kết nối Meta → Domain OAuth và nhập domain HTTPS của Ngrok.",
+      });
+      return getNgrokStatus();
+    }
     if (!auth) {
       update({
         status: "needs_token",

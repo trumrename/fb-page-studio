@@ -1,5 +1,16 @@
 # Báo cáo test toàn bộ tool — cập nhật 2026-07-20
 
+## Hotfix v1.2.22 — Ngrok localhost/ERR_NGROK_314
+
+- Nguyên nhân: `APP_BASE_URL=http://localhost:3847` bị lấy làm custom hostname `--url=https://localhost`.
+- Đã sửa API từ chối `localhost`, `127.0.0.1`, `::1` và `.localhost` làm domain OAuth.
+- Ngrok manager không còn spawn khi origin local; trả `needs_domain` với hướng dẫn nhập domain HTTPS công khai.
+- Lỗi ERR_NGROK_314 cũng được phân loại thành `needs_domain`, không còn popup lỗi mơ hồ.
+- Chọn Chrome hỗ trợ chọn nhiều thư mục/ổ trong Explorer, quét đệ quy nhiều ChromePortable và hiển thị đường dẫn đầy đủ cho từng profile.
+- Profile được lưu cùng executable Chrome gần nhất, tránh mở nhầm bản Chrome khi các profile đều có tên `Default`.
+- Test hồi quy: **218/218 PASS**; clean runtime 20 endpoint PASS.
+- Build/pack/ZIP/release verify v1.2.22 PASS; EXE SHA-256 `2B6FFFB9352317C0A7320E72F1A8EA497BB9A44D71087D5F6D09087794B3A995`.
+
 ## Audit clean toàn dự án v1.2.21 — 2026-07-20
 
 - 112 file source/config/doc ngoài build và archive đã được lập inventory.

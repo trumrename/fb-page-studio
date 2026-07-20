@@ -317,6 +317,14 @@ try {
   if (invalidWindowResponse.status !== 400) {
     throw new Error("Invalid Facebook window count was not rejected.");
   }
+  const localhostDomainResponse = await fetch(base + "/api/setup/domain", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain: "https://localhost" }),
+  });
+  if (localhostDomainResponse.status !== 400) {
+    throw new Error("Localhost was incorrectly accepted as an OAuth/Ngrok domain.");
+  }
   const envFile = path.join(tempRoot, ".env");
   const envText = fs.readFileSync(envFile, "utf8");
   if (

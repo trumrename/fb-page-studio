@@ -123,10 +123,20 @@
           </div>
         </section>
 
+        <div id="centralModeBanner" class="panel" style="display:none;margin-bottom:1rem;border-color:rgba(61,214,140,.4);background:rgba(61,214,140,.08)">
+          <div class="panel-body">
+            <b style="color:#8fd9a8">Chế độ SERVER TRUNG TÂM</b>
+            <p class="muted" style="margin:.4rem 0 0" id="centralModeText">
+              Khách chỉ mở domain trên trình duyệt — không cài server/Ngrok trên máy khách.
+              Connect Facebook và đăng bài chạy trên server; ảnh cần <b>Upload</b> (màn Publish).
+            </p>
+          </div>
+        </div>
+
         <section class="panel" id="domainSetup" style="margin-bottom:1rem">
           <h2 class="panel-hd">Bước 2 · Domain OAuth, Ngrok và Chrome <span class="badge">Setup nhanh</span></h2>
           <div class="panel-body">
-            <p class="muted" style="margin-top:0">Dán domain và Authtoken Ngrok một lần. Tool tự lưu cấu hình, mở Ngrok cùng EXE và đóng tunnel khi thoát.</p>
+            <p class="muted" style="margin-top:0" id="domainSetupHint">Dán domain và Authtoken Ngrok một lần. Tool tự lưu cấu hình, mở Ngrok cùng EXE và đóng tunnel khi thoát.</p>
             <div class="toolbar" style="align-items:end">
               <label style="flex:1;min-width:260px">Domain HTTPS
                 <input id="oauthDomain" type="text" placeholder="qgroup.ngrok.app hoặc https://xxx.ngrok-free.dev" autocomplete="off" />
@@ -146,11 +156,11 @@
             <div id="ngrokStatus" class="muted" style="margin-top:.65rem;font-size:.84rem">Đang kiểm tra Ngrok…</div>
             <hr style="border:0;border-top:1px solid rgba(255,255,255,.08);margin:1rem 0" />
             <div class="toolbar" style="align-items:end;margin-bottom:.6rem">
-              <label style="flex:1;min-width:260px">Thư mục dữ liệu Chrome / ChromePortable <span class="muted">(nếu dùng ChromePortable)</span>
-                <input id="oauthBrowserDataDir" type="text" placeholder="Để trống = Chrome thường; hoặc chọn thư mục ChromePortable" autocomplete="off" />
+              <label style="flex:1;min-width:260px">Các thư mục/ổ chứa Chrome <span class="muted">(có thể chọn nhiều)</span>
+                <input id="oauthBrowserDataDir" type="text" placeholder="Ví dụ D:\\Chrome 1; E:\\Chrome 2 hoặc chọn cả ổ" autocomplete="off" />
               </label>
-              <button class="btn-ghost" id="btnChooseBrowserData" type="button">Chọn thư mục</button>
-              <button class="btn-ghost" id="btnScanBrowserData" type="button">Quét profile</button>
+              <button class="btn-ghost" id="btnChooseBrowserData" type="button">Chọn nhiều thư mục/ổ</button>
+              <button class="btn-ghost" id="btnScanBrowserData" type="button">Quét tất cả Chrome</button>
             </div>
             <div class="toolbar" style="align-items:end">
               <label style="flex:1;min-width:260px">Chrome Profile đã login Facebook
@@ -383,6 +393,57 @@
       }
     }
 
+    async function loadDeployMode() {
+      try {
+        const d = await api("/api/deploy");
+        const banner = $("centralModeBanner");
+        const domainPanel = $("domainSetup");
+        if (banner && (d.central || d.oauth_relay)) {
+          banner.style.display = "block";
+          const t = $("centralModeText");
+          if (t && d.central) {
+            t.innerHTML =
+              `Khách mở <code>${escapeHtml(d.app_base_url || "")}/app.html</code> trên trình duyệt — ` +
+              `không cài server/Ngrok trên máy khách. OAuth + đăng bài chạy trên server. ` +
+              `Ảnh/video: màn Publish → <b>Upload lên server</b>.`;
+          } else if (t && d.oauth_relay) {
+            t.innerHTML =
+              `<b>EXE local + OAuth domain trung tâm</b> — folder ảnh vẫn trên máy này. ` +
+              `Connect Facebook qua <code>${escapeHtml(d.oauth_redirect_uri || "")}</code> ` +
+              `(relay). <b>Không cần Ngrok</b>, không phải ngắt máy khác. Giữ app mở khi Connect.`;
+          }
+          const hint = $("domainSetupHint");
+          if (hint && d.oauth_relay) {
+            hint.textContent =
+              "OAUTH_RELAY=1: Redirect URI = domain relay (Meta whitelist 1 lần). Bỏ qua Ngrok token bên dưới.";
+          } else if (hint && d.central) {
+            hint.textContent =
+              "Server trung tâm: domain trỏ thẳng máy này (Nginx/Caddy). Ngrok thường không cần.";
+          }
+          const ng = $("ngrokStatus");
+          if (ng && (d.central || d.oauth_relay)) {
+            ng.innerHTML = d.oauth_relay
+              ? `<b style="color:#8fd9a8">OAuth relay — không dùng Ngrok trên máy này.</b>`
+              : `<b style="color:#8fd9a8">Chế độ central — Ngrok autostart tắt mặc định.</b>`;
+          }
+        } else if (banner) {
+          banner.style.display = "none";
+        }
+        if (domainPanel && d.central) {
+          domainPanel.querySelector(".panel-hd") &&
+            (domainPanel.querySelector(".panel-hd").innerHTML =
+              'Bước 2 · Domain OAuth & Chrome <span class="badge">Server</span>');
+        }
+        if (domainPanel && d.oauth_relay && !d.central) {
+          domainPanel.querySelector(".panel-hd") &&
+            (domainPanel.querySelector(".panel-hd").innerHTML =
+              'Bước 2 · OAuth domain trung tâm (không Ngrok) <span class="badge">Relay</span>');
+        }
+      } catch {
+        /* portable default */
+      }
+    }
+
     let ngrokCommand = "";
     function renderNgrokStatus(r) {
       const colors = { running: "#34d399", needs_token: "#fbbf24", domain_busy: "#fb923c", error: "#fb7185", starting: "#60a5fa", installing: "#60a5fa" };
@@ -447,13 +508,15 @@
     };
     $("btnStartNgrok").onclick = async () => { renderNgrokStatus({ status: "starting", message: "Đang mở lại Ngrok…" }); try { renderNgrokStatus(await api("/api/setup/ngrok/start", { method: "POST" })); } catch { await loadNgrokStatus(); } };
 
+    let scannedBrowserProfiles = [];
     function renderBrowserProfiles(r) {
       const select = $("oauthBrowserProfile");
+      scannedBrowserProfiles = r.profiles || [];
       select.innerHTML = '<option value="">Tự động (profile mặc định)</option>';
-      for (const p of r.profiles || []) {
+      for (const [index, p] of scannedBrowserProfiles.entries()) {
         const o = document.createElement("option");
-        o.value = p.directory;
-        o.textContent = `${p.name} — ${p.directory}`;
+        o.value = String(index);
+        o.textContent = p.user_data_dir ? `${p.name} — ${p.user_data_dir}\\${p.directory}${p.browser_path ? ` · ${p.browser_path}` : ""}` : `${p.name} — ${p.directory}`;
         if (p.directory === r.selected_profile) o.selected = true;
         select.appendChild(o);
       }
@@ -469,18 +532,20 @@
     }
 
     $("btnChooseBrowserData").onclick = async () => {
-      const options = { title:"Chọn thư mục ChromePortable hoặc Data\\profile", initialDir: $("oauthBrowserDataDir").value };
+      const options = { title:"Chọn một hoặc nhiều thư mục/ổ chứa Chrome", initialDir: $("oauthBrowserDataDir").value.split(/[;|]/)[0], multiple:true };
       const r = window.fbPageStudioDesktop?.pickFolder
         ? await window.fbPageStudioDesktop.pickFolder(options)
         : await api("/api/system/pick-folder", { method:"POST", body: JSON.stringify({ title:options.title, initial_dir:options.initialDir }) });
-      if (r.path) $("oauthBrowserDataDir").value = r.path;
+      if (r.paths?.length) $("oauthBrowserDataDir").value = r.paths.join("; ");
+      else if (r.path) $("oauthBrowserDataDir").value = r.path;
     };
 
     $("btnScanBrowserData").onclick = async () => {
       try {
-        const r = await api("/api/setup/browser/scan", { method:"POST", body: JSON.stringify({ user_data_dir: $("oauthBrowserDataDir").value.trim() }) });
+        const roots = $("oauthBrowserDataDir").value.split(/[;\r\n|]+/).map(x => x.trim()).filter(Boolean);
+        const r = await api("/api/setup/browser/scan", { method:"POST", body: JSON.stringify({ roots }) });
         renderBrowserProfiles(r);
-        $("oauthBrowserStatus").textContent = `Đã tìm thấy ${(r.profiles || []).length} profile. Chọn profile có Facebook đã login rồi bấm Dùng profile này.`;
+        $("oauthBrowserStatus").textContent = `Đã quét ${r.scanned_directories || 0} thư mục và tìm thấy ${(r.profiles || []).length} profile. Chọn đúng Chrome/Profile rồi bấm Dùng profile này.`;
       } catch (e) { $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`; }
     };
 
@@ -488,9 +553,17 @@
       const btn = $("btnSaveBrowserProfile");
       btn.disabled = true;
       try {
+        const selectedIndex = $("oauthBrowserProfile").value;
+        const chosen = selectedIndex === "" ? null : (scannedBrowserProfiles[Number(selectedIndex)] || null);
+        // Multi-root text (D:\a; E:\b) is only for scanning — never send as a single user-data-dir.
+        const firstRoot = $("oauthBrowserDataDir").value.split(/[;\r\n|]+/).map((x) => x.trim()).filter(Boolean)[0] || "";
         const r = await api("/api/setup/browser", {
           method: "PUT",
-          body: JSON.stringify({ profile: $("oauthBrowserProfile").value, user_data_dir: $("oauthBrowserDataDir").value.trim() }),
+          body: JSON.stringify({
+            profile: chosen?.directory || "",
+            user_data_dir: chosen?.user_data_dir || firstRoot,
+            browser_path: chosen?.browser_path || "",
+          }),
         });
         $("oauthBrowserStatus").innerHTML = `<b style="color:#34d399">Đã lưu Chrome Profile ${escapeHtml(r.selected_profile || "tự động")}.</b> Bấm Connect Facebook ngay — không cần khởi động lại tool.`;
       } catch (e) {
@@ -749,7 +822,7 @@
     };
 
     async function refreshAll() {
-      await Promise.all([loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadFirstRunStatus(), loadOAuthDomain(), loadNgrokStatus(), loadBrowserProfiles()]);
+      await Promise.all([loadDeployMode(), loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadFirstRunStatus(), loadOAuthDomain(), loadNgrokStatus(), loadBrowserProfiles()]);
     }
 
     showFlash();

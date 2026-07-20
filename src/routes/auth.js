@@ -2,20 +2,27 @@ import { Router } from "express";
 import { nanoid } from "nanoid";
 import { getDb, cleanupOldOauthStates } from "../db/index.js";
 import { buildLoginUrl } from "../services/facebook.js";
-import { connectFromOAuthCode } from "../services/accounts.js";
+import {
+  connectFromOAuthCode,
+  connectFromUserToken,
+} from "../services/accounts.js";
 import { config } from "../config.js";
 import {
   assertMetaAppConfigured,
   getMetaApp,
   listMetaAppsPublic,
 } from "../services/metaApps.js";
+import { isOauthRelayMode } from "../services/deployMode.js";
 
 const router = Router();
 
 function createOAuthSession(metaAppKey = "app1", rerequest = false) {
   cleanupOldOauthStates();
   const app = assertMetaAppConfigured(metaAppKey);
-  const state = nanoid(32);
+  // Append local port so OAuth relay can 302 back to this EXE (127.0.0.1:port)
+  // Format: <nanoid>.<port> — portable + relay; harmless if no relay.
+  // state = nanoid.port.metaAppKey — relay parses port + app; DB stores full state
+  const state = `${nanoid(32)}.${config.port}.${app.key}`;
   getDb()
     .prepare(
       `INSERT INTO oauth_states (state, meta_app_key) VALUES (?, ?)`
@@ -189,6 +196,17 @@ router.get("/facebook/callback", async (req, res) => {
       );
     }
 
+    // Gói khách (không secret): code do relay đổi; local chỉ nhận ticket
+    if (isOauthRelayMode() && !app.appSecret) {
+      return res.status(400).type("html").send(
+        errorPage(
+          "Cần OAuth qua relay",
+          "Máy này không có App Secret (đúng cho gói khách). Callback phải qua relay → ticket.",
+          "Giữ app mở, Connect lại. Relay phải bật RELAY_EXCHANGE=1 và có secret."
+        )
+      );
+    }
+
     const result = await connectFromOAuthCode(String(code), {
       metaAppKey: app.key,
       app: {
@@ -197,16 +215,101 @@ router.get("/facebook/callback", async (req, res) => {
         redirectUri: app.redirectUri,
       },
     });
-    const q = new URLSearchParams({
-      connected: "1",
-      account: String(result.account.id),
-      pages: String(result.pages.length),
-      skipped: String(result.sync_summary?.skipped_license || 0),
-      app: app.key,
-    });
-    const localUi = `http://127.0.0.1:${config.port}/index.html?${q}`;
+    return sendConnectedPage(res, result, app);
+  } catch (e) {
+    console.error("[auth/callback]", e);
+    res.status(500).type("html").send(
+      errorPage(
+        "OAuth thất bại",
+        e.message || "unknown",
+        "Kiểm tra App Secret (gói nội bộ) hoặc relay ticket (gói khách). Redirect URI khớp Meta."
+      )
+    );
+  }
+});
 
-    res.type("html").send(`<!DOCTYPE html>
+/**
+ * GET /auth/facebook/relay-complete?ticket=
+ * Gói khách: claim token từ relay (secret chỉ trên server relay).
+ */
+router.get("/facebook/relay-complete", async (req, res) => {
+  try {
+    const ticket = String(req.query.ticket || "").trim();
+    if (!ticket) {
+      return res.status(400).type("html").send(
+        errorPage("Thiếu ticket", "Relay không gửi ticket.", "Connect lại từ app.")
+      );
+    }
+    let origin = String(
+      process.env.OAUTH_RELAY_URL || process.env.RELAY_PUBLIC_URL || ""
+    )
+      .trim()
+      .replace(/\/$/, "");
+    if (!origin) {
+      try {
+        const u = new URL(config.facebook.redirectUri);
+        origin = `${u.protocol}//${u.host}`;
+      } catch {
+        return res.status(500).type("html").send(
+          errorPage(
+            "Chưa cấu hình relay URL",
+            "Thêm OAUTH_RELAY_URL=https://oauth.domain.com",
+            "Hoặc FB_REDIRECT_URI trỏ domain relay."
+          )
+        );
+      }
+    }
+    const claimUrl = `${origin}/api/claim?ticket=${encodeURIComponent(ticket)}`;
+    const cr = await fetch(claimUrl, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(20000),
+    });
+    const body = await cr.json().catch(() => ({}));
+    if (!cr.ok || !body.access_token) {
+      throw new Error(body.error || `Claim ticket thất bại (HTTP ${cr.status})`);
+    }
+    const metaAppKey = String(body.meta_app_key || "app1");
+    let app;
+    try {
+      app = assertMetaAppConfigured(metaAppKey);
+    } catch {
+      app = {
+        key: metaAppKey,
+        name: metaAppKey,
+        appId: body.app_id || config.facebook.appId,
+        appSecret: "",
+        redirectUri: config.facebook.redirectUri,
+      };
+    }
+    const result = await connectFromUserToken(body.access_token, {
+      metaAppKey,
+      app: { appId: app.appId || body.app_id, appSecret: "", redirectUri: app.redirectUri },
+      expires_in: body.expires_in,
+      upgradeLongLived: false, // relay already upgraded if possible
+    });
+    return sendConnectedPage(res, result, app);
+  } catch (e) {
+    console.error("[auth/relay-complete]", e);
+    res.status(500).type("html").send(
+      errorPage(
+        "Nhận token từ relay thất bại",
+        e.message || "unknown",
+        "Giữ app mở, Connect lại. Kiểm tra relay online và RELAY_EXCHANGE=1."
+      )
+    );
+  }
+});
+
+function sendConnectedPage(res, result, app) {
+  const q = new URLSearchParams({
+    connected: "1",
+    account: String(result.account.id),
+    pages: String(result.pages.length),
+    skipped: String(result.sync_summary?.skipped_license || 0),
+    app: app.key || "app1",
+  });
+  const localUi = `http://127.0.0.1:${config.port}/index.html?${q}`;
+  res.type("html").send(`<!DOCTYPE html>
 <html lang="vi"><head>
 <meta charset="utf-8"/><title>Đã kết nối</title>
 <style>
@@ -221,23 +324,11 @@ p{color:#b8f0d0;line-height:1.5}a{color:#9ec1ff}
   <p><span class="badge">${escapeHtml(app.name)} · ${escapeHtml(app.key)}</span></p>
   <p>Account #${result.account.id} · <b>${result.pages.length}</b> Page đang hoạt động.</p>
   ${result.sync_summary?.skipped_license ? `<p style="color:#f5c96a"><b>${result.sync_summary.skipped_license}</b> Page mới không được thêm do giới hạn license.</p>` : ""}
-  <p>Tài khoản đã gắn đúng <b>${escapeHtml(app.name)}</b> — rotation so-le dùng nhóm app này.</p>
+  <p>Tài khoản đã gắn đúng <b>${escapeHtml(app.name)}</b>.</p>
   <p><a class="btn" href="${localUi}" style="display:inline-block;margin:.5rem .5rem 0 0;padding:.65rem 1rem;background:#1877f2;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">← Quay về Pages trong app</a>
   <a class="btn" href="http://127.0.0.1:${config.port}/app.html" style="display:inline-block;margin:.5rem 0 0;padding:.65rem 1rem;background:#2a2f3a;color:#e8eaed;border-radius:8px;text-decoration:none;font-weight:700">Vận hành</a></p>
-  <p style="font-size:.85rem;opacity:.85">Không cần tắt app — bấm nút quay về.</p>
 </div>
-<script>/* optional auto: setTimeout(function(){ location.href=${JSON.stringify(localUi)}; }, 2500); */</script>
 </body></html>`);
-  } catch (e) {
-    console.error("[auth/callback]", e);
-    res.status(500).type("html").send(
-      errorPage(
-        "OAuth thất bại",
-        e.message || "unknown",
-        "Kiểm tra App Secret đúng app, Redirect URI khớp 100% trên Meta Developers."
-      )
-    );
-  }
-});
+}
 
 export default router;

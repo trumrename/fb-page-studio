@@ -24,6 +24,14 @@ import {
   stopNgrok,
   ensureNgrokTokenFromSystem,
 } from "./services/ngrokManager.js";
+import {
+  isCentralDeploy,
+  getListenHost,
+  shouldAutostartNgrok,
+  trustedPublicHostnames,
+  getCentralAccessToken,
+  deployPublicInfo,
+} from "./services/deployMode.js";
 
 const app = express();
 const publicDir = getPublicDir();
@@ -37,11 +45,13 @@ try {
 } catch (e) {
   console.warn("[license] ensure after update:", e.message);
 }
-// Admin/dev machines often have token only in system ngrok.yml
-try {
-  ensureNgrokTokenFromSystem();
-} catch (e) {
-  console.warn("[ngrok] bootstrap token:", e.message);
+// Admin/dev machines often have token only in system ngrok.yml (portable)
+if (!isCentralDeploy()) {
+  try {
+    ensureNgrokTokenFromSystem();
+  } catch (e) {
+    console.warn("[ngrok] bootstrap token:", e.message);
+  }
 }
 const dataRoot = config.dataDir || path.dirname(config.databasePath);
 fs.mkdirSync(path.join(dataRoot, "media", "inbox"), { recursive: true });
@@ -106,19 +116,33 @@ if (!fs.existsSync(exampleBeside)) {
   }
 }
 
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "12mb" }));
+// Trust reverse proxy (Nginx/Caddy) when central
+if (isCentralDeploy()) {
+  app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS || 1));
+}
 
-// Ngrok is needed only for the Facebook OAuth callback. Never expose the
-// local dashboard or mutation APIs through the public tunnel by default.
-app.use((req, res, next) => {
-  const rawHost = String(req.headers["x-forwarded-host"] || req.headers.host || "")
+function requestHostname(req) {
+  const rawHost = String(
+    req.headers["x-forwarded-host"] || req.headers.host || ""
+  )
     .split(",")[0]
     .trim()
     .toLowerCase();
-  const host = rawHost.startsWith("[")
-    ? rawHost.slice(1, rawHost.indexOf("]"))
-    : rawHost.split(":")[0];
-  const isLocalHost = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  if (!rawHost) return "";
+  if (rawHost.startsWith("[")) {
+    const end = rawHost.indexOf("]");
+    return end > 0 ? rawHost.slice(1, end) : rawHost;
+  }
+  return rawHost.split(":")[0];
+}
+
+// Portable: only localhost + OAuth callback on public host (Ngrok).
+// Central: full app on trusted domain (your domain → this server).
+app.use((req, res, next) => {
+  const host = requestHostname(req);
+  const isLocalHost =
+    host === "127.0.0.1" || host === "localhost" || host === "::1";
   const cameThroughProxy = Boolean(
     req.headers["x-forwarded-for"] ||
       req.headers["x-forwarded-host"] ||
@@ -126,16 +150,79 @@ app.use((req, res, next) => {
   );
   const isFacebookCallback =
     req.method === "GET" && req.path === "/auth/facebook/callback";
+  const trusted = new Set(trustedPublicHostnames());
+  const isTrustedPublic = host && trusted.has(host);
+
+  if (isCentralDeploy()) {
+    if (isLocalHost || isTrustedPublic || isFacebookCallback) return next();
+    return res
+      .status(403)
+      .type("text/plain; charset=utf-8")
+      .send(
+        "Server trung tâm chỉ nhận domain đã cấu hình (APP_BASE_URL) hoặc localhost quản trị."
+      );
+  }
+
   if ((isLocalHost && !cameThroughProxy) || isFacebookCallback) return next();
   return res
     .status(403)
     .type("text/plain; charset=utf-8")
-    .send("FB Page Studio chỉ cho phép OAuth callback qua domain công khai. Hãy mở giao diện bằng 127.0.0.1.");
+    .send(
+      "FB Page Studio (portable) chỉ cho phép OAuth callback qua domain công khai. Hãy mở giao diện bằng 127.0.0.1."
+    );
+});
+
+// Optional shared password for central web (header or query)
+app.use((req, res, next) => {
+  const token = getCentralAccessToken();
+  if (!token || !isCentralDeploy()) return next();
+  if (req.path === "/auth/facebook/callback") return next();
+  if (req.path === "/api/health" || req.path === "/api/deploy") return next();
+  const given =
+    String(req.headers["x-access-token"] || "").trim() ||
+    String(req.query?.access_token || "").trim() ||
+    String(req.headers.authorization || "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+  if (given && given === token) return next();
+  // Cookie set after unlock page
+  const cookie = String(req.headers.cookie || "");
+  if (cookie.includes(`fbps_access=${encodeURIComponent(token)}`)) return next();
+  if (req.path.startsWith("/api/")) {
+    return res.status(401).json({
+      ok: false,
+      error: "Cần mã truy cập server (CENTRAL_ACCESS_TOKEN).",
+      need_access_token: true,
+    });
+  }
+  if (req.path.endsWith(".html") || req.path === "/" || req.path === "") {
+    return res
+      .status(401)
+      .type("html; charset=utf-8")
+      .send(`<!doctype html><meta charset="utf-8"/><title>Truy cập</title>
+<body style="font-family:system-ui;max-width:420px;margin:3rem auto">
+<h1>FB Page Studio — Server</h1>
+<p>Nhập mã truy cập do admin cấp (CENTRAL_ACCESS_TOKEN).</p>
+<input id="t" type="password" style="width:100%;padding:.6rem" placeholder="Mã truy cập"/>
+<button id="b" style="margin-top:.6rem;padding:.5rem 1rem">Vào app</button>
+<script>
+document.getElementById('b').onclick=function(){
+  var v=document.getElementById('t').value;
+  document.cookie='fbps_access='+encodeURIComponent(v)+';path=/;SameSite=Lax';
+  location.href='/app.html';
+};
+</script></body>`);
+  }
+  return next();
 });
 
 // App console is the main entry (before static index.html)
 app.get("/", (_req, res) => {
   res.redirect(302, "/app.html");
+});
+
+app.get("/api/deploy", (_req, res) => {
+  res.json({ ok: true, ...deployPublicInfo() });
 });
 
 app.get("/api/meta", (_req, res) => {
@@ -145,6 +232,7 @@ app.get("/api/meta", (_req, res) => {
     version: config.version,
     phase: "multi-app + rotation + license",
     packaged: isPackaged(),
+    deploy: deployPublicInfo(),
     note: "Story flag optional. Official Graph API only.",
     license: {
       mode: lic.mode,
@@ -342,13 +430,17 @@ function openBrowser(url) {
   }
 }
 
-// Bind IPv4 only — ngrok on Windows often dials [::1] for "localhost" and fails
-// with ERR_NGROK_8012 if the app only works on 127.0.0.1 (or nothing is listening).
-const LISTEN_HOST = process.env.LISTEN_HOST || "127.0.0.1";
+// Portable: 127.0.0.1 (Ngrok dials IPv4). Central: 0.0.0.0 behind Nginx/domain.
+const LISTEN_HOST = getListenHost();
 const server = app.listen(config.port, LISTEN_HOST, () => {
   const local = `http://127.0.0.1:${config.port}`;
+  const mode = isCentralDeploy() ? "central (web server)" : "portable (desktop)";
   console.log(`\n  FB Page Studio  v${config.version}`);
+  console.log(`  Mode           →  ${mode}`);
   console.log(`  APP CONSOLE    →  ${local}/app.html`);
+  if (isCentralDeploy()) {
+    console.log(`  Public URL     →  ${config.appBaseUrl}/app.html`);
+  }
   console.log(`  Listen         →  ${LISTEN_HOST}:${config.port}`);
   console.log(`  Public base    →  ${config.appBaseUrl}`);
   console.log(`  Reports        →  ${path.join(dataRoot, "exports")}`);
@@ -360,20 +452,29 @@ const server = app.listen(config.port, LISTEN_HOST, () => {
   console.log(
     `  App configured →  ${config.facebook.appId ? "yes" : "NO — set .env"}\n`
   );
-  console.log(
-    `  Ngrok tip      →  ngrok http 127.0.0.1:${config.port}  (giữ app MỞ khi login FB)\n`
-  );
-  if (String(process.env.NGROK_AUTOSTART || "1") !== "0") {
+  if (isCentralDeploy()) {
+    console.log(
+      `  Client tip     →  Khách mở ${config.appBaseUrl}/app.html — không cài server/Ngrok\n`
+    );
+  } else {
+    console.log(
+      `  Ngrok tip      →  ngrok http 127.0.0.1:${config.port}  (giữ app MỞ khi login FB)\n`
+    );
+  }
+  if (shouldAutostartNgrok()) {
     startNgrok({ origin: config.appBaseUrl, port: config.port })
       .then((s) => console.log(`[ngrok] ${s.status} · ${s.message}${s.public_url ? ` · ${s.public_url}` : ""}`))
       .catch((e) => console.warn("[ngrok]", e.message));
+  } else if (isCentralDeploy()) {
+    console.log("[ngrok] skipped (DEPLOY_MODE=central — dùng domain trỏ thẳng server)");
   }
 
-  // Desktop (Electron) never opens external browser
+  // Desktop (Electron) never opens external browser; central usually behind proxy
   if (
     process.env.OPEN_BROWSER !== "0" &&
     !process.env.ELECTRON_RUN &&
-    !process.versions?.electron
+    !process.versions?.electron &&
+    !isCentralDeploy()
   ) {
     openBrowser(`${local}/app.html`);
   }

@@ -66,6 +66,27 @@
           <span class="badge live">Official API</span>
         </div>
 
+        <section class="panel" id="mediaUploadPanel" style="display:none;margin-bottom:1rem;border-color:rgba(61,214,140,.35)">
+          <h2 class="panel-hd">
+            <span>Upload media lên server</span>
+            <span class="hint">Server trung tâm / web</span>
+          </h2>
+          <div class="panel-body">
+            <p class="muted" style="margin-top:0">
+              Ảnh/video trên máy khách <b>không</b> tự hiện trên server — hãy chọn file để gửi lên.
+              File lưu vào inbox server; gán folder Media/Posted/Caption của Page = đường dẫn server (nút bên dưới).
+            </p>
+            <div class="actions" style="flex-wrap:wrap">
+              <input type="file" id="mediaUploadInput" multiple accept="image/*,video/*,.txt,.csv" style="max-width:100%" />
+              <button type="button" class="btn-ok" id="btnMediaUpload">Upload</button>
+              <button type="button" class="btn-ghost" id="btnMediaRefresh">Làm mới inbox</button>
+              <button type="button" class="btn-primary" id="btnUseServerFolders">Dùng folder server cho Page đang chọn</button>
+            </div>
+            <div id="mediaUploadStatus" class="muted" style="margin-top:.65rem">—</div>
+            <div id="mediaInboxList" class="muted" style="margin-top:.5rem;max-height:160px;overflow:auto;font-size:.82rem"></div>
+          </div>
+        </section>
+
         <nav class="workflow-tabs" aria-label="Quy trình đăng bài">
           <button type="button" class="workflow-tab active" data-workspace-view="configure">
             <span>1</span><b>Chọn Page & cấu hình</b><small>Chọn đúng Page, kho và số bài</small>
@@ -2090,8 +2111,106 @@
       });
     }
 
+    let serverMediaPaths = null;
+
+    async function loadDeployAndMediaUpload() {
+      try {
+        const d = await api("/api/deploy");
+        const panel = $("mediaUploadPanel");
+        if (panel && (d.central || d.media_upload)) {
+          panel.style.display = "block";
+          await refreshMediaInbox();
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    async function refreshMediaInbox() {
+      try {
+        const r = await api("/api/media/inbox");
+        serverMediaPaths = {
+          media_folder: r.folder,
+          posted_folder: r.posted_folder,
+          captions_folder: r.captions_folder,
+        };
+        const list = $("mediaInboxList");
+        const st = $("mediaUploadStatus");
+        if (st) {
+          st.textContent = `Inbox server: ${r.count || 0} file · ${r.folder || ""}`;
+        }
+        if (list) {
+          const files = r.files || [];
+          list.innerHTML = files.length
+            ? files
+                .slice(0, 40)
+                .map(
+                  (f) =>
+                    `· <b>${esc(f.name)}</b> · ${esc(f.kind)} · ${Math.round((f.size || 0) / 1024)} KB`
+                )
+                .join("<br/>")
+            : "<i>Chưa có ảnh/video trên server — hãy Upload.</i>";
+        }
+      } catch (e) {
+        if ($("mediaUploadStatus")) $("mediaUploadStatus").textContent = e.message;
+      }
+    }
+
+    $("btnMediaUpload")?.addEventListener("click", async () => {
+      const input = $("mediaUploadInput");
+      if (!input?.files?.length) return flash("Chọn file ảnh/video hoặc .txt/.csv caption", false);
+      const fd = new FormData();
+      for (const f of input.files) fd.append("files", f);
+      fd.append("target", "auto");
+      if ($("mediaUploadStatus")) $("mediaUploadStatus").textContent = "Đang upload…";
+      try {
+        const res = await fetch("/api/media/upload", { method: "POST", body: fd });
+        const r = await res.json();
+        if (!res.ok || !r.ok) throw new Error(r.error || "Upload thất bại");
+        serverMediaPaths = r.defaults || serverMediaPaths;
+        flash(`Đã upload ${r.saved?.length || 0} file` + (r.errors?.length ? ` · lỗi ${r.errors.length}` : ""), true);
+        input.value = "";
+        await refreshMediaInbox();
+      } catch (e) {
+        flash(e.message, false);
+        if ($("mediaUploadStatus")) $("mediaUploadStatus").textContent = e.message;
+      }
+    });
+
+    $("btnMediaRefresh")?.addEventListener("click", () => refreshMediaInbox());
+
+    $("btnUseServerFolders")?.addEventListener("click", async () => {
+      if (!serverMediaPaths?.media_folder) {
+        await refreshMediaInbox();
+      }
+      if (!serverMediaPaths?.media_folder) return flash("Chưa có folder server", false);
+      const ids = selectedPageIds();
+      if (!ids.length) return flash("Chọn Page trước", false);
+      try {
+        // Apply via bulk config put for each selected page
+        for (const id of ids) {
+          const cur = await api(`/api/posting/config/${id}`);
+          const body = {
+            ...(cur.config || {}),
+            media_folder: serverMediaPaths.media_folder,
+            posted_folder: serverMediaPaths.posted_folder,
+            captions_folder: serverMediaPaths.captions_folder,
+          };
+          await api(`/api/posting/config/${id}`, {
+            method: "PUT",
+            body: JSON.stringify(body),
+          });
+        }
+        flash(`Đã gán folder server cho ${ids.length} Page`, true);
+        if (selectedId) await loadConfig(selectedId);
+      } catch (e) {
+        flash(e.message, false);
+      }
+    });
+
     async function initPostingWorkspace() {
       await loadWorkspaceState();
+      await loadDeployAndMediaUpload();
       await loadPages();
       await Promise.all([loadLogs(), loadRotation()]);
       applyControls(workspaceState.bulk || {}, bulkWorkspaceControlIds);

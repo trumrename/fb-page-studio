@@ -167,6 +167,7 @@ npm test
 | Bài Facebook đã published biến mất khỏi quota anti-spam | Tính cả `published` và `schedule_overdue` trong cap/cooldown/caption |
 | Ngrok làm lộ dashboard/API quản trị | Public proxy chỉ cho phép OAuth callback; mọi UI/API khác trả 403 |
 | Updater có thể cài EXE tải lỗi/sai asset | Bắt buộc sidecar SHA-256 và xác minh trước khi tạo BAT thay file |
+| Ngrok gửi `--url=https://localhost` và báo ERR_NGROK_314 | Chặn localhost ở API/domain setup và Ngrok manager; trả trạng thái `needs_domain`, không spawn lệnh sai |
 
 ---
 

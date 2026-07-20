@@ -10,6 +10,7 @@
 import fs from "fs";
 import path from "path";
 import { config } from "../config.js";
+import { isOauthRelayMode } from "./deployMode.js";
 
 function scopesFromEnv(envKey, fallback) {
   const raw = process.env[envKey];
@@ -95,9 +96,13 @@ export function listMetaApps() {
     console.warn("[metaApps] meta_apps.json:", err.message);
   }
 
+  // Gói khách (relay secure): chỉ cần App ID public; secret nằm trên relay
+  const relayOk = isOauthRelayMode();
   return apps.map((a) => ({
     ...a,
-    configured: Boolean(a.appId && a.appSecret),
+    configured: Boolean(a.appId && (a.appSecret || relayOk)),
+    has_secret: Boolean(a.appSecret),
+    oauth_via_relay: relayOk && !a.appSecret,
   }));
 }
 
@@ -123,6 +128,8 @@ export function listMetaAppsPublic() {
     app_id_full: a.appId || null, // needed to match Graph; UI can show masked
     redirect_uri: a.redirectUri,
     configured: a.configured,
+    has_secret: a.has_secret,
+    oauth_via_relay: a.oauth_via_relay,
     is_default: a.key === "app1",
   }));
 }
@@ -133,15 +140,15 @@ export function assertMetaAppConfigured(key) {
   if (!app) {
     throw new Error(
       want === "app2" || want.includes("2")
-        ? `Meta App "${want}" chưa khai báo. Thêm FB_APP_ID_2 + FB_APP_SECRET_2 vào .env`
+        ? `Meta App "${want}" chưa khai báo. Thêm FB_APP_ID_2 (+ secret nội bộ hoặc relay)`
         : `Meta App "${want}" không tồn tại. Kiểm tra FB_APP_ID trong .env`
     );
   }
   if (!app.configured) {
     throw new Error(
       want === "app2" || want.includes("2")
-        ? `Meta App "${want}" chưa cấu hình. Thêm FB_APP_ID_2 + FB_APP_SECRET_2 vào .env`
-        : `Meta App "${want}" chưa cấu hình. Thêm FB_APP_ID + FB_APP_SECRET vào .env`
+        ? `Meta App "${want}" chưa cấu hình. Cần FB_APP_ID_2 (gói khách: + OAUTH_RELAY; nội bộ: + SECRET_2)`
+        : `Meta App "${want}" chưa cấu hình. Cần FB_APP_ID (gói khách: + OAUTH_RELAY; nội bộ: + FB_APP_SECRET)`
     );
   }
   return app;
