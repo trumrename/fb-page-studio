@@ -277,13 +277,26 @@ router.get("/facebook/relay-complete", async (req, res) => {
         key: metaAppKey,
         name: metaAppKey,
         appId: body.app_id || config.facebook.appId,
-        appSecret: "",
+        appSecret:
+          metaAppKey === "app2"
+            ? String(process.env.FB_APP_SECRET_2 || process.env.FB_APP_SECRET || "").trim()
+            : String(process.env.FB_APP_SECRET || config.facebook.appSecret || "").trim(),
         redirectUri: config.facebook.redirectUri,
       };
     }
+    // Prefer secret on this EXE (internal pack) so Graph appsecret_proof works after claim.
+    const appSecret =
+      String(app.appSecret || "").trim() ||
+      (metaAppKey === "app2"
+        ? String(process.env.FB_APP_SECRET_2 || process.env.FB_APP_SECRET || "").trim()
+        : String(process.env.FB_APP_SECRET || config.facebook.appSecret || "").trim());
     const result = await connectFromUserToken(body.access_token, {
       metaAppKey,
-      app: { appId: app.appId || body.app_id, appSecret: "", redirectUri: app.redirectUri },
+      app: {
+        appId: app.appId || body.app_id,
+        appSecret,
+        redirectUri: app.redirectUri || config.facebook.redirectUri,
+      },
       expires_in: body.expires_in,
       upgradeLongLived: false, // relay already upgraded if possible
     });
@@ -294,7 +307,9 @@ router.get("/facebook/relay-complete", async (req, res) => {
       errorPage(
         "Nhận token từ relay thất bại",
         e.message || "unknown",
-        "Giữ app mở, Connect lại. Kiểm tra relay online và RELAY_EXCHANGE=1."
+        "Giữ app mở, Connect lại. Relay online + RELAY_EXCHANGE=1. " +
+          "Nếu Meta bật Require App Secret Proof: cần FB_APP_SECRET trên EXE (gói nội bộ) " +
+          "hoặc tắt proof trên Meta Developers → App settings → Advanced."
       )
     );
   }

@@ -8,11 +8,20 @@ import path from "path";
 import { Blob } from "buffer";
 import { config, graphBase } from "../config.js";
 import { noteGraphResponse } from "./rateLimit.js";
+import { appsecretProof } from "./facebook.js";
+
+function appendProof(formOrParams, pageToken) {
+  const secret = String(config.facebook.appSecret || process.env.FB_APP_SECRET || "").trim();
+  const proof = appsecretProof(pageToken, secret);
+  return proof;
+}
 
 async function graphPostForm(urlPath, pageToken, fields = {}, fileField = null) {
   const url = `${graphBase()}${urlPath}`;
   const form = new FormData();
   form.append("access_token", pageToken);
+  const proof = appendProof(form, pageToken);
+  if (proof) form.append("appsecret_proof", proof);
   for (const [k, v] of Object.entries(fields)) {
     if (v !== undefined && v !== null) form.append(k, String(v));
   }
@@ -36,6 +45,8 @@ async function graphPostForm(urlPath, pageToken, fields = {}, fileField = null) 
 async function graphPostJson(urlPath, pageToken, body = {}) {
   const url = new URL(`${graphBase()}${urlPath}`);
   url.searchParams.set("access_token", pageToken);
+  const proof = appendProof(null, pageToken);
+  if (proof) url.searchParams.set("appsecret_proof", proof);
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -55,6 +66,8 @@ async function graphPostJson(urlPath, pageToken, body = {}) {
 async function graphGetJson(urlPath, pageToken, fields) {
   const url = new URL(`${graphBase()}${urlPath}`);
   url.searchParams.set("access_token", pageToken);
+  const proof = appendProof(null, pageToken);
+  if (proof) url.searchParams.set("appsecret_proof", proof);
   if (fields) url.searchParams.set("fields", fields);
   const res = await fetch(url);
   noteGraphResponse(res);

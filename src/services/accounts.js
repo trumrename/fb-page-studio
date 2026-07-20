@@ -1,4 +1,5 @@
 import { getDb } from "../db/index.js";
+import { config } from "../config.js";
 import { encryptToken, decryptToken, maskToken } from "./crypto.js";
 import {
   exchangeCodeForToken,
@@ -58,7 +59,27 @@ export async function connectFromUserToken(userToken, opts = {}) {
     }
   }
 
-  const me = await getMe(token);
+  // Prefer secret from connect opts; else env App 1/2 for appsecret_proof (Meta Require proof).
+  const appSecretForProof =
+    String(app.appSecret || "").trim() ||
+    (metaAppKey === "app2"
+      ? String(process.env.FB_APP_SECRET_2 || process.env.FB_APP_SECRET || "").trim()
+      : String(process.env.FB_APP_SECRET || config.facebook?.appSecret || "").trim());
+
+  let me;
+  try {
+    me = await getMe(token, { appSecret: appSecretForProof });
+  } catch (e) {
+    if (/appsecret_proof/i.test(e.message || "")) {
+      throw new Error(
+        "Meta yêu cầu appsecret_proof. " +
+          "Gói nội bộ: thêm FB_APP_SECRET (và _2) vào .env cạnh EXE. " +
+          "Gói khách / chỉ relay: tắt «Require App Secret Proof» trên Meta App, " +
+          "hoặc copy secret App lên máy EXE (nội bộ tin cậy)."
+      );
+    }
+    throw e;
+  }
   const picture = me.picture?.data?.url || me.picture?.url || null;
 
   const db = getDb();
@@ -121,7 +142,9 @@ export async function connectFromUserToken(userToken, opts = {}) {
     accountId = info.lastInsertRowid;
   }
 
-  const pages = await syncPagesForAccount(accountId, token);
+  const pages = await syncPagesForAccount(accountId, token, {
+    appSecret: appSecretForProof,
+  });
 
   return {
     account: getAccountPublic(accountId),
@@ -165,7 +188,7 @@ export async function connectFromOAuthCode(code, opts = {}) {
 /**
  * Re-fetch /me/accounts for one account (large lists supported).
  */
-export async function syncPagesForAccount(accountId, userTokenOptional) {
+export async function syncPagesForAccount(accountId, userTokenOptional, opts = {}) {
   const db = getDb();
   const row = db
     .prepare(`SELECT * FROM fb_accounts WHERE id = ?`)
@@ -175,9 +198,16 @@ export async function syncPagesForAccount(accountId, userTokenOptional) {
   const userToken =
     userTokenOptional || decryptToken(row.user_token_enc);
 
+  const metaKey = String(row.meta_app_key || "app1");
+  const appSecret =
+    String(opts.appSecret || "").trim() ||
+    (metaKey === "app2"
+      ? String(process.env.FB_APP_SECRET_2 || process.env.FB_APP_SECRET || "").trim()
+      : String(process.env.FB_APP_SECRET || config.facebook?.appSecret || "").trim());
+
   let pages;
   try {
-    pages = await getAllPages(userToken);
+    pages = await getAllPages(userToken, { appSecret });
   } catch (e) {
     db.prepare(
       `UPDATE fb_accounts SET status = 'error', last_error = ?, updated_at = datetime('now') WHERE id = ?`

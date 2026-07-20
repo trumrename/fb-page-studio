@@ -1,10 +1,28 @@
+import crypto from "crypto";
 import { config, graphBase } from "../config.js";
 import { noteGraphResponse } from "./rateLimit.js";
 
 /**
  * Official Graph API helpers (no cookies).
  * Multi-account: call these with each account's tokens.
+ *
+ * Meta “Require App Secret Proof”: every server-side call with a user/page
+ * access token must send appsecret_proof = HMAC-SHA256(token, app_secret).
  */
+
+/** @param {string} accessToken @param {string} appSecret */
+export function appsecretProof(accessToken, appSecret) {
+  const token = String(accessToken || "").trim();
+  const secret = String(appSecret || "").trim();
+  if (!token || !secret) return "";
+  return crypto.createHmac("sha256", secret).update(token).digest("hex");
+}
+
+function resolveAppSecret(explicit) {
+  const s = String(explicit || "").trim();
+  if (s) return s;
+  return String(config.facebook.appSecret || process.env.FB_APP_SECRET || "").trim();
+}
 
 /**
  * Official Facebook Login dialog URL.
@@ -34,12 +52,47 @@ export function buildLoginUrl(state, opts = {}) {
   return `https://www.facebook.com/${config.facebook.graphVersion}/dialog/oauth?${params}`;
 }
 
-async function graphGet(path, accessToken, query = {}) {
+/**
+ * @param {string} path
+ * @param {string|null} accessToken
+ * @param {Record<string, unknown>} [query]
+ * @param {{ appSecret?: string }} [opts]
+ */
+async function graphGet(path, accessToken, query = {}, opts = {}) {
   const url = new URL(`${graphBase()}${path}`);
   for (const [k, v] of Object.entries(query)) {
     if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
   }
-  if (accessToken) url.searchParams.set("access_token", accessToken);
+  if (accessToken) {
+    url.searchParams.set("access_token", accessToken);
+    const secret = resolveAppSecret(opts.appSecret);
+    const proof = appsecretProof(accessToken, secret);
+    if (proof) url.searchParams.set("appsecret_proof", proof);
+  }
+
+  const res = await fetch(url);
+  noteGraphResponse(res);
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(data.error.message || "Graph API error");
+    err.code = data.error.code;
+    err.type = data.error.type;
+    err.fb = data.error;
+    throw err;
+  }
+  return data;
+}
+
+/** Follow paging.next absolute URLs while keeping appsecret_proof. */
+async function graphFetchAbsolute(absoluteUrl, accessToken, opts = {}) {
+  const url = new URL(absoluteUrl);
+  if (accessToken && !url.searchParams.get("access_token")) {
+    url.searchParams.set("access_token", accessToken);
+  }
+  const secret = resolveAppSecret(opts.appSecret);
+  const token = url.searchParams.get("access_token") || accessToken;
+  const proof = appsecretProof(token, secret);
+  if (proof) url.searchParams.set("appsecret_proof", proof);
 
   const res = await fetch(url);
   noteGraphResponse(res);
@@ -85,24 +138,31 @@ export async function exchangeLongLivedUserToken(shortLivedToken, appCreds = nul
 }
 
 /** Profile of the connected user */
-export async function getMe(userToken) {
-  return graphGet("/me", userToken, {
-    fields: "id,name,email,picture.type(large)",
-  });
+export async function getMe(userToken, opts = {}) {
+  return graphGet(
+    "/me",
+    userToken,
+    { fields: "id,name,email,picture.type(large)" },
+    { appSecret: opts.appSecret }
+  );
 }
 
 /**
  * Fetch ALL pages the user manages (paginated).
  * Scale: loops until no paging.next — safe for hundreds of pages per account.
+ * @param {string} userToken
+ * @param {{ onPage?: Function, appSecret?: string }} [opts]
  */
-export async function getAllPages(userToken, { onPage } = {}) {
+export async function getAllPages(userToken, opts = {}) {
+  const onPage = typeof opts === "function" ? opts : opts.onPage;
+  const appSecret = typeof opts === "object" && opts ? opts.appSecret : undefined;
   const fields = "id,name,category,access_token,tasks";
   let urlPath = "/me/accounts";
   let query = { fields, limit: 100 };
   const pages = [];
 
   // First request via helper; subsequent via absolute paging URL
-  let data = await graphGet(urlPath, userToken, query);
+  let data = await graphGet(urlPath, userToken, query, { appSecret });
 
   while (true) {
     const batch = data.data || [];
@@ -114,13 +174,7 @@ export async function getAllPages(userToken, { onPage } = {}) {
     const next = data.paging?.next;
     if (!next) break;
 
-    const res = await fetch(next);
-    data = await res.json();
-    if (data.error) {
-      const err = new Error(data.error.message || "Graph paging error");
-      err.fb = data.error;
-      throw err;
-    }
+    data = await graphFetchAbsolute(next, userToken, { appSecret });
   }
 
   return pages;
@@ -136,9 +190,9 @@ export async function debugToken(inputToken) {
  * Soft Graph GET — returns { ok, data } or { ok:false, error } without throwing.
  * Used for optional enrich fields (roles/insights may lack permission).
  */
-export async function graphGetSoft(path, accessToken, query = {}) {
+export async function graphGetSoft(path, accessToken, query = {}, opts = {}) {
   try {
-    const data = await graphGet(path, accessToken, query);
+    const data = await graphGet(path, accessToken, query, opts);
     return { ok: true, data };
   } catch (e) {
     return {
