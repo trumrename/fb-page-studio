@@ -41,7 +41,7 @@ if (-not (Test-Path -LiteralPath $RelayScript)) {
   exit 1
 }
 
-$DomainDefault = 'videoviral1.chainityai.com'
+$DomainDefault = 'modelswiki.top'
 $RelayDir = Join-Path $ProjectRoot 'oauth-relay'
 $CloudDir = Join-Path $env:USERPROFILE '.cloudflared'
 $TunnelName = 'fb-oauth-relay'

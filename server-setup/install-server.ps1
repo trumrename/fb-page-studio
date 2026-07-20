@@ -13,7 +13,7 @@ if (-not (Test-Path (Join-Path $ProjectRoot "oauth-relay\server.mjs"))) {
   exit 1
 }
 
-$DomainDefault = "videoviral1.chainityai.com"
+$DomainDefault = "modelswiki.top"
 $RelayDir = Join-Path $ProjectRoot "oauth-relay"
 $SetupDir = Join-Path $ProjectRoot "server-setup"
 $CloudDir = Join-Path $env:USERPROFILE ".cloudflared"

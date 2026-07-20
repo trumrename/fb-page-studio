@@ -70,23 +70,38 @@ if (still.length) {
   );
 }
 
-const relayUrl =
-  srcEnv.OAUTH_RELAY_URL ||
-  srcEnv.RELAY_PUBLIC_URL ||
-  (() => {
-    try {
-      if (srcEnv.FB_REDIRECT_URI) {
-        const u = new URL(srcEnv.FB_REDIRECT_URI);
-        return `${u.protocol}//${u.host}`;
-      }
-    } catch {
-      /* */
-    }
-    return "https://oauth.example.com";
-  })();
+const DEFAULT_CUSTOMER_RELAY =
+  process.env.PACK_OAUTH_DOMAIN
+    ? `https://${String(process.env.PACK_OAUTH_DOMAIN).replace(/^https?:\/\//, "").replace(/\/$/, "")}`
+    : "https://modelswiki.top";
 
-const redirect =
-  srcEnv.FB_REDIRECT_URI || `${String(relayUrl).replace(/\/$/, "")}/auth/facebook/callback`;
+function pickCustomerRelayUrl() {
+  const raw =
+    srcEnv.OAUTH_RELAY_URL ||
+    srcEnv.RELAY_PUBLIC_URL ||
+    (() => {
+      try {
+        if (srcEnv.FB_REDIRECT_URI) {
+          const u = new URL(srcEnv.FB_REDIRECT_URI);
+          return `${u.protocol}//${u.host}`;
+        }
+      } catch {
+        /* */
+      }
+      return "";
+    })();
+  const s = String(raw || "").trim().replace(/\/$/, "");
+  if (!s || /ngrok|localhost|127\.0\.0\.1|example\.com/i.test(s)) {
+    if (s && /ngrok/i.test(s)) {
+      console.warn(`[pack-customer] Bo qua relay ngrok (${s}) → ${DEFAULT_CUSTOMER_RELAY}`);
+    }
+    return DEFAULT_CUSTOMER_RELAY;
+  }
+  return s;
+}
+
+const relayUrl = pickCustomerRelayUrl();
+const redirect = `${String(relayUrl).replace(/\/$/, "")}/auth/facebook/callback`;
 const appId = srcEnv.FB_APP_ID || "";
 
 // Public-only .env for first run (NO SECRET)

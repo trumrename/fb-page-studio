@@ -32,9 +32,22 @@ import {
   getCentralAccessToken,
   deployPublicInfo,
 } from "./services/deployMode.js";
+import { syncOauthRelayConfig } from "./services/oauthRelaySync.js";
 
 const app = express();
 const publicDir = getPublicDir();
+
+// OAUTH_RELAY: pull live domain from server (modelswiki.top) so old pack .env self-heals.
+try {
+  const relaySync = await syncOauthRelayConfig();
+  if (relaySync.synced && relaySync.changed) {
+    console.log(
+      `[oauth-relay] EXE đã nhận domain server: ${relaySync.public_url}`
+    );
+  }
+} catch (e) {
+  console.warn("[oauth-relay] sync:", e.message);
+}
 
 // Init DB + default media folders + anti-spam
 getDb();

@@ -30,13 +30,13 @@ copyFile(
 );
 
 const envExample = `# Máy SERVER — OAuth Relay (CÓ SECRET sau khi CAI)
-# Domain: videoviral1.chainityai.com
+# Domain: modelswiki.top
 
 PORT=8080
 LISTEN_HOST=127.0.0.1
 
-RELAY_PUBLIC_URL=https://videoviral1.chainityai.com
-FB_REDIRECT_URI=https://videoviral1.chainityai.com/auth/facebook/callback
+RELAY_PUBLIC_URL=https://modelswiki.top
+FB_REDIRECT_URI=https://modelswiki.top/auth/facebook/callback
 
 RELAY_EXCHANGE=1
 FB_APP_ID=
@@ -60,7 +60,7 @@ writeBat(path.join(out, "CAI-MAY-SERVER.bat"), [
   "title Cai may SERVER - pack-server",
   "echo.",
   "echo  Goi SERVER gon - OAuth Relay + Cloudflare Tunnel",
-  "echo  Domain: videoviral1.chainityai.com",
+  "echo  Domain: modelswiki.top",
   "echo  Nen: Run as administrator",
   "echo.",
   'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-server.ps1"',
@@ -75,7 +75,7 @@ writeBat(path.join(out, "CHAY-SERVER-TAT-CA.bat"), [
   'cd /d "%~dp0"',
   "title FB OAuth SERVER",
   "echo.",
-  "echo  Domain: https://videoviral1.chainityai.com",
+  "echo  Domain: https://modelswiki.top",
   "echo.",
   'if not exist "oauth-relay\\server.mjs" (',
   "  echo [LOI] Thieu oauth-relay\\server.mjs - copy thieu folder!",
@@ -101,8 +101,8 @@ writeBat(path.join(out, "CHAY-SERVER-TAT-CA.bat"), [
   "echo [2/2] Cloudflare Tunnel...",
   'start "Cloudflare-Tunnel" cmd /k "cloudflared tunnel run fb-oauth-relay"',
   "echo.",
-  "echo Kiem tra: https://videoviral1.chainityai.com/health",
-  "echo Meta: https://videoviral1.chainityai.com/auth/facebook/callback",
+  "echo Kiem tra: https://modelswiki.top/health",
+  "echo Meta: https://modelswiki.top/auth/facebook/callback",
   "pause",
 ]);
 
@@ -134,7 +134,7 @@ fs.writeFileSync(
   [
     "GOI SERVER GON - OAuth Relay",
     "==============================",
-    "Domain: https://videoviral1.chainityai.com",
+    "Domain: https://modelswiki.top",
     "",
     "BAT BUOC - phai co du:",
     "  pack-server\\",
@@ -160,9 +160,9 @@ fs.writeFileSync(
     "",
     "HANG NGAY: CHAY-SERVER-TAT-CA.bat",
     "",
-    "Kiem tra: https://videoviral1.chainityai.com/health",
+    "Kiem tra: https://modelswiki.top/health",
     "Meta Redirect:",
-    "  https://videoviral1.chainityai.com/auth/facebook/callback",
+    "  https://modelswiki.top/auth/facebook/callback",
     "",
     "Tool EXE: copy them pack-internal (rieng).",
     "version: " + pkg.version,
@@ -174,7 +174,7 @@ fs.writeFileSync(
 
 fs.writeFileSync(
   path.join(out, "VERSION.txt"),
-  `pack=server-only\nversion=${pkg.version}\ndomain=videoviral1.chainityai.com\nbuilt_at=${new Date().toISOString()}\n`,
+  `pack=server-only\nversion=${pkg.version}\ndomain=modelswiki.top\nbuilt_at=${new Date().toISOString()}\n`,
   "utf8"
 );
 

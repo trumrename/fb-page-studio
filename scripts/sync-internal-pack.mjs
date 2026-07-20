@@ -36,9 +36,9 @@ const srcEnv = {
   ...readEnvFile(path.join(root, "FB-Page-Studio-App", ".env")),
 };
 
-// Domain OAuth chung (khớp pack-server). Ghi đè: PACK_OAUTH_DOMAIN=oauth.xxx.com
+// Domain OAuth chung (khớp pack-server / relay). Ghi đè: PACK_OAUTH_DOMAIN=oauth.xxx.com
 const DEFAULT_OAUTH_HOST =
-  process.env.PACK_OAUTH_DOMAIN || "videoviral1.chainityai.com";
+  process.env.PACK_OAUTH_DOMAIN || "modelswiki.top";
 
 function hostFromUrl(raw) {
   try {

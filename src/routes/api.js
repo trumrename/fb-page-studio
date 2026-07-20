@@ -161,14 +161,26 @@ router.put("/setup/first-run", (req, res) => {
     const app2Id = removeApp2
       ? ""
       : String(req.body?.app2_id || currentApp2Id).trim();
+    // Empty secret body keeps previous secret; relay mode may leave secret only on server.
+    const app2SecretRaw = String(req.body?.app2_secret ?? "").trim();
     const app2Secret = removeApp2
       ? ""
-      : String(req.body?.app2_secret || currentApp2Secret).trim();
+      : app2SecretRaw || currentApp2Secret;
+    const relayMode =
+      String(process.env.OAUTH_RELAY || "").trim() === "1" ||
+      String(process.env.OAUTH_RELAY || "").toLowerCase() === "true";
     if (app2Id && !/^\d{5,30}$/.test(app2Id)) {
       throw new Error("App ID 2 phải là dãy số hoặc để trống.");
     }
-    if (app2Id && (app2Secret.length < 16 || /[\r\n]/.test(app2Secret))) {
-      throw new Error("Đã nhập App ID 2 nhưng App Secret 2 chưa hợp lệ.");
+    if (app2Id && app2Secret && (app2Secret.length < 16 || /[\r\n]/.test(app2Secret))) {
+      throw new Error("App Secret 2 chưa hợp lệ (tối thiểu 16 ký tự).");
+    }
+    // Portable/internal without relay still needs secret on this machine.
+    if (app2Id && !app2Secret && !relayMode) {
+      throw new Error(
+        "Đã nhập App ID 2 nhưng thiếu App Secret 2. " +
+          "Gói OAuth relay: bật OAUTH_RELAY=1 (secret App 2 có thể chỉ trên máy server)."
+      );
     }
 
     const accountsCount = listAccounts().length;
@@ -331,8 +343,17 @@ function scanChromeProfiles(rootsValue) {
 
 /** Domain OAuth local setup — never returns App Secret or encryption keys. */
 router.get("/setup/domain", (_req, res) => {
+  const relayUrl = String(process.env.OAUTH_RELAY_URL || "").trim().replace(/\/$/, "");
+  const relayMode =
+    String(process.env.OAUTH_RELAY || "").trim() === "1" ||
+    String(process.env.OAUTH_RELAY || "").toLowerCase() === "true";
+  // In relay mode "origin" for OAuth is the public relay, not 127.0.0.1.
+  const origin = relayMode && relayUrl ? relayUrl : config.appBaseUrl;
   res.json({
-    origin: config.appBaseUrl,
+    origin,
+    app_base_url: config.appBaseUrl,
+    oauth_relay: relayMode,
+    oauth_relay_url: relayUrl || null,
     redirect_uri: config.facebook.redirectUri,
     port: config.port,
     app2_configured: Boolean(process.env.FB_APP_ID_2),

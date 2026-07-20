@@ -1,7 +1,7 @@
 FB Page Studio — gói khách (không secret)
-version=1.2.22
-built_at=2026-07-20T14:08:46.612Z
+version=1.2.23
+built_at=2026-07-20T18:09:13.653Z
 github=trumrename/fb-page-studio
-asset=FB-Page-Studio-Desktop-v1.2.22.exe
+asset=FB-Page-Studio-Desktop-v1.2.23.exe
 oauth_relay=1
 app_id_set=yes

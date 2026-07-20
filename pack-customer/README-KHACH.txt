@@ -14,4 +14,4 @@ Gói này KHÔNG chứa:
  - Ngrok Authtoken
  - license-private.pem
 
-version 1.2.22
+version 1.2.23

@@ -154,13 +154,28 @@ code{background:#1e2330;padding:.15rem .4rem;border-radius:4px;word-break:break-
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
-  if (url.pathname === "/health" || url.pathname === "/api/health") {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+  // Public config for EXE clients (no secrets). EXE may sync FB_REDIRECT_URI from here.
+  if (
+    url.pathname === "/health" ||
+    url.pathname === "/api/health" ||
+    url.pathname === "/client-config" ||
+    url.pathname === "/api/client-config"
+  ) {
+    const publicUrl = String(publicName).replace(/\/$/, "");
+    const redir = redirectUri();
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+    });
     res.end(
       JSON.stringify({
         ok: true,
         service: "fb-page-studio-oauth-relay",
         exchange: exchangeMode,
+        public_url: /^https?:\/\//i.test(publicUrl) ? publicUrl : `https://${publicUrl}`,
+        redirect_uri: redir,
+        oauth_relay: true,
       })
     );
     return;
