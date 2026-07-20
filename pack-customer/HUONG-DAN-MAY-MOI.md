@@ -1,17 +1,17 @@
-# FB Page Studio — hướng dẫn máy mới (v1.2.20)
+# FB Page Studio — hướng dẫn máy mới (v1.2.21)
 
 ## 1. Chỉ cần EXE (hoặc ZIP gói khách)
 
 Tải đúng asset GitHub:
 
-- `FB-Page-Studio-Desktop-v1.2.20.exe` **hoặc**
-- `FB-Page-Studio-v1.2.20-Windows.zip` (giải nén rồi chạy EXE)
+- `FB-Page-Studio-Desktop-v1.2.21.exe` **hoặc**
+- `FB-Page-Studio-v1.2.21-Windows.zip` (giải nén rồi chạy EXE)
 
 **Không** tải `Source code.zip`.
 
 ```text
 D:\FB-Page-Studio\
-  FB-Page-Studio-Desktop-v1.2.20.exe
+  FB-Page-Studio-Desktop-v1.2.21.exe
 ```
 
 Lần đầu tool tự tạo `.env` và `data` cạnh EXE. Cập nhật: đặt EXE mới **cùng thư mục** để giữ license, token, lịch.

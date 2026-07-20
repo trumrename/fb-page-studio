@@ -159,6 +159,11 @@ try {
        VALUES (?, ?, ?, ?, 'active')`,
     )
     .run(account.lastInsertRowid, "clean-runtime-page", "Clean Page", "page-token");
+  testDb.prepare(
+    `INSERT INTO page_post_config
+     (page_row_id, max_posts_per_day, interval_minutes, posts_today, posts_today_date, last_post_at)
+     VALUES (?, 3, 120, 2, '2000-01-01', '2026-07-19 21:16:37')`,
+  ).run(page.lastInsertRowid);
   testDb.close();
 
   const workspaceResponse = await fetch(base + "/api/posting/workspace-state", {
@@ -167,7 +172,7 @@ try {
     body: JSON.stringify({
       state: {
         selected_page_ids: [Number(page.lastInsertRowid), 999999],
-        active_page_id: Number(page.lastInsertRowid),
+        active_page_id: 999999,
         active_view: "schedule",
         bulk: { bulkMode: "fixed", bulkCount: "7" },
         rotation: { rotNowPerDay: "3" },
@@ -178,6 +183,7 @@ try {
   if (
     !workspaceResponse.ok ||
     savedWorkspace.state?.selected_page_ids?.length !== 1 ||
+    savedWorkspace.state?.active_page_id !== Number(page.lastInsertRowid) ||
     savedWorkspace.state?.active_view !== "schedule"
   ) {
     throw new Error("Posting workspace did not save valid Page selection: " + JSON.stringify(savedWorkspace));
@@ -191,6 +197,49 @@ try {
     restoredWorkspace.state?.rotation?.rotNowPerDay !== "3"
   ) {
     throw new Error("Posting workspace did not restore last settings: " + JSON.stringify(restoredWorkspace));
+  }
+
+  const postingPages = await (await fetch(base + "/api/posting/pages")).json();
+  const cleanPageSummary = postingPages.pages?.find((item) => item.id === Number(page.lastInsertRowid));
+  const postingConfig = await (
+    await fetch(base + "/api/posting/config/" + Number(page.lastInsertRowid))
+  ).json();
+  if (cleanPageSummary?.posts_today !== 0 || postingConfig.config?.posts_today !== 0) {
+    throw new Error("Old posts_today leaked into the current Vietnam day.");
+  }
+
+  const publicApiResponse = await fetch(base + "/api/health", {
+    headers: { "X-Forwarded-Host": "public-oauth.example" },
+  });
+  if (publicApiResponse.status !== 403) {
+    throw new Error("Public Ngrok-style Host could access local API.");
+  }
+  const publicCallbackResponse = await fetch(base + "/auth/facebook/callback", {
+    headers: { "X-Forwarded-Host": "public-oauth.example" },
+    redirect: "manual",
+  });
+  if (publicCallbackResponse.status === 403) {
+    throw new Error("Facebook OAuth callback was blocked on the public Host.");
+  }
+
+  const preferredBulkResponse = await fetch(base + "/api/posting/preferred-hours/bulk", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      page_row_ids: [Number(page.lastInsertRowid)],
+      hours: [8, 20],
+    }),
+  });
+  const preferredBulk = await preferredBulkResponse.json();
+  const preferredRead = await (
+    await fetch(base + "/api/posting/preferred-hours/" + Number(page.lastInsertRowid))
+  ).json();
+  if (
+    !preferredBulkResponse.ok ||
+    preferredBulk.pages !== 1 ||
+    JSON.stringify(preferredRead.preferred_hours) !== JSON.stringify([8, 20])
+  ) {
+    throw new Error("Preferred-hours bulk route is shadowed or did not persist: " + JSON.stringify({ preferredBulk, preferredRead }));
   }
 
   const directPreviewResponse = await fetch(base + "/api/jobs/rotation/run-now", {
@@ -220,6 +269,40 @@ try {
     directPreview.slots.some((slot) => !slot.iso || "scheduled_publish_time" in slot)
   ) {
     throw new Error("Direct Local preview is not a local-wait/direct plan: " + JSON.stringify(directPreview));
+  }
+  const todayVn = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const quotaDb = new Database(dbFile);
+  quotaDb.prepare(
+    `UPDATE page_post_config SET posts_today = 2, posts_today_date = ? WHERE page_row_id = ?`,
+  ).run(todayVn, page.lastInsertRowid);
+  quotaDb.close();
+  const quotaPreviewResponse = await fetch(base + "/api/jobs/rotation/run-now", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dry_run: true,
+      page_row_ids: [Number(page.lastInsertRowid)],
+      posts_per_page_per_day: 3,
+      post_type: "photo",
+      app_rotation_mode: "per_app",
+      between_tasks_gap_minutes_min: 12,
+      between_tasks_gap_minutes_max: 12,
+      same_page_gap_hours_min: 1,
+      same_page_gap_hours_max: 1,
+      auto_groups_by_meta_app: true,
+      groups: [],
+      only_enabled_pages: false,
+      tz_offset_minutes: 420,
+    }),
+  });
+  const quotaPreview = await quotaPreviewResponse.json();
+  if (!quotaPreviewResponse.ok || quotaPreview.slots?.length !== 1) {
+    throw new Error("Direct preview did not subtract today's used Page quota: " + JSON.stringify(quotaPreview));
   }
 
   const invalidWindowResponse = await fetch(base + "/api/jobs/rotation/plan", {

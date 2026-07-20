@@ -41,6 +41,24 @@ const DEFAULT_WORKSPACE = Object.freeze({
   rotation: {},
 });
 
+function todayVnKey() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function configForToday(cfg) {
+  const today = todayVnKey();
+  return {
+    ...cfg,
+    posts_today: cfg.posts_today_date === today ? Number(cfg.posts_today) || 0 : 0,
+    posts_today_date: today,
+  };
+}
+
 function normalizeWorkspaceState(input = {}) {
   const db = getDb();
   const activeIds = new Set(
@@ -56,11 +74,17 @@ function normalizeWorkspaceState(input = {}) {
         .filter((id) => id > 0 && activeIds.has(id))
     ),
   ];
-  const activeId = Number(input.active_page_id);
+  const requestedActiveId = Number(input.active_page_id);
+  if (!selected.length && activeIds.has(requestedActiveId)) {
+    selected.push(requestedActiveId);
+  }
+  const activeId = selected.includes(requestedActiveId)
+    ? requestedActiveId
+    : selected[0] || null;
   const allowedViews = new Set(["configure", "run", "schedule", "monitor"]);
   return {
     selected_page_ids: selected,
-    active_page_id: activeIds.has(activeId) ? activeId : selected[0] || null,
+    active_page_id: activeId,
     active_view: allowedViews.has(input.active_view)
       ? input.active_view
       : "configure",
@@ -151,7 +175,7 @@ router.get("/config/:pageRowId", (req, res) => {
   const id = Number(req.params.pageRowId);
   const page = pageExists(id);
   if (!page) return res.status(404).json({ error: "Page not found" });
-  const cfg = getPagePostConfig(id);
+  const cfg = configForToday(getPagePostConfig(id));
   res.json({
     page,
     config: cfg,
@@ -172,7 +196,7 @@ router.put("/config/:pageRowId", (req, res) => {
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
-  const cfg = savePagePostConfig(id, body);
+  const cfg = configForToday(savePagePostConfig(id, body));
   res.json({
     config: cfg,
     media: mediaStats(cfg.media_folder),
@@ -282,7 +306,7 @@ router.get("/pages", (_req, res) => {
     WHERE date(COALESCE(NULLIF(scheduled_publish_time,''), created_at), '+7 hours') = date('now', '+7 hours')
     GROUP BY page_row_id
   `).all().map((x) => [Number(x.page_row_id), x]));
-  const todayVn = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const todayVn = todayVnKey();
   res.json({
     pages: pages.map((p) => {
       const cfg = getPagePostConfig(p.id);
@@ -292,8 +316,8 @@ router.get("/pages", (_req, res) => {
         enabled: cfg.enabled,
         max_posts_per_day: cfg.max_posts_per_day,
         interval_minutes: cfg.interval_minutes,
-        posts_today: cfg.posts_today,
-        posts_today_date: cfg.posts_today_date,
+        posts_today: cfg.posts_today_date === todayVn ? cfg.posts_today : 0,
+        posts_today_date: todayVn,
         last_post_at: cfg.last_post_at,
         media_folder: cfg.media_folder,
         posted_folder: cfg.posted_folder,
@@ -339,26 +363,6 @@ router.get("/active-times/:pageRowId", async (req, res) => {
 });
 
 /**
- * PUT /api/posting/preferred-hours/:pageRowId
- * Body: { hours: [9,12,19,21] } — giờ ưa thích thủ công (0–23)
- */
-router.put("/preferred-hours/:pageRowId", (req, res) => {
-  try {
-    const id = Number(req.params.pageRowId);
-    if (!pageExists(id)) return res.status(404).json({ error: "Page not found" });
-    const hours = req.body?.hours ?? req.body?.preferred_hours ?? [];
-    const saved = savePreferredHours(id, hours);
-    res.json({
-      ok: true,
-      preferred_hours: saved,
-      note: "Giờ do bạn đặt — không phải insights Meta (page_fans_online đã deprecate).",
-    });
-  } catch (e) {
-    res.status(400).json({ ok: false, error: e.message });
-  }
-});
-
-/**
  * PUT /api/posting/preferred-hours/bulk
  * Body: { page_row_ids: number[], hours: [9,12,19,21] }
  */
@@ -379,6 +383,27 @@ router.put("/preferred-hours/bulk", (req, res) => {
       ok: true,
       ...result,
       note: "Đã gán giờ ưa thích cho các page — dùng cho mode Giờ tích cực (Meta không còn page_fans_online).",
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * PUT /api/posting/preferred-hours/:pageRowId
+ * Body: { hours: [9,12,19,21] } — giờ ưa thích thủ công (0–23)
+ * Route động phải đặt sau /bulk để Express không hiểu "bulk" là Page ID.
+ */
+router.put("/preferred-hours/:pageRowId", (req, res) => {
+  try {
+    const id = Number(req.params.pageRowId);
+    if (!pageExists(id)) return res.status(404).json({ error: "Page not found" });
+    const hours = req.body?.hours ?? req.body?.preferred_hours ?? [];
+    const saved = savePreferredHours(id, hours);
+    res.json({
+      ok: true,
+      preferred_hours: saved,
+      note: "Giờ do bạn đặt — không phải insights Meta (page_fans_online đã deprecate).",
     });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });

@@ -41,9 +41,21 @@ import { withPageOperationLock } from "./pageOperationLock.js";
 import { reserveCaptionSlot } from "./captionPoolState.js";
 
 function todayKey() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function storedUtcMs(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return NaN;
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
+    ? `${raw.replace(" ", "T")}Z`
+    : raw;
+  return new Date(normalized).getTime();
 }
 
 function parseJson(s, fallback) {
@@ -244,7 +256,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
   }
 
   if (cfg.last_post_at && !opts.ignore_interval) {
-    const last = new Date(cfg.last_post_at.replace(" ", "T")).getTime();
+    const last = storedUtcMs(cfg.last_post_at);
     const waitMs = (cfg.interval_minutes || 0) * 60 * 1000;
     if (Number.isFinite(last) && Date.now() - last < waitMs) {
       const left = Math.ceil((waitMs - (Date.now() - last)) / 60000);
@@ -582,16 +594,17 @@ export async function runSchedulerTick() {
 
 export function listPostLogs({ pageRowId, limit = 100 } = {}) {
   const db = getDb();
+  const safeLimit = Math.min(1000, Math.max(1, Number(limit) || 100));
   if (pageRowId) {
     return db
       .prepare(
         `SELECT * FROM post_logs WHERE page_row_id = ? ORDER BY id DESC LIMIT ?`
       )
-      .all(pageRowId, limit);
+      .all(pageRowId, safeLimit);
   }
   return db
     .prepare(`SELECT * FROM post_logs ORDER BY id DESC LIMIT ?`)
-    .all(limit);
+    .all(safeLimit);
 }
 
 export function mediaStats(folder) {
@@ -640,7 +653,7 @@ export function getCaptionStats(cfg) {
   for (const row of getDb()
     .prepare(
       `SELECT caption FROM post_logs
-       WHERE status IN ('ok','ok_comment_failed','scheduled')
+       WHERE status IN ('ok','ok_comment_failed','scheduled','published','schedule_overdue')
          AND created_at >= ? AND caption IS NOT NULL AND trim(caption) != ''`
     )
     .all(since)) {

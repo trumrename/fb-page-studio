@@ -335,7 +335,7 @@ function countPostsBetween(startIso, endIso) {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM post_logs
-       WHERE status IN ('ok','ok_comment_failed','scheduled')
+       WHERE status IN ('ok','ok_comment_failed','scheduled','published','schedule_overdue')
          AND julianday(${EFFECTIVE_POST_TIME_SQL}) >= julianday(?)
          AND julianday(${EFFECTIVE_POST_TIME_SQL}) < julianday(?)`
     )
@@ -502,7 +502,7 @@ export function assertCanPublish({
     const near = getDb()
       .prepare(
         `SELECT ${EFFECTIVE_POST_TIME_SQL} AS effective_at FROM post_logs
-         WHERE page_row_id = ? AND status IN ('ok','ok_comment_failed','scheduled')
+         WHERE page_row_id = ? AND status IN ('ok','ok_comment_failed','scheduled','published','schedule_overdue')
            AND ABS(strftime('%s', ${EFFECTIVE_POST_TIME_SQL}) - ?) < ?
          ORDER BY ABS(strftime('%s', ${EFFECTIVE_POST_TIME_SQL}) - ?) ASC LIMIT 1`
       )
@@ -553,7 +553,7 @@ export function assertCanPublish({
     const hit2 = getDb()
       .prepare(
         `SELECT id, ${EFFECTIVE_POST_TIME_SQL} AS effective_at FROM post_logs
-         WHERE status IN ('ok','ok_comment_failed','scheduled')
+         WHERE status IN ('ok','ok_comment_failed','scheduled','published','schedule_overdue')
            AND julianday(${EFFECTIVE_POST_TIME_SQL}) >= julianday(?)
            AND julianday(${EFFECTIVE_POST_TIME_SQL}) < julianday(?)
            AND lower(trim(caption)) = ?
@@ -849,9 +849,10 @@ export function countEffectivePostsBetween(startIso, endIso) {
 
 export function listRecentBlocks(limit = 30) {
   ensureAntiSpamTables();
+  const safeLimit = Math.min(500, Math.max(1, Number(limit) || 30));
   return getDb()
     .prepare(
       `SELECT * FROM anti_spam_events ORDER BY id DESC LIMIT ?`
     )
-    .all(limit);
+    .all(safeLimit);
 }

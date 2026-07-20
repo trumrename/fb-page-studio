@@ -1,11 +1,11 @@
 # CHECK-BUG — Checklist kiểm thử FB Page Studio
 
 > Trước mỗi ship / release. Đánh `[x]` khi OK.  
-> **Phiên bản code:** 1.2.20
+> **Phiên bản code hiện tại:** 1.2.21
 > **Gốc DEV:** `D:\fb-page-poster\`  
 > **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`
 
-## Trạng thái baseline v1.2.20
+## Trạng thái baseline v1.2.20 (lịch sử)
 
 - [x] `npm test`: **189/189 PASS**
 - [x] Clean runtime: **20 endpoint PASS**
@@ -117,6 +117,8 @@ npm test
 - [ ] Release không có exe → báo thiếu asset, không crash  
 - [ ] Update hiển thị tiến trình %/dung lượng trong app, không mở/spam CMD
 - [ ] Sau download Electron thoát rồi thay đúng EXE tại chỗ và mở lại app
+- [ ] Release thiếu/sai file `.sha256.txt` → updater hủy, xóa `.new`, không thay EXE
+- [ ] Domain Ngrok gọi `/api/health` hoặc dashboard → 403; callback Facebook vẫn vào được
 
 ---
 
@@ -159,9 +161,23 @@ npm test
 | VERSION.txt thư mục App còn v1.2.19 | Đã đồng bộ metadata sang v1.2.20 |
 | Nhiều EXE cũ dễ mở nhầm | Chuyển bản v1.2.16–v1.2.19 vào `_old-versions`, giữ lại để phục hồi |
 | Build lại nhưng release asset vẫn là file cũ cùng version | `release:verify` chặn hash lệch; bắt buộc chạy lại pack → release asset → ZIP → verify sau build cuối |
+| Lưu giờ ưa thích hàng loạt luôn báo Page not found | Đặt route `/preferred-hours/bulk` trước route động `/:pageRowId` |
+| Option 1 hẹn Facebook vẫn chạy App so le | `buildRotationPlan` đọc `app_rotation_mode`; per-App hoàn tất từng App trước |
+| Media/Caption live bị lặp khi chỉ một folder khác nhau | Tách dedupe `media_pools` và `caption_pools`, gắn rõ danh sách Page dùng chung |
+| Bài Facebook đã published biến mất khỏi quota anti-spam | Tính cả `published` và `schedule_overdue` trong cap/cooldown/caption |
+| Ngrok làm lộ dashboard/API quản trị | Public proxy chỉ cho phép OAuth callback; mọi UI/API khác trả 403 |
+| Updater có thể cài EXE tải lỗi/sai asset | Bắt buộc sidecar SHA-256 và xác minh trước khi tạo BAT thay file |
 
 ---
 
 ## Báo bug
 
 Ghi: bước · màn · version topbar · license mode · DEV hay gói khách · log `desktop-startup.log`.
+# Cập nhật kiểm tra bug v1.2.21 — 2026-07-20
+
+- Đã sửa preview Direct Local không trừ quota đã dùng trong ngày.
+- Đã sửa UTC/VN của `last_post_at`, interval và bộ đếm ngày Việt Nam.
+- Đã sửa Page tick chạy khác Page đang mở cấu hình.
+- Đã sửa retry schedule giữ giờ quá khứ và overdue không được kiểm tra lại.
+- Đã thêm refresh Media/Caption trong lúc job chờ và test hồi quy tương ứng.
+- Kết quả cuối: `npm test` 209/209, clean runtime PASS, release verify v1.2.21 PASS.

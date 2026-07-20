@@ -570,10 +570,11 @@ export async function reconcileScheduledLogs({ limit = 50 } = {}) {
            l.scheduled_publish_time, p.page_token_enc
     FROM post_logs l
     JOIN fb_pages p ON p.id = l.page_row_id
-    WHERE l.status = 'scheduled'
+    WHERE l.status IN ('scheduled', 'schedule_overdue')
       AND l.fb_post_id IS NOT NULL
       AND julianday(l.scheduled_publish_time) <= julianday('now')
-    ORDER BY l.scheduled_publish_time ASC
+    ORDER BY CASE WHEN l.status = 'scheduled' THEN 0 ELSE 1 END,
+             l.scheduled_publish_time ASC
     LIMIT ?
   `).all(Math.min(100, Math.max(1, Number(limit) || 50)));
 

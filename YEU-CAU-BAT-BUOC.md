@@ -7,6 +7,7 @@ Tài liệu này là bản ghi lâu dài cho các yêu cầu đã thống nhất
 - Phân biệt rõ Meta App, Profile/Admin và Page; mọi danh sách phải hiển thị App nào, Admin nào, Page nào.
 - Hỗ trợ App 1/App 2, OAuth đúng App và đúng redirect domain.
 - Ngrok tích hợp trong EXE; token nhập/dán được, báo trạng thái rõ, không lộ token.
+- Domain Ngrok công khai chỉ được nhận `GET /auth/facebook/callback`; dashboard và toàn bộ API quản trị phải trả 403 khi đi qua proxy/domain công khai.
 - Chrome thường và ChromePortable: chọn thư mục dữ liệu/profile bằng hộp Explorer đầy đủ ổ đĩa; quét hết profile trong thư mục đã chọn.
 - Mọi bộ chọn thư mục media, posted, caption và Chrome đều dùng Explorer chuẩn. Không được dùng lại FolderBrowserDialog nhỏ.
 
@@ -39,12 +40,16 @@ Tài liệu này là bản ghi lâu dài cho các yêu cầu đã thống nhất
 - Version trong package.json, package-lock.json, EXE nhúng, pack-customer/VERSION.txt phải trùng.
 - EXE giao khách và asset release phải có tên FB-Page-Studio-Desktop-vX.Y.Z.exe.
 - Không dùng asset chung tên để tránh kẹt bản cũ; phải kiểm tra hash và cảnh báo khi bản cũ còn chạy.
+- Updater chỉ được thay EXE khi release có sidecar `.sha256.txt` đúng tên và SHA-256 tải về khớp tuyệt đối; thiếu/sai hash phải xóa file tạm và hủy cập nhật.
+- `npm audit` và `npm audit --omit=dev` phải đều không còn vulnerability trước khi đóng gói.
 - Trước release chạy đủ npm test, npm run build:desktop, npm run pack:customer, npm run release:verify.
 - Không push/tag/release GitHub nếu chưa được người dùng đồng ý rõ.
 
 ## 5. Quy trình kiểm tra tối thiểu
 
 1. Rà soát route/API, HTML/CSS, Electron IPC và đường dẫn đóng gói.
+   - Route tên cố định như `/bulk` phải đứng trước route tham số `/:id` cùng method/prefix.
+   - URL đưa vào HTML/Electron chỉ cho phép `http:` hoặc `https:` và phải escape cả nội dung lẫn attribute.
 2. Chạy npm test và kiểm tra không có lỗi hồi quy tĩnh.
 3. Mở giao diện mới, thử trực tiếp các thao tác quan trọng bằng dữ liệu giả.
 4. Build EXE đúng version, đồng bộ gói khách và chạy cổng verify.

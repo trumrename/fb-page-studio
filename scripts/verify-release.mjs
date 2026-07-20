@@ -67,13 +67,18 @@ if (fs.existsSync(appAsar)) {
   const embeddedUpdater = asar.extractFile(appAsar, path.join("src", "services", "updater.js")).toString();
   const embeddedNgrok = asar.extractFile(appAsar, path.join("src", "services", "ngrokManager.js")).toString();
   const embeddedServer = asar.extractFile(appAsar, path.join("src", "server.js")).toString();
+  const embeddedPosting = asar.extractFile(appAsar, path.join("src", "routes", "posting.js")).toString();
   assert(embeddedPkg.version === pkg.version, "EXE embedded version matches package.json", embeddedPkg.version);
   assert(embeddedMain.includes("app.exit(0)"), "EXE contains forced updater shutdown safeguard");
   assert(embeddedUpdater.includes("no-cache") && embeddedUpdater.includes("Date.now()"), "EXE contains GitHub cache-busting safeguard");
+  assert(embeddedUpdater.includes("checksum_asset") && embeddedUpdater.includes('createHash("sha256")'), "EXE verifies updater SHA-256 sidecar");
   assert(/await stopNgrok\(\);\s*stopRequested = false/.test(embeddedNgrok) && embeddedNgrok.includes("child === proc"), "EXE contains safe Ngrok restart logic");
   assert(embeddedNgrok.includes("domainOf(item.public_url) === domain") && !embeddedNgrok.includes("|| j.tunnels?.[0]"), "EXE only accepts the configured Ngrok domain");
   assert(embeddedNgrok.includes("`--url=https://${domain}`") && !embeddedNgrok.includes("`--domain=${domain}`"), "EXE uses current Ngrok --url flag");
   assert(embeddedServer.includes('msg?.type === "shutdown"') && embeddedMain.includes('serverProc.send({ type: "shutdown" })'), "EXE shuts Ngrok down through Electron IPC");
+  assert(embeddedServer.includes("isFacebookCallback") && embeddedServer.includes("cameThroughProxy"), "EXE blocks public Ngrok access outside OAuth callback");
+  assert(embeddedPosting.indexOf('router.put("/preferred-hours/bulk"') < embeddedPosting.indexOf('router.put("/preferred-hours/:pageRowId"'), "EXE keeps preferred-hours bulk route reachable");
+  assert(embeddedMain.includes("Never let an external origin replace the trusted local dashboard"), "EXE blocks external navigation inside Electron");
 }
 
 if (fs.existsSync(customerVersionFile)) {

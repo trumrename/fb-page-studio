@@ -14,6 +14,17 @@ function safeName(v) { return String(v || "App").normalize("NFKD").replace(/[^a-
 function esc(v) { const s = String(v ?? ""); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
 function vnDay(date = new Date()) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh", year: "numeric", month: "2-digit", day: "2-digit" }).format(date); }
 function yesterdayVn() { return vnDay(new Date(Date.now() - 24 * 60 * 60 * 1000)); }
+function normalizeReportDay(value) {
+  const day = String(value || vnDay()).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    throw new Error("Ngày báo cáo phải có định dạng YYYY-MM-DD");
+  }
+  const parsed = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
+    throw new Error("Ngày báo cáo không hợp lệ");
+  }
+  return day;
+}
 function writeCsv(file, columns, rows) {
   const lines = [columns.map((c) => esc(c.header)).join(",")];
   for (const row of rows) lines.push(columns.map((c) => esc(row[c.key])).join(","));
@@ -64,6 +75,7 @@ const PAGE_COLUMNS = [
 ];
 
 export async function exportPageInfoDaily({ day = vnDay() } = {}) {
+  day = normalizeReportDay(day);
   ensureDir();
   snapshotCurrentFollowers(day);
   const appMap = new Map(listMetaAppsPublic().map((a) => [a.key, a]));
@@ -119,6 +131,7 @@ const HISTORY_COLUMNS = [
 ];
 
 export async function exportPostingHistoryDaily({ day = vnDay() } = {}) {
+  day = normalizeReportDay(day);
   ensureDir();
   const appMap = new Map(listMetaAppsPublic().map((a) => [a.key, a.name]));
   const rows = getDb().prepare(`
@@ -146,6 +159,7 @@ export async function exportPostingHistoryDaily({ day = vnDay() } = {}) {
 }
 
 export async function exportAllDailyReports({ day = vnDay() } = {}) {
+  day = normalizeReportDay(day);
   const pages = await exportPageInfoDaily({ day });
   const history = await exportPostingHistoryDaily({ day });
   return { day, pages, history };

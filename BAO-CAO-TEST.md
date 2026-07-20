@@ -1,4 +1,34 @@
-# Báo cáo test toàn bộ tool — cập nhật 2026-07-19
+# Báo cáo test toàn bộ tool — cập nhật 2026-07-20
+
+## Audit clean toàn dự án v1.2.21 — 2026-07-20
+
+- 112 file source/config/doc ngoài build và archive đã được lập inventory.
+- 58/58 file JavaScript/MJS/CJS đạt `node --check`; 5/5 inline script HTML compile thành công.
+- Relative import và ID HTML đã đối chiếu, không phát hiện file import thiếu hoặc ID trùng thật.
+- `npm test`: **209/209 PASS**, gồm clean runtime 20 endpoint và caption pool dùng chung.
+- `npm audit`: **0 vulnerability**; `npm audit --omit=dev`: **0 vulnerability**.
+- `git diff --check`: không có lỗi whitespace; chỉ có cảnh báo LF/CRLF của Windows.
+- Đã thêm hồi quy cho route bulk, chế độ từng App của lịch Facebook, public Ngrok 403, quota ngày Việt Nam, UTC, resource pool, updater SHA-256, giới hạn API, report day và URL/attribute unsafe.
+- Electron nâng lên 42.7.0, electron-builder 26.15.3, better-sqlite3 12.11.1; exceljs override uuid 11.1.1 để loại dependency vulnerability.
+- Electron 43.1.1 ban đầu không có better-sqlite3 prebuilt và đòi Visual Studio C++; đã chuyển sang Electron 42.7.0 (ABI v146 có prebuilt chính thức) và thay `electron-rebuild -f` bằng script cài binary xác định, giúp build máy DEV sạch không cần Visual Studio.
+- Build Electron 42.7.0, pack khách/dev và release gate đều PASS.
+- EXE build, gói khách, gói dev, release-assets và thư mục App cùng SHA-256: `A8DE714F3B68A6D827084EBC7E87F33EABD67BBFA4115A51D799A2C93F48D662`.
+- ZIP khách giải nén thật thành công: 8 file, EXE 97,050,136 byte; ZIP SHA-256 `3A29B9AA21B287F9ED11B5AE5704D530EEA104149B99C75BE5ED5B5BA64C4DF6`.
+
+## Kiểm thử hồi quy v1.2.21 — quota, timezone và trạng thái
+
+- `npm test`: **PASS 209/209**.
+- Clean runtime: **PASS 20 endpoint** và database mới.
+- `npm run release:verify`: **RELEASE VERIFIED v1.2.21**.
+- EXE build, gói khách/dev, release-assets và thư mục App cùng SHA-256: `A8DE714F3B68A6D827084EBC7E87F33EABD67BBFA4115A51D799A2C93F48D662`.
+- ZIP khách giải nén thành công, có 8 file và EXE đúng hash.
+- Direct preview chỉ tạo số task còn lại trong quota Page.
+- `posts_today` ngày cũ trả về 0 theo ngày Việt Nam.
+- Workspace có `active_page_id` lệch sẽ tự đưa về Page đã tick.
+- UTC `last_post_at` được parse có hậu tố `Z` trước khi kiểm tra interval.
+- Retry schedule quá hạn được dời sang giờ tương lai.
+- `schedule_overdue` được đưa lại vào đối soát.
+- Resource snapshot được làm mới trong khi Direct Local chờ.
 
 Workspace: `D:\fb-page-poster`  
 Server test: Node `src/server.js` port 3847
@@ -15,7 +45,7 @@ Trạng thái vận hành ngắn gọn, file EXE/ZIP và các mục chưa test t
 | Posting config | PASS |
 | Anti-spam | PASS |
 | Captions pool | PASS |
-| Job đăng text 1 page | PASS (live FB) |
+| Job đăng text 1 page | PASS (code/test; chưa chạy Facebook thật v1.2.21) |
 | Job bulk 3 page text | PASS (sau fix) |
 | Schedule dry-run | PASS |
 | Reports CSV/Excel | PASS |
@@ -23,7 +53,7 @@ Trạng thái vận hành ngắn gọn, file EXE/ZIP và các mục chưa test t
 | Export pages CSV | PASS |
 | Update check GitHub | PASS |
 
-**Live post OK** trên Facebook (text feed).
+**Chưa thực hiện đăng Facebook thật bằng EXE v1.2.21** để tránh tạo bài ngoài ý muốn; các luồng đăng được kiểm tra bằng test/code và dry-run.
 
 ---
 

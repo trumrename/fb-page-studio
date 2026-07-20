@@ -19,7 +19,7 @@ SAI:   "Source code (zip)" = mã nguồn, KHÔNG phải bản cài
 2) CẤU TRÚC KHUYẾN NGHỊ
 -----------------------
   D:\FB-Page-Studio\
-    FB-Page-Studio-Desktop-v1.2.20.exe
+    FB-Page-Studio-Desktop-v1.2.21.exe
     .env                 (tự tạo)
     data\                (tự tạo: DB, license, media, báo cáo)
     license.backup.json  (khi kích hoạt key)
@@ -35,7 +35,7 @@ SAI:   "Source code (zip)" = mã nguồn, KHÔNG phải bản cài
 - keys\license-private.pem
 - data\ copy từ máy khác
 
-5) TÍNH NĂNG CHÍNH (v1.2.20)
+5) TÍNH NĂNG CHÍNH (v1.2.21)
 ----------------------------
 - Multi Meta App + rotation so le / từng App
 - Đăng trực tiếp Local: tool treo máy, đến giờ gọi API (không hẹn FB)

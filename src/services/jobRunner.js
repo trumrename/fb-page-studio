@@ -187,32 +187,53 @@ function recompute(job) {
 
 function refreshResources(job) {
   const pageIds = [...new Set((job.tasks || []).map((t) => Number(t.page_row_id)).filter((id) => id > 0))];
-  const folders = new Map();
+  const mediaPools = new Map();
+  const captionPools = new Map();
   for (const id of pageIds) {
     try {
       const cfg = getPagePostConfig(id);
-      const key = `${cfg.media_folder || ""}|${cfg.captions_folder || ""}`;
-      if (folders.has(key)) continue;
-      const media = mediaStats(cfg.media_folder);
-      const captions = getCaptionStats(cfg);
-      folders.set(key, {
-        media_folder: cfg.media_folder || "",
-        posted_folder: cfg.posted_folder || "",
-        captions_folder: cfg.captions_folder || "",
-        photos: media.photos || 0,
-        videos: media.videos || 0,
-        captions: captions.available ?? captions.total ?? 0,
-        captions_total: captions.total || 0,
-        captions_used_recent: captions.used_recent || 0,
-        caption_window_hours: captions.duplicate_window_hours || 0,
-      });
+      const task = (job.tasks || []).find((item) => Number(item.page_row_id) === id);
+      const pageName = task?.page_name || `Page#${id}`;
+      const mediaFolder = cfg.media_folder || "";
+      const mediaKey = path.resolve(mediaFolder || ".").toLowerCase();
+      if (!mediaPools.has(mediaKey)) {
+        const media = mediaStats(mediaFolder);
+        mediaPools.set(mediaKey, {
+          media_folder: mediaFolder,
+          posted_folder: cfg.posted_folder || "",
+          photos: media.photos || 0,
+          videos: media.videos || 0,
+          page_names: [],
+        });
+      }
+      const mediaPool = mediaPools.get(mediaKey);
+      if (!mediaPool.page_names.includes(pageName)) mediaPool.page_names.push(pageName);
+
+      const captionFolder = cfg.captions_folder || "";
+      const captionKey = captionFolder
+        ? `folder:${path.resolve(captionFolder).toLowerCase()}`
+        : `inline:${JSON.stringify(cfg.captions || [])}`;
+      if (!captionPools.has(captionKey)) {
+        const captions = getCaptionStats(cfg);
+        captionPools.set(captionKey, {
+          captions_folder: captionFolder,
+          captions: captions.available ?? captions.total ?? 0,
+          captions_total: captions.total || 0,
+          captions_used_recent: captions.used_recent || 0,
+          caption_window_hours: captions.duplicate_window_hours || 0,
+          page_names: [],
+        });
+      }
+      const captionPool = captionPools.get(captionKey);
+      if (!captionPool.page_names.includes(pageName)) captionPool.page_names.push(pageName);
     } catch {
       /* keep job running even if one config cannot be summarized */
     }
   }
   job.resources = {
     updated_at: nowIso(),
-    folders: [...folders.values()],
+    media_pools: [...mediaPools.values()],
+    caption_pools: [...captionPools.values()],
   };
 }
 
@@ -235,6 +256,12 @@ export function listJobs(limit = 20) {
 
 export function getJob(id) {
   const j = jobs.get(id);
+  if (j && ["running", "paused", "queued"].includes(j.status)) {
+    const lastRefresh = new Date(j.resources?.updated_at || 0).getTime();
+    if (!Number.isFinite(lastRefresh) || Date.now() - lastRefresh >= 10_000) {
+      refreshResources(j);
+    }
+  }
   return j ? publicJob(j) : null;
 }
 
@@ -361,12 +388,22 @@ export function retryFailedJob(sourceJobId, { task_ids, page_row_ids } = {}) {
     throw new Error("Không có nhiệm vụ lỗi phù hợp để đăng lại.");
   }
 
-  const tasks = failed.map((t) => {
+  const tasks = failed.map((t, retryIndex) => {
     const kind = t.kind === "schedule" ? "schedule" : "post";
     const opts = { ...(t.opts || {}) };
     // Direct-local run_at already passed → publish immediately on retry
     if (kind === "post") {
       delete opts.run_at;
+    } else {
+      const raw = opts.scheduled_publish_time;
+      const numeric = Number(raw);
+      const originalMs = Number.isFinite(numeric) && numeric > 0
+        ? numeric * (numeric < 10_000_000_000 ? 1000 : 1)
+        : new Date(raw).getTime();
+      const minimumMs = Date.now() + (15 + retryIndex * 2) * 60 * 1000;
+      if (!Number.isFinite(originalMs) || originalMs < minimumMs) {
+        opts.scheduled_publish_time = Math.floor(minimumMs / 1000);
+      }
     }
     return {
       kind,

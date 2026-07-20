@@ -108,6 +108,31 @@ if (!fs.existsSync(exampleBeside)) {
 
 app.use(express.json({ limit: "10mb" }));
 
+// Ngrok is needed only for the Facebook OAuth callback. Never expose the
+// local dashboard or mutation APIs through the public tunnel by default.
+app.use((req, res, next) => {
+  const rawHost = String(req.headers["x-forwarded-host"] || req.headers.host || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  const host = rawHost.startsWith("[")
+    ? rawHost.slice(1, rawHost.indexOf("]"))
+    : rawHost.split(":")[0];
+  const isLocalHost = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  const cameThroughProxy = Boolean(
+    req.headers["x-forwarded-for"] ||
+      req.headers["x-forwarded-host"] ||
+      req.headers["x-original-host"]
+  );
+  const isFacebookCallback =
+    req.method === "GET" && req.path === "/auth/facebook/callback";
+  if ((isLocalHost && !cameThroughProxy) || isFacebookCallback) return next();
+  return res
+    .status(403)
+    .type("text/plain; charset=utf-8")
+    .send("FB Page Studio chỉ cho phép OAuth callback qua domain công khai. Hãy mở giao diện bằng 127.0.0.1.");
+});
+
 // App console is the main entry (before static index.html)
 app.get("/", (_req, res) => {
   res.redirect(302, "/app.html");

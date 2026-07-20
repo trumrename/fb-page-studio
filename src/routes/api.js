@@ -77,9 +77,13 @@ function writeEnvValues(envPath, values) {
   let text = exists ? fs.readFileSync(envPath, "utf8") : "";
   const newline = text.includes("\r\n") ? "\r\n" : "\n";
   for (const [key, value] of Object.entries(values)) {
+    const safeValue = String(value ?? "");
+    if (/[\r\n]/.test(safeValue)) {
+      throw new Error(`Giá trị cấu hình ${key} không được chứa xuống dòng`);
+    }
     const pattern = new RegExp(`^(\\s*${key}\\s*=).*?$`, "m");
-    if (pattern.test(text)) text = text.replace(pattern, `$1${value}`);
-    else text += `${text && !text.endsWith("\n") ? newline : ""}${key}=${value}${newline}`;
+    if (pattern.test(text)) text = text.replace(pattern, (_match, prefix) => `${prefix}${safeValue}`);
+    else text += `${text && !text.endsWith("\n") ? newline : ""}${key}=${safeValue}${newline}`;
   }
   fs.mkdirSync(path.dirname(envPath), { recursive: true });
   fs.writeFileSync(envPath, text, "utf8");
@@ -292,6 +296,9 @@ router.put("/setup/ngrok", async (req, res) => {
   try {
     const token = String(req.body?.token || "").trim();
     if (!token) throw new Error("Hãy nhập Authtoken Ngrok");
+    if (!/^[A-Za-z0-9_-]{20,300}$/.test(token)) {
+      throw new Error("Authtoken Ngrok không đúng định dạng hoặc chứa ký tự không an toàn");
+    }
     writeEnvValues(getEnvPath(), { NGROK_AUTHTOKEN: token, NGROK_AUTOSTART: "1" });
     process.env.NGROK_AUTHTOKEN = token; process.env.NGROK_AUTOSTART = "1";
     const status = await startNgrok({ token, origin: config.appBaseUrl, port: config.port });

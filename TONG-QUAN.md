@@ -5,9 +5,9 @@
 | | |
 |--|--|
 | **Tên** | FB Page Studio |
-| **Phiên bản** | **1.2.20** |
+| **Phiên bản** | **1.2.21** |
 | **Máy DEV (gốc)** | `D:\fb-page-poster\` |
-| **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` (+ ZIP `FB-Page-Studio-v1.2.20-Windows.zip`) |
+| **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` (+ ZIP `FB-Page-Studio-v1.2.21-Windows.zip`) |
 | **Ghi chú DEV** | `D:\fb-page-poster\pack-dev\README-DEV.md` |
 | **Admin cấp key** | `D:\fb-page-poster\Admin-Quan-Ly\MENU-ADMIN.bat` |
 | **Lưu trữ bản cũ** | `D:\fb-page-poster\Luu-Tru-Ban-Cu\` |
@@ -16,20 +16,22 @@
 
 ---
 
-## Logic đăng hiện tại v1.2.20
+## Logic đăng hiện tại v1.2.21
 
 - **Direct Local:** tool phải mở; task đầu đăng ngay, task sau chờ `run_at` trên máy rồi gọi đăng trực tiếp. Không gửi lịch hẹn cho Facebook.
 - **Hẹn Facebook:** Facebook giữ bài và tự đăng theo giờ; tổng bài/Page/ngày bằng đúng tổng số bài của các dòng khung giờ.
 - **Caption dùng chung:** các Page trỏ cùng Caption folder dùng một con trỏ chung; caption chỉ được note sau khi Facebook nhận đăng thành công và không được cấp lại trong cửa sổ anti-spam.
 - **Thông báo:** tối đa 3 popup có nút đóng; toàn bộ OK/FAIL vẫn lưu trong bảng tiến trình và lịch sử.
+- **Quota:** preview Direct Local trừ số bài đã đăng trong ngày VN; không tạo task chắc chắn vượt giới hạn Page.
+- **Thời gian:** toàn bộ bộ đếm ngày và interval dùng đúng UTC lưu trữ + giờ Việt Nam hiển thị.
 
 ### Bản đang dùng để check bug
 
-- EXE live: `FB-Page-Studio-App\FB-Page-Studio-Desktop-v1.2.20.exe`
-- ZIP khách: `pack-customer\FB-Page-Studio-v1.2.20-Windows.zip` (cũng có trong `release-assets\`)
+- EXE mới: `FB-Page-Studio-App\FB-Page-Studio-Desktop-v1.2.21.exe`
+- ZIP khách: `pack-customer\FB-Page-Studio-v1.2.21-Windows.zip` (cũng có trong `release-assets\`)
 - Gói khách sạch: `npm run pack:all` · gate: `npm run release:verify`
 - Bản cũ: `Luu-Tru-Ban-Cu\` (không còn rải trong App folder)
-- Test: **189/189 PASS** · License commercial Owner-Dev
+- Test: **209/209 PASS** · npm audit 0 · License commercial Owner-Dev
 
 ---
 

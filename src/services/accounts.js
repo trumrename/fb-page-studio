@@ -271,7 +271,7 @@ function enrichAccountAppLabel(row) {
 
 export function listPages({ accountId, q, limit = 500, offset = 0 } = {}) {
   const db = getDb();
-  const lim = Math.min(Number(limit) || 500, 5000);
+  const lim = Math.min(5000, Math.max(1, Number(limit) || 500));
   const off = Math.max(Number(offset) || 0, 0);
 
   let sql = `

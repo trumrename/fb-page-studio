@@ -58,6 +58,7 @@ check("metaApps supports FB_APP_ID_2", meta.includes("FB_APP_ID_2"));
 const acc = read("src/services/accounts.js");
 check("accounts unique per fb_user + meta_app", acc.includes("meta_app_key"));
 check("accounts return meta_app_name", acc.includes("meta_app_name"));
+check("API list limits are clamped to safe positive ranges", acc.includes("Math.min(5000, Math.max(1") && read("src/services/poster.js").includes("const safeLimit = Math.min(1000") && read("src/services/antiSpam.js").includes("const safeLimit = Math.min(500"));
 check("page quota is enforced for newly synced Pages", acc.includes('checkQuota("page"') && acc.includes("skippedByLicense"));
 
 const fb = read("src/services/facebook.js");
@@ -97,7 +98,10 @@ const schedule = read("src/services/schedule.js");
 check("publishing serializes work per Page", pageLock.includes("withPageOperationLock") && poster.includes("withPageOperationLock(pageRowId") && schedule.includes("withPageOperationLock(pageRowId"));
 check("no parallel Promise.all posts in runner", !/Promise\.all\([^)]*runOnePost/.test(jr));
 check("job runner live resource snapshot", jr.includes("refreshResources") && jr.includes("job.resources"));
+check("live resources deduplicate Media and Caption as separate shared pools", jr.includes("media_pools") && jr.includes("caption_pools") && read("public/posting.html").includes("mediaPools") && read("public/posting.html").includes("captionPools"));
 check("job runner can retry failed tasks", jr.includes("export function retryFailedJob") && jr.includes("failed_tasks"));
+check("live resource snapshot refreshes while Direct Local waits", jr.includes("Date.now() - lastRefresh >= 10_000") && jr.includes("refreshResources(j)"));
+check("expired schedule retry receives a new future time", jr.includes("15 + retryIndex * 2") && jr.includes("opts.scheduled_publish_time = Math.floor(minimumMs / 1000)"));
 check("API retry-failed endpoint", jobs.includes("retry-failed") && jobs.includes("retryFailedJob"));
 const dashboardUi = read("public/app.html");
 const postingUi = read("public/posting.html");
@@ -115,6 +119,7 @@ check("caption cursor is independent from post type cursor", poster.includes("ca
 check("shared caption folders use one atomic pool cursor", read("src/services/captionPoolState.js").includes("caption_pool_state") && poster.includes("reserveCaptionSlot") && schedule.includes("reserveCaptionSlot") && JSON.parse(read("package.json")).scripts.test.includes("test-caption-pool.mjs"));
 check("media spacing records only successful selections", read("src/services/antiSpam.js").includes("source_folder") && !read("src/services/antiSpam.js").includes("recentMediaByPool"));
 check("resource counts exclude already-used media", poster.includes("countUnusedMedia") && rot.includes("countUnusedMedia"));
+check("published and overdue schedules remain inside anti-spam caps", read("src/services/antiSpam.js").includes("'scheduled','published','schedule_overdue'") && poster.includes("'scheduled','published','schedule_overdue'"));
 
 const server = read("src/server.js");
 const apiRoutes = read("src/routes/api.js");
@@ -127,6 +132,7 @@ check("desktop updater exits Electron before replace", updater.includes("request
 check("update UI displays live download progress", updateUi.includes("watchUpdateProgress") && updateUi.includes("Đang tải"));
 check("updater bypasses stale GitHub cache", updater.includes('"Cache-Control"') && updater.includes("Date.now()"));
 check("updater prefers exact versioned asset over stale generic EXE", updater.includes("const cleanVersion") && updater.includes("FB-Page-Studio-Desktop-v") && updater.includes("pickReleaseAsset(assets, cfg.asset_name, remoteVersion)"));
+check("updater requires and verifies release SHA-256 sidecar", updater.includes("checksum_asset") && updater.includes('createHash("sha256")') && updater.includes("SHA-256 EXE cập nhật không khớp"));
 check("updater rolls back and reports replacement failure", updater.includes(":replace_failed") && updater.includes("_update-error.txt") && apiRoutes.includes('"/update/last-error"') && updateUi.includes("showLastUpdateError"));
 check("release gate verifies embedded version and EXE hashes", fs.existsSync(path.join(root, "scripts/verify-release.mjs")) && read("scripts/verify-release.mjs").includes("EXE embedded version") && read("scripts/verify-release.mjs").includes("customer EXE hash"));
 check("tag release workflow runs verification gate", fs.existsSync(path.join(root, ".github/workflows/release-desktop.yml")) && read(".github/workflows/release-desktop.yml").includes("release:verify") && read(".github/workflows/release-desktop.yml").includes("GITHUB_REF_NAME"));
@@ -165,12 +171,15 @@ check("unsupported Story control is disabled", posting.includes('id="story_enabl
 check("UI profile Meta App badge", posting.includes("meta_app_name") && posting.includes("appKey"));
 check("UI auto meta groups checkbox", posting.includes("rotAutoMeta"));
 check("UI windows + gap settings", posting.includes("rotWindows") && posting.includes("rotGapMin"));
+check("preferred-hours bulk route is declared before dynamic Page route", read("src/routes/posting.js").indexOf('router.put("/preferred-hours/bulk"') < read("src/routes/posting.js").indexOf('router.put("/preferred-hours/:pageRowId"'));
 check("Page selection persists outside transient checkboxes", posting.includes("selectedPageSet") && posting.includes('"/api/posting/workspace-state"') && !posting.includes('querySelectorAll(".pg-check:checked")'));
+check("active config Page is constrained to selected Pages", read("src/routes/posting.js").includes("selected.includes(requestedActiveId)") && read("src/routes/posting.js").includes("active_page_id: activeId"));
 check("Page config auto-saves before switching workspaces", posting.includes("queueConfigAutosave") && posting.includes("flushConfigAutosave") && posting.includes("persistPageConfig"));
 check("posting workspaces are visually separated", ["configure", "run", "schedule", "monitor"].every((view) => posting.includes(`data-workspace-view="${view}"`)) && posting.includes("data-workspace-panel"));
 check("rotation always targets explicitly selected Pages", posting.includes('page_row_ids: selectedPageIds()') && posting.includes("Luôn chỉ chạy đúng Page đã chọn"));
 
 check("OAuth flash escapes URL values", index.includes('escapeHtml(p.get("error"))'));
+check("UI escapes attribute quotes and rejects non-HTTP external URLs", [dashboardUi, posting, index].every((text) => text.includes("safeHttpUrl")) && dashboardUi.includes("&quot;") && posting.includes("&quot;") && index.includes("&#39;"));
 check("UI Connect App 1", index.includes("app=app1"));
 check("UI Connect App 2", index.includes("app=app2"));
 check("UI domain setup and Ngrok command", index.includes("oauthDomain") && index.includes("btnSaveOAuthDomain") && index.includes("btnCopyNgrokCommand"));
@@ -178,6 +187,7 @@ check("Ngrok integrated autostart and token recovery", fs.existsSync(path.join(r
 check("UI Chrome profile selection", index.includes("oauthBrowserProfile") && index.includes("btnSaveBrowserProfile"));
 check("UI first-run Meta App setup without manual .env", index.includes("firstRunSetup") && index.includes("setupApp1Id") && index.includes("setupApp1Secret") && index.includes("btnSaveFirstRun") && index.includes('"/api/setup/first-run"'));
 check("API first-run setup creates encryption key and updates live config", apiRoutes.includes('"/setup/first-run"') && apiRoutes.includes("crypto.randomBytes(32)") && apiRoutes.includes("config.facebook.appId = app1Id") && apiRoutes.includes("config.tokenEncryptionKey = encryptionKey"));
+check(".env writes reject line injection and preserve literal dollar signs", apiRoutes.includes("không được chứa xuống dòng") && apiRoutes.includes("(_match, prefix)") && apiRoutes.includes("Authtoken Ngrok không đúng định dạng"));
 check("UI meta app badge on accounts", index.includes("meta_app") || index.includes("appLabel"));
 check("UI exports Page information per App", index.includes("btnExportDailyPages") && index.includes("/api/reports/daily/pages"));
 check("manual Page report refreshes follower data", index.includes("refresh_followers"));
@@ -190,6 +200,8 @@ const electronPreload = read("electron/preload.cjs");
 const folderPicker = read("src/services/folderPicker.js");
 check("Ngrok token field is editable and supports clipboard paste", css.includes('input[type="password"]') && index.includes("btnPasteNgrokToken") && index.includes("navigator.clipboard.readText()"));
 check("folder pickers use full Windows Explorer dialog", electronMain.includes("dialog.showOpenDialog") && electronMain.includes('"openDirectory"') && electronMain.includes("sandbox: false") && electronMain.includes("contextIsolation: true") && electronMain.includes("preload.cjs") && electronPreload.includes('ipcRenderer.invoke("fbps:pick-folder"') && posting.includes("fbPageStudioDesktop.pickFolder") && index.includes("fbPageStudioDesktop.pickFolder"));
+check("Electron blocks external navigation and unsafe URL protocols", electronMain.includes("Never let an external origin replace the trusted local dashboard") && electronMain.includes("blocked protocol") && electronMain.includes("['http:', 'https:']"));
+check("Electron native module uses reproducible prebuilt instead of local Visual Studio", read("package.json").includes("scripts/install-electron-native.mjs") && read("scripts/install-electron-native.mjs").includes("--runtime=electron") && !JSON.parse(read("package.json")).scripts["native:electron"].includes("electron-rebuild") && JSON.parse(read("package.json")).scripts.postinstall === "node scripts/install-electron-native.mjs");
 check("portable first run persists beside outer EXE instead of Temp extraction", electronMain.includes("process.env.PORTABLE_EXECUTABLE_DIR") && electronMain.includes("never inside Electron's temporary extraction directory") && electronMain.includes("Không cần tự tạo file .env"));
 check("legacy small FolderBrowserDialog cannot return", !folderPicker.includes("FolderBrowserDialog") && folderPicker.includes("System.Windows.Forms.OpenFileDialog"));
 check("fresh database post_logs includes scheduled publish time", /CREATE TABLE IF NOT EXISTS post_logs[\s\S]{0,1200}scheduled_publish_time TEXT/.test(read("src/db/index.js")));
@@ -201,6 +213,7 @@ check("dashboard auto-discovers active jobs", dashboard.includes("discoverJobs")
 check("dashboard popups are closable, capped and do not replay history", dashboard.includes("toast-close") && dashboard.includes("wrap.children.length >= 3") && dashboard.includes("hydratedNotificationJobs") && dashboard.includes("fresh.length > 3"));
 check("dashboard shows live operation summary", ["opsState", "opsToday", "opsSuccess", "opsFail"].every((x) => dashboard.includes(x)));
 check("dashboard displays Vietnam time", dashboard.includes("fmtVn") && dashboard.includes("Asia/Ho_Chi_Minh"));
+check("Ngrok public host exposes only Facebook OAuth callback", server.includes("isFacebookCallback") && server.includes("isLocalHost") && server.includes("status(403)"));
 check("dashboard separates created and Facebook publish time", dashboard.includes("Tool thực hiện lúc") && dashboard.includes("Facebook sẽ đăng lúc") && dashboard.includes("scheduleDisplay"));
 check("dashboard shows scheduler and config health", dashboard.includes("opsScheduler") && dashboard.includes("configHealth") && dashboard.includes("loadRuntime"));
 check("dashboard explains operation per Page", dashboard.includes("pageOperationRows") && dashboard.includes("Profile / Admin") && dashboard.includes("Giờ ưu tiên VN") && dashboard.includes("total_planned_today"));
@@ -210,8 +223,14 @@ const dailyReports = read("src/services/dailyReports.js");
 check("Page workbook uses one daily sheet per Meta App", dailyReports.includes("exportPageInfoDaily") && dailyReports.includes("removeWorksheet") && dailyReports.includes("-thong-tin-page"));
 check("Page report includes follower changes 1d 3d 7d 30d", ["follow_delta_1d", "follow_delta_3d", "follow_delta_7d", "follow_delta_30d"].every((x) => dailyReports.includes(x)));
 check("posting history creates daily CSV and cumulative workbook", dailyReports.includes("lich-su-dang-${day}.csv") && dailyReports.includes('"lich-su-dang.xlsx"'));
+check("daily report day is validated before filenames and sheet names", dailyReports.includes("normalizeReportDay") && dailyReports.includes("Ngày báo cáo phải có định dạng YYYY-MM-DD"));
 check("posting log explains scheduled state", posting.includes("FB đã nhận lịch · chờ đăng") && posting.includes("Facebook sẽ đăng lúc"));
 check("overdue schedules can reconcile with Facebook", schedule.includes("reconcileScheduledLogs") && posting.includes("btnReconcileActLog") && dashboard.includes("btnReconcileLogs"));
+check("overdue schedules are rechecked instead of becoming permanent", schedule.includes("status IN ('scheduled', 'schedule_overdue')"));
+check("Vietnam day key does not depend on Windows timezone", poster.includes('timeZone: "Asia/Ho_Chi_Minh"'));
+check("stored UTC last_post_at is parsed as UTC", poster.includes('`${raw.replace(" ", "T")}Z`') && poster.includes("storedUtcMs(cfg.last_post_at)"));
+check("stored UTC follower enrichment timestamp is parsed as UTC", read("src/services/enrich.js").includes('row.enriched_at.replace(" ", "T") + "Z"'));
+check("Direct preview subtracts posts already made today", rot.includes("remainingToday") && rot.includes("posts_today_date === todayVn"));
 
 // Import runtime modules
 const { getDb } = await import("../src/db/index.js");
@@ -397,6 +416,25 @@ passRun(2, () => {
     const sched = planToScheduleSlots(plan, "text");
     assert("P2 planToScheduleSlots length", sched.length === plan.slots.length);
     assert("P2 schedule slot has unix", sched[0]?.unix > 0);
+
+    const scheduledPerApp = buildRotationPlan({
+      auto_groups_by_meta_app: false,
+      groups: [
+        { id: "app1", name: "App 1", account_ids: g1 },
+        { id: "app2", name: "App 2", account_ids: g2 },
+      ],
+      app_rotation_mode: "per_app",
+      mode: "windows",
+      days_ahead: 1,
+      windows: [{ name: "Sang", start: "08:00", end: "11:00", posts: 1 }],
+      page_row_ids: ids,
+    });
+    const firstApp2Index = scheduledPerApp.slots.findIndex((slot) => slot.group_id === "app2");
+    assert(
+      "P2 Facebook schedule option1 completes App 1 before App 2",
+      firstApp2Index > 0 && scheduledPerApp.slots.slice(0, firstApp2Index).every((slot) => slot.group_id === "app1"),
+      scheduledPerApp.slots.slice(0, 6).map((slot) => `${slot.group_id}/P${slot.page_index}`).join(",")
+    );
   } else {
     check("P2 skip two-group (need 2 accounts)", true, "only 1 account");
   }

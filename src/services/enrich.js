@@ -139,7 +139,7 @@ export async function enrichPageById(pageRowId, opts = {}) {
   const force = opts.force === true;
   const ttlH = config.enrichTtlHours ?? 12;
   if (!force && row.enriched_at && row.followers_count != null) {
-    const ageMs2 = Date.now() - new Date(row.enriched_at.replace(" ", "T")).getTime();
+    const ageMs2 = Date.now() - new Date(row.enriched_at.replace(" ", "T") + "Z").getTime();
     if (Number.isFinite(ageMs2) && ageMs2 < ttlH * 3600 * 1000) {
       return {
         id: pageRowId,

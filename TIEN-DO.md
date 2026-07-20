@@ -1,8 +1,8 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-19** · Code: **1.2.20**  
+> Cập nhật: **2026-07-20** · Code: **1.2.21**
 > **Gốc DEV:** `D:\fb-page-poster\`  
-> **Gói KHÁCH:** `pack-customer\` + ZIP `FB-Page-Studio-v1.2.20-Windows.zip`  
+> **Gói KHÁCH:** `pack-customer\` + ZIP `FB-Page-Studio-v1.2.21-Windows.zip`
 > **Admin:** `Admin-Quan-Ly\` · **Lưu trữ cũ:** `Luu-Tru-Ban-Cu\`  
 > **GitHub:** `trumrename/fb-page-studio`  
 > **Trạng thái nhanh:** `TRANG-THAI-HIEN-TAI.md`
@@ -40,6 +40,17 @@ npm run release:verify
 - [x] Dọn `Luu-Tru-Ban-Cu`; gói `Admin-Quan-Ly` cấp key
 - [x] `pack:all` + ZIP máy khách + release:verify **PASS**
 - [x] Test **189/189**
+
+## Mốc v1.2.21 — sửa quota, giờ và trạng thái vận hành
+
+- [x] Direct Local preview trừ số bài Page đã đăng trong ngày VN; không còn tạo task chắc chắn vượt quota.
+- [x] `last_post_at` lưu UTC được đọc đúng UTC; interval không còn lệch 7 giờ.
+- [x] Bộ đếm “Hôm nay” reset theo `Asia/Ho_Chi_Minh` trên API Page và cấu hình.
+- [x] Page đang mở cấu hình luôn thuộc tập Page đã tick; tự sửa trạng thái lưu cũ bị lệch.
+- [x] Retry lịch đã quá hạn tự cấp giờ mới tối thiểu 15 phút thay vì lặp lại giờ quá khứ.
+- [x] `schedule_overdue` tiếp tục được đối soát ở các vòng sau.
+- [x] Tài nguyên job đang chạy/chờ được quét lại tối đa mỗi 10 giây khi UI theo dõi.
+- [x] Test hồi quy database sạch cho quota, Page selection và bộ đếm ngày.
 
 ---
 
@@ -174,6 +185,24 @@ npm run release:verify
 - [x] Đồng bộ `FB-Page-Studio-App\VERSION.txt` lên v1.2.20 và chuyển 4 EXE cũ vào `_old-versions` để tránh mở nhầm.
 - [x] Phát hiện release asset/ZIP cũ cùng version nhưng khác hash sau lần build cuối; đã chạy lại pack → release asset → ZIP → release verify và đồng bộ hash mới.
 
+### P. Audit clean, bảo mật và release gate v1.2.21 — 2026-07-20
+
+- [x] Rà cú pháp 58 file JS và 5 inline script HTML; không có lỗi compile/import.
+- [x] Sửa route bulk preferred hours bị route động `/:pageRowId` chặn.
+- [x] Sửa Option 1 của lịch Facebook để chạy hết từng App trước; Option 2 vẫn so le App.
+- [x] Tách Media/Caption resource pool, chống hiển thị lặp và ghi rõ Page dùng chung.
+- [x] Tính `published`/`schedule_overdue` trong quota, cooldown và caption anti-spam.
+- [x] Chặn dashboard/API qua Ngrok, chỉ mở public OAuth callback.
+- [x] Chặn external navigation/protocol nguy hiểm trong Electron và URL không phải HTTP(S) trên UI.
+- [x] Updater bắt buộc xác minh sidecar SHA-256 trước khi thay EXE.
+- [x] Chặn newline injection vào `.env`, giữ nguyên ký tự `$`, validate token Ngrok.
+- [x] Validate ngày báo cáo và clamp giới hạn API âm/quá lớn.
+- [x] Nâng Electron 42.7/electron-builder 26.15, better-sqlite3 12.11 và dependency override; `npm audit` đầy đủ/production đều 0.
+- [x] Build native dùng prebuilt ABI v146 chính thức; không còn phụ thuộc Visual Studio C++ Build Tools trên máy DEV.
+- [x] Bộ hồi quy **209/209 PASS**, clean runtime 20 endpoint PASS.
+- [x] Build Electron 42.7, pack khách/dev, ZIP và release verify lại sau source cuối.
+- [x] EXE ở build/customer/dev/release/App cùng SHA-256 `A8DE714F...48D662`; ZIP 8 file giải nén đạt.
+
 ---
 
 ## Chưa làm / chờ bạn
@@ -181,7 +210,7 @@ npm run release:verify
 | Hạng mục | Ai |
 |----------|-----|
 | `FB_APP_ID_2` nếu dùng App 2 | Bạn |
-| Build + sync pack-customer có EXE | Hoàn thành v1.2.20 |
+| Build + sync pack-customer có EXE | Hoàn thành v1.2.21 |
 | Push GH / Release có asset | **Chờ user xác nhận sau khi xem kết quả** |
 | Online revoke license | Sau |
 

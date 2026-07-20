@@ -1,7 +1,7 @@
 Nội dung gói khách (không secret):
  - .env.example
- - FB-Page-Studio-Desktop-v1.2.20.exe
- - FB-Page-Studio-Desktop-v1.2.20.exe.sha256.txt
+ - FB-Page-Studio-Desktop-v1.2.21.exe
+ - FB-Page-Studio-Desktop-v1.2.21.exe.sha256.txt
  - HUONG-DAN-MAY-MOI.md
  - MANIFEST.txt
  - media-sample

@@ -505,55 +505,58 @@ export function buildRotationPlan(inputSettings = {}) {
     }
   }
 
-  /**
-   * Interleave order:
-   * day → postRound (bài 1..N) → pageIndex → adminIndex → group (so le)
-   */
+  /** Order follows app_rotation_mode for both Facebook schedule and Direct Local. */
   const slots = [];
   let order = 0;
 
   for (let d = 0; d < settings.days_ahead; d++) {
     const day = addDaysYmd(startDay, d);
     for (let postRound = 0; postRound < maxPosts; postRound++) {
-      for (let pageIdx = 0; pageIdx < maxPages; pageIdx++) {
-        for (let adminIdx = 0; adminIdx < maxAdmins; adminIdx++) {
-          for (const g of groups) {
-            const admin = g.admins[adminIdx];
-            if (!admin) continue; // short group skip
-            const page = admin.pages[pageIdx];
-            if (!page) continue; // admin has fewer pages — skip
-
-            const times = pageTimeMap.get(`${page.page_row_id}|${day}`) || [];
-            const when = times[postRound];
-            if (!when) continue;
-
-            // small random stagger so so-le slots aren't the exact same second
-            const finalWhen = new Date(
-              when.getTime() +
-                randBetween(
-                  settings.interleave_stagger_sec_min,
-                  settings.interleave_stagger_sec_max
-                ) *
-                  1000
-            );
-
-            order += 1;
-            slots.push({
-              order,
-              day,
-              post_round: postRound + 1,
-              page_index: pageIdx + 1,
-              group_id: g.id,
-              group_name: g.name,
-              account_id: admin.account_id,
-              account_name: admin.account_name,
-              page_row_id: page.page_row_id,
-              page_id: page.page_id,
-              page_name: page.page_name,
-              scheduled_at: finalWhen,
-              unix: Math.floor(finalWhen.getTime() / 1000),
-              local_label: formatLocal(finalWhen, tz),
-            });
+      const enqueue = (g, adminIdx, pageIdx) => {
+        const admin = g.admins[adminIdx];
+        if (!admin) return;
+        const page = admin.pages[pageIdx];
+        if (!page) return;
+        const times = pageTimeMap.get(`${page.page_row_id}|${day}`) || [];
+        const when = times[postRound];
+        if (!when) return;
+        const finalWhen = new Date(
+          when.getTime() +
+            randBetween(
+              settings.interleave_stagger_sec_min,
+              settings.interleave_stagger_sec_max
+            ) * 1000
+        );
+        order += 1;
+        slots.push({
+          order,
+          day,
+          post_round: postRound + 1,
+          page_index: pageIdx + 1,
+          group_id: g.id,
+          group_name: g.name,
+          account_id: admin.account_id,
+          account_name: admin.account_name,
+          page_row_id: page.page_row_id,
+          page_id: page.page_id,
+          page_name: page.page_name,
+          scheduled_at: finalWhen,
+          unix: Math.floor(finalWhen.getTime() / 1000),
+          local_label: formatLocal(finalWhen, tz),
+        });
+      };
+      if (settings.app_rotation_mode === "per_app") {
+        for (const g of groups) {
+          for (let pageIdx = 0; pageIdx < g.max_pages; pageIdx++) {
+            for (let adminIdx = 0; adminIdx < g.admin_count; adminIdx++) {
+              enqueue(g, adminIdx, pageIdx);
+            }
+          }
+        }
+      } else {
+        for (let pageIdx = 0; pageIdx < maxPages; pageIdx++) {
+          for (let adminIdx = 0; adminIdx < maxAdmins; adminIdx++) {
+            for (const g of groups) enqueue(g, adminIdx, pageIdx);
           }
         }
       }
@@ -626,6 +629,7 @@ export function buildRotationPlan(inputSettings = {}) {
       jitter_minutes_max: settings.jitter_minutes_max,
       tz_offset_minutes: settings.tz_offset_minutes,
       post_type: settings.post_type,
+      app_rotation_mode: settings.app_rotation_mode,
       groups: groups.map((g) => ({
         id: g.id,
         name: g.name,
@@ -647,8 +651,9 @@ export function buildRotationPlan(inputSettings = {}) {
       skipped: skipped.length,
       anti_spam_trimmed: !!limited.trimmed,
       anti_spam_caps: limited.caps,
-      order_logic:
-        "day → bài# → pageIndex → adminIndex → group so-le (app ngắn skip)",
+      order_logic: settings.app_rotation_mode === "per_app"
+        ? "day → bài# → từng App → pageIndex → toàn bộ admin của App"
+        : "day → bài# → pageIndex → adminIndex → group so-le (app ngắn skip)",
       wait_logic:
         "Chỉ gap cùng page+admin trong khung giờ; khác admin/group = API sequential ~350ms, không chờ phút",
       note_meta_app:
@@ -707,6 +712,7 @@ export function buildRunNowPlan(inputSettings = {}) {
       pageConfigs.set(page.page_row_id, getPagePostConfig(page.page_row_id));
     }
   }
+  const todayVn = todayYmd(tz);
   const maxPageIntervalHours = Math.max(
     0,
     ...[...pageConfigs.values()].map((c) => (Number(c.interval_minutes) || 0) / 60)
@@ -749,7 +755,14 @@ export function buildRunNowPlan(inputSettings = {}) {
           const page = admin.pages[pageIdx];
           if (!page) return;
           const cfg = pageConfigs.get(page.page_row_id);
-          const pageRounds = Math.min(rounds, Number(cfg?.max_posts_per_day) || rounds);
+          const postedToday = cfg?.posts_today_date === todayVn
+            ? Math.max(0, Number(cfg?.posts_today) || 0)
+            : 0;
+          const remainingToday = Math.max(
+            0,
+            (Number(cfg?.max_posts_per_day) || rounds) - postedToday
+          );
+          const pageRounds = Math.min(rounds, remainingToday);
           if (round >= pageRounds) return;
           const sequence = Array.isArray(cfg?.sequence) && cfg.sequence.length ? cfg.sequence : ["photo", "text"];
           const forcedType = settings.post_type && settings.post_type !== "auto" ? settings.post_type : null;
@@ -809,8 +822,13 @@ export function buildRunNowPlan(inputSettings = {}) {
     );
   }
   const limitedPages = [...pageConfigs.entries()]
-    .filter(([, c]) => Number(c.max_posts_per_day) < rounds)
-    .map(([id, c]) => `Page#${id}: ${c.max_posts_per_day}/${rounds}`);
+    .map(([id, c]) => {
+      const postedToday = c.posts_today_date === todayVn ? Math.max(0, Number(c.posts_today) || 0) : 0;
+      const remaining = Math.max(0, (Number(c.max_posts_per_day) || rounds) - postedToday);
+      return { id, postedToday, remaining, max: Number(c.max_posts_per_day) || rounds };
+    })
+    .filter((x) => x.remaining < rounds)
+    .map((x) => `Page#${x.id}: còn ${x.remaining}/${x.max} (đã ${x.postedToday})`);
   if (limitedPages.length) {
     warnings.push(`Một số Page bị giới hạn theo max bài/ngày: ${limitedPages.slice(0, 8).join(", ")}`);
   }

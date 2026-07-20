@@ -715,7 +715,16 @@
     }
 
     function esc(s) {
-      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+    }
+
+    function safeHttpUrl(value) {
+      try {
+        const url = new URL(String(value || ""));
+        return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+      } catch {
+        return "";
+      }
     }
 
     function fmtVn(value) {
@@ -1050,7 +1059,7 @@
         </div>
         <div id="oneActiveBox" class="muted" style="margin-top:.5rem"></div>
 
-        <p class="muted" style="margin-top:1rem">Hôm nay: ${c.posts_today || 0} · last: ${esc(c.last_post_at || "—")} · vòng loại bài: ${c.next_slot_index || 0} · vị trí caption: ${c.caption_slot_index || 0}</p>
+        <p class="muted" style="margin-top:1rem">Hôm nay: ${c.posts_today || 0} · lần đăng gần nhất: ${esc(fmtVn(c.last_post_at))} · vòng loại bài: ${c.next_slot_index || 0} · vị trí caption: ${c.caption_slot_index || 0}</p>
 
         <div style="margin-top:1rem;padding:1rem;border-radius:12px;border:1px solid rgba(61,214,140,.4);background:rgba(61,214,140,.1)">
           <div style="font-weight:700;color:#8fd9a8;margin-bottom:.5rem">ĐĂNG NGAY (page này)</div>
@@ -1343,7 +1352,7 @@
           <td>${esc(l.post_type)}</td>
           <td class="${st}">${esc(l.status === "published" ? "Đã đăng · Facebook xác nhận" : l.status === "schedule_overdue" ? "Quá giờ nhưng Facebook chưa xuất bản" : l.status === "scheduled" ? (waiting ? "FB đã nhận lịch · chờ đăng" : "Đã tới giờ · chưa đối soát") : l.status)}</td>
           <td>${esc(fmtVn(l.scheduled_publish_time))}</td>
-          <td>${l.fb_post_url ? `<a href="${esc(l.fb_post_url)}" target="_blank">link</a>` : esc(l.fb_post_id || "—")}</td>
+          <td>${safeHttpUrl(l.fb_post_url) ? `<a href="${esc(safeHttpUrl(l.fb_post_url))}" target="_blank" rel="noopener">link</a>` : esc(l.fb_post_id || "—")}</td>
           <td class="fail">${esc(l.error || "")}</td>
         </tr>`;
       }).join("");
@@ -1667,21 +1676,27 @@
       if (resume) resume.style.display = job.status === "paused" ? "inline-block" : "none";
       if (stop) stop.style.display = ["queued","running","paused"].includes(job.status) ? "inline-block" : "none";
 
-      const folders = job.resources?.folders || [];
+      const mediaPools = job.resources?.media_pools || [];
+      const captionPools = job.resources?.caption_pools || [];
+      const legacyFolders = job.resources?.folders || [];
+      const resourceHtml = mediaPools.length || captionPools.length
+        ? [
+            ...mediaPools.map((f) =>
+              `· <b>Media:</b> ${f.photos} ảnh · ${f.videos} video` +
+              `<br/><span style="font-size:.75rem">${esc(f.media_folder || "—")} · Page: ${esc((f.page_names || []).join(", ") || "—")}</span>`
+            ),
+            ...captionPools.map((f) =>
+              `· <b>Caption:</b> ${f.captions} chưa dùng/${f.captions_total ?? f.captions} tổng` +
+              (f.captions_used_recent ? ` · đã note ${f.captions_used_recent} trong ${f.caption_window_hours || 48}h` : "") +
+              `<br/><span style="font-size:.75rem">${esc(f.captions_folder || "inline")} · Page: ${esc((f.page_names || []).join(", ") || "—")}</span>`
+            ),
+          ].join("<br/>")
+        : legacyFolders.map((f) =>
+            `· ${f.photos} ảnh · ${f.videos} video · ${f.captions} caption<br/><span style="font-size:.75rem">Media: ${esc(f.media_folder || "—")}<br/>Caption: ${esc(f.captions_folder || "—")}</span>`
+          ).join("<br/>");
       setLiveHtml(
         "liveResources",
-        folders.length
-          ? folders
-              .map(
-                (f) =>
-                  `· <b>${f.photos}</b> ảnh · <b>${f.videos}</b> video · <b>${f.captions}</b> caption chưa dùng/${f.captions_total ?? f.captions} tổng` +
-                  (f.captions_used_recent
-                    ? ` · đã note <b>${f.captions_used_recent}</b> caption trong ${f.caption_window_hours || 48}h`
-                    : "") +
-                  `<br/><span style="font-size:.75rem">Media: ${esc(f.media_folder || "—")}<br/>Caption: ${esc(f.captions_folder || "—")}</span>`
-              )
-              .join("<br/>")
-          : "—"
+        resourceHtml || "—"
       );
 
       const notes = job.notifications || [];

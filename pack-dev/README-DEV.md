@@ -37,7 +37,7 @@ npm run license:list
 # hoặc double-click Admin-Quan-Ly\MENU-ADMIN.bat
 ```
 
-## v1.2.20 (hiện tại)
+## v1.2.21 (hiện tại)
 
 - License commercial trên máy admin; trial chỉ khi chưa có key
 - Direct Local vs Hẹn giờ Facebook tách rõ

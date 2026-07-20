@@ -328,7 +328,16 @@
     }
 
     function esc(s) {
-      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+    }
+
+    function safeHttpUrl(value) {
+      try {
+        const url = new URL(String(value || ""));
+        return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+      } catch {
+        return "";
+      }
     }
 
     function fmtVn(value) {
@@ -910,7 +919,7 @@
             <td>${esc(l.page_name)}</td>
             <td>${esc(l.post_type)}<div class="muted">${esc(deliveryMode)}</div></td>
             <td class="${ok ? "ok" : "fail"}">${esc(l.scheduled_publish_time ? sched.state : statusLabel(l.status))}</td>
-            <td>${l.fb_post_url ? `<a href="${esc(l.fb_post_url)}" target="_blank">link</a>` : esc(l.fb_post_id || "—")}</td>
+            <td>${safeHttpUrl(l.fb_post_url) ? `<a href="${esc(safeHttpUrl(l.fb_post_url))}" target="_blank" rel="noopener">link</a>` : esc(l.fb_post_id || "—")}</td>
             <td class="fail">${esc(l.error || "")}</td>
           </tr>`;
         }).join("");

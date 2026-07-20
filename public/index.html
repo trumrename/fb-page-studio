@@ -257,7 +257,16 @@
     function escapeHtml(s) {
       return String(s ?? "")
         .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+
+    function safeHttpUrl(value) {
+      try {
+        const url = new URL(String(value || ""));
+        return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+      } catch {
+        return "";
+      }
     }
     function fmtNum(n) {
       if (n == null || n === "") return "—";
@@ -502,7 +511,7 @@
         const appKey = a.meta_app_key || "app1";
         return `
         <div class="account ${selectedAccountId === a.id ? "active" : ""}" data-id="${a.id}">
-          <img src="${a.picture_url || ""}" alt="" onerror="this.style.opacity=.3" />
+          <img src="${escapeHtml(safeHttpUrl(a.picture_url))}" alt="" onerror="this.style.opacity=.3" />
           <div>
             <div class="name">${escapeHtml(a.name || a.fb_user_id)}</div>
             <div class="sub">
@@ -596,7 +605,7 @@
         <div class="row"><span class="label">Category</span> ${escapeHtml(p.category || "—")}</div>
         <div class="row"><span class="label">Verified</span> ${escapeHtml(p.verification_status || "—")}</div>
         <div class="row"><span class="label">Link</span>
-          ${p.link ? `<a href="${escapeHtml(p.link)}" target="_blank" rel="noopener">${escapeHtml(p.link)}</a>` : "—"}</div>
+          ${safeHttpUrl(p.link) ? `<a href="${escapeHtml(safeHttpUrl(p.link))}" target="_blank" rel="noopener">${escapeHtml(p.link)}</a>` : "—"}</div>
         <div class="row"><span class="label">Enriched</span> ${escapeHtml(p.enriched_at || "chưa")}</div>
         ${p.enrich_error ? `<div class="row"><span class="badge err">${escapeHtml(p.enrich_error)}</span></div>` : ""}
         <div class="divider"></div>

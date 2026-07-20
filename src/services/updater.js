@@ -4,6 +4,7 @@
  */
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import https from "https";
 import http from "http";
 import { spawn } from "child_process";
@@ -237,6 +238,9 @@ export async function checkForUpdate() {
   const remoteVersion = String(tag).replace(/^v/i, "");
   const assets = release.assets || [];
   const asset = pickReleaseAsset(assets, cfg.asset_name, remoteVersion);
+  const checksumAsset = asset
+    ? assets.find((item) => item.name === `${asset.name}.sha256.txt`) || null
+    : null;
 
   const newer = isNewerVersion(remoteVersion, cfg.current_version);
 
@@ -255,6 +259,13 @@ export async function checkForUpdate() {
           name: asset.name,
           size: asset.size,
           download_url: asset.browser_download_url,
+        }
+      : null,
+    checksum_asset: checksumAsset
+      ? {
+          name: checksumAsset.name,
+          size: checksumAsset.size,
+          download_url: checksumAsset.browser_download_url,
         }
       : null,
     missing_asset: newer && !asset,
@@ -290,6 +301,15 @@ export async function applyUpdate() {
     setUpdateProgress({ state: "error", error: result.error, message: "Release thiếu file EXE" });
     return result;
   }
+  if (!check.checksum_asset?.download_url) {
+    const result = {
+      ok: false,
+      error: `Release v${check.latest_version} thiếu file SHA-256 cho ${check.asset.name}; từ chối cập nhật để tránh EXE không được xác thực.`,
+      ...check,
+    };
+    setUpdateProgress({ state: "error", error: result.error, message: "Release thiếu SHA-256" });
+    return result;
+  }
 
   // Prefer exact path of running outer portable exe (FB_OUTER_EXE from Electron)
   const currentExe = getOuterExePath();
@@ -297,12 +317,14 @@ export async function applyUpdate() {
   const targetName = path.basename(currentExe) || getUpdateConfig().asset_name;
   // Always stage next to current app — same folder, same final name
   const destNew = path.join(exeDir, targetName + ".new");
+  const checksumFile = destNew + ".sha256.txt";
   const destBak = path.join(exeDir, targetName + ".bak");
   const batPath = path.join(exeDir, "_apply_update.bat");
 
   // Clean old leftovers so user doesn't see "many versions"
   for (const junk of [
     destNew,
+    checksumFile,
     path.join(exeDir, "FB-Page-Studio-Desktop.exe.new"),
     path.join(exeDir, "FB-Page-Studio.exe.new"),
   ]) {
@@ -334,6 +356,20 @@ export async function applyUpdate() {
   });
   if (Number(check.asset.size) > 0 && fs.statSync(destNew).size !== Number(check.asset.size)) {
     throw new Error("File update tải về không đủ dung lượng; không thay EXE hiện tại");
+  }
+  await downloadFile(check.checksum_asset.download_url, checksumFile);
+  const checksumText = fs.readFileSync(checksumFile, "utf8");
+  const expectedHash = checksumText.match(/\b[a-f0-9]{64}\b/i)?.[0]?.toLowerCase();
+  const actualHash = crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(destNew))
+    .digest("hex");
+  try { fs.unlinkSync(checksumFile); } catch { /* best effort */ }
+  if (!expectedHash || actualHash !== expectedHash) {
+    try { fs.unlinkSync(destNew); } catch { /* never install an unverified file */ }
+    throw new Error(
+      `SHA-256 EXE cập nhật không khớp; đã hủy thay file. Cần ${expectedHash || "checksum hợp lệ"}, nhận ${actualHash}.`
+    );
   }
 
   // Snapshot license (data/ never deleted)
@@ -411,6 +447,7 @@ export async function applyUpdate() {
     bat: batPath,
     inplace: true,
     preserves: ["data/", ".env", "license.json", "license.backup.json"],
+    sha256: actualHash,
   };
 
   setUpdateProgress({ state: "ready", bytes: Number(check.asset.size) || fs.statSync(destNew).size, total: Number(check.asset.size) || fs.statSync(destNew).size, percent: 100, message: "Đã tải xong, đang chuẩn bị khởi động lại…" });

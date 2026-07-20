@@ -168,6 +168,18 @@ function readBrowserEnv() {
  * Opening chrome.exe with a URL reuses the running Chrome instance + profile.
  */
 function openInPreferredBrowser(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url || ""));
+  } catch {
+    log("openInPreferredBrowser blocked invalid URL");
+    return false;
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    log("openInPreferredBrowser blocked protocol", parsed.protocol);
+    return false;
+  }
+  url = parsed.toString();
   const browserEnv = readBrowserEnv();
   const candidates = [];
   if (browserEnv.BROWSER_PATH || process.env.BROWSER_PATH) candidates.push(browserEnv.BROWSER_PATH || process.env.BROWSER_PATH);
@@ -440,18 +452,11 @@ function createWindow() {
         return;
       }
       if (isLocal) return;
-      // Facebook / ngrok OAuth
-      if (
-        u.hostname.includes("facebook.com") ||
-        u.hostname.includes("fb.com") ||
-        u.hostname.includes("ngrok") ||
-        u.pathname.includes("/auth/facebook")
-      ) {
-        e.preventDefault();
-        openInPreferredBrowser(navUrl);
-      }
+      // Never let an external origin replace the trusted local dashboard.
+      e.preventDefault();
+      openInPreferredBrowser(navUrl);
     } catch {
-      /* ignore */
+      e.preventDefault();
     }
   });
 
