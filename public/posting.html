@@ -327,11 +327,11 @@
             <div id="rotMatrix" class="muted" style="margin-top:.5rem;font-size:.85rem"></div>
 
             <label class="checks" style="margin-top:.65rem;display:block">
-              <input type="checkbox" id="rotOnlyEnabled" /> Chỉ page đang ON (enabled)
+              <input type="checkbox" id="rotOnlyEnabled" /> Chỉ page đang ON (enabled) — khi phạm vi = tất cả
             </label>
-            <label class="checks" style="display:block">
-              <input type="checkbox" id="rotUseTicked" checked disabled /> Luôn chỉ chạy đúng Page đã chọn ở bước 1
-            </label>
+            <p class="muted" style="margin:.25rem 0 0;font-size:.8rem">
+              Phạm vi Page (tick / tất cả) chỉnh ở khối Direct Local phía trên — một lựa chọn duy nhất.
+            </p>
 
             <div class="actions">
               <button type="button" class="btn-ghost" id="btnRotLoad">Tải cài đặt</button>
@@ -343,55 +343,96 @@
             <div id="runNowBox" style="order:-1;margin:0 0 1rem;padding:1rem;border:1px solid rgba(61,214,140,.45);border-radius:12px;background:rgba(61,214,140,.08)">
               <div style="font-weight:800;color:#8fd9a8">▶ TREO TOOL · ĐẾN GIỜ ĐĂNG TRỰC TIẾP · GIỜ VIỆT NAM</div>
               <p class="muted" style="margin:.45rem 0">
-                Chọn cách xoay App/Admin/Page, xem đúng toàn bộ thứ tự trước khi chạy.
-                Tác vụ đầu đăng trực tiếp ngay; các tác vụ sau <b>tool tự chờ trên máy rồi gọi đăng trực tiếp khi đến giờ</b>.
-                <b>Không tạo scheduled post trên Facebook. Phải giữ tool/PC hoạt động.</b>
-                <b>Chỉ chạy đúng Profile/Page đang tick bên trái.</b>
-                Nếu loại bài là <b>auto</b>, hệ thống dùng sequence từng Page và có thể yêu cầu cả ảnh lẫn video.
+                Chọn <b>phạm vi Page</b> (tick <em>hoặc</em> tất cả — không chọn cả hai mơ hồ),
+                <b>khung giờ</b> (liên tục / Sáng–Tối), và <b>pattern ảnh–video</b>.
+                Tool chờ local rồi đăng trực tiếp — <b>không</b> tạo scheduled FB. Giữ tool/PC bật.
               </p>
-              <div class="row3">
+              <div class="row2" style="margin-top:.35rem;padding:.65rem;border:1px solid var(--border);border-radius:10px">
                 <div>
-                  <label>Chiến lược đăng</label>
+                  <label style="font-weight:700">Phạm vi Page (chọn 1)</label>
+                  <label class="checks" style="display:block;margin-top:.35rem">
+                    <input type="radio" name="rotPageTarget" id="rotPageTargetSelected" value="selected" checked />
+                    Chỉ Page đã <b>tick</b> bên trái
+                  </label>
+                  <label class="checks" style="display:block">
+                    <input type="radio" name="rotPageTarget" id="rotPageTargetAll" value="all" />
+                    <b>Tất cả</b> Page active (bỏ qua tick)
+                  </label>
+                </div>
+                <div>
+                  <label style="font-weight:700">Giờ đăng trong ngày (chọn 1)</label>
+                  <label class="checks" style="display:block;margin-top:.35rem">
+                    <input type="radio" name="rotNowTimeMode" id="rotNowTimeGap" value="gap_chain" checked />
+                    Liên tục: bài 1 ngay · các bài sau + gap
+                  </label>
+                  <label class="checks" style="display:block">
+                    <input type="radio" name="rotNowTimeMode" id="rotNowTimeWindows" value="windows" />
+                    Khung <b>Sáng / Tối</b> (dòng khung giờ bên dưới phần hẹn FB)
+                  </label>
+                  <p class="muted" style="margin:.35rem 0 0;font-size:.78rem" id="rotNowTimeHelp">
+                    Mode Sáng/Tối: số bài/ngày = tổng cột «số bài» trong khung (vd 1 sáng + 1 tối = 2).
+                  </p>
+                </div>
+              </div>
+              <div class="row3" style="margin-top:.55rem">
+                <div>
+                  <label>Chiến lược App/Admin</label>
                   <select id="rotAppStrategy">
                     <option value="per_app">Option 1 · Từng App riêng</option>
                     <option value="interleave_apps" selected>Option 2 · 2 App so le</option>
                   </select>
                 </div>
                 <div>
-                  <label>Số bài / Page / ngày (direct local)</label>
+                  <label>Số bài / Page / ngày <span class="muted">(mode liên tục)</span></label>
                   <input type="number" id="rotNowPerDay" min="1" max="12" value="2" />
                 </div>
                 <div>
-                  <label>Múi giờ hiển thị</label>
+                  <label>Múi giờ</label>
                   <input type="text" value="Việt Nam · UTC+7" disabled />
                 </div>
               </div>
               <p class="muted" id="rotStrategyHelp" style="margin:.45rem 0 0">
-                2 App so le: Page 1 → App 1 Admin 1 → App 2 Admin 1 → App 1 Admin 2 → App 2 Admin 2.
+                2 App so le: Page 1 → App 1 Admin 1 → App 2 Admin 1 → …
               </p>
               <div class="row3" style="margin-top:.55rem">
                 <div>
-                  <label>Loại bài Direct Local</label>
-                  <select id="rotNowPostType">
-                    <option value="auto">auto · theo sequence từng Page</option>
-                    <option value="photo">photo</option>
-                    <option value="text">text</option>
-                    <option value="video">video</option>
+                  <label>Cách chọn ảnh / video</label>
+                  <select id="rotNowMediaMode">
+                    <option value="page_sequence">Theo sequence từng Page</option>
+                    <option value="fixed">Cố định 1 loại</option>
+                    <option value="pattern" selected>Pattern xen kẽ (chung)</option>
                   </select>
                 </div>
+                <div id="rotNowPostTypeWrap">
+                  <label>Loại cố định</label>
+                  <select id="rotNowPostType">
+                    <option value="photo">photo</option>
+                    <option value="video">video</option>
+                    <option value="text">text</option>
+                    <option value="auto">auto (fallback sequence)</option>
+                  </select>
+                </div>
+                <div id="rotNowPatternWrap">
+                  <label>Pattern (vd 4 bài: photo,video,video,photo)</label>
+                  <input type="text" id="rotNowMediaPattern" value="photo,video" placeholder="photo,video hoặc photo,video,video,photo" />
+                </div>
+              </div>
+              <p class="muted" style="margin:.35rem 0 0;font-size:.78rem" id="rotNowMediaHelp">
+                Pattern lặp theo vòng bài # trong ngày (bài 1 = phần tử 1, bài 2 = phần tử 2…).
+              </p>
+              <div class="row3" style="margin-top:.55rem" id="rotNowGapBox">
                 <div>
-                  <label>Gap cùng Page giữa các vòng — giờ min</label>
+                  <label>Gap cùng Page — giờ min</label>
                   <input type="number" id="rotNowGapMin" min="0.25" max="24" step="0.25" value="1.75" />
                 </div>
                 <div>
-                  <label>Gap cùng Page giữa các vòng — giờ max</label>
+                  <label>Gap cùng Page — giờ max</label>
                   <input type="number" id="rotNowGapMax" min="0.25" max="48" step="0.25" value="2.5" />
                 </div>
+                <div class="muted" style="align-self:end;padding-bottom:.5rem;font-size:.78rem">
+                  Chỉ dùng khi mode «Liên tục». Mode Sáng/Tối lấy giờ từ khung.
+                </div>
               </div>
-              <p class="muted" style="margin:.4rem 0 0">
-                Direct Local chỉ dùng <b>Số bài/Page/ngày</b> và gap trong khối xanh này.
-                Không đọc “Khung giờ” hoặc “Số ngày tới” trong phần Hẹn Facebook bên dưới.
-              </p>
               <div class="row2" style="margin-top:.35rem">
                 <div>
                   <label>Chờ giữa Page/Admin — phút min</label>
@@ -523,11 +564,12 @@
     ];
     const rotationWorkspaceControlIds = [
       "rotMode", "rotDays", "rotPostType", "rotAppStrategy", "rotNowPerDay",
-      "rotNowPostType", "rotNowGapMin", "rotNowGapMax",
+      "rotNowPostType", "rotNowMediaMode", "rotNowMediaPattern", "rotNowGapMin", "rotNowGapMax",
       "rotTaskGapMin", "rotTaskGapMax", "rotWindows", "rotPerDay",
       "rotFirstStart", "rotFirstEnd", "rotGapMin", "rotGapMax", "rotJitMin",
       "rotJitMax", "rotAutoMeta", "rotG1", "rotG2", "rotOnlyEnabled",
-      "rotUseTicked", "rotMediaFolder", "rotPostedFolder", "rotCaptionsFolder",
+      "rotPageTargetSelected", "rotPageTargetAll", "rotNowTimeGap", "rotNowTimeWindows",
+      "rotMediaFolder", "rotPostedFolder", "rotCaptionsFolder",
     ];
     const workspaceHashes = {
       configure: "#configWorkspace",
@@ -1515,6 +1557,33 @@
       }
     }
 
+    function pageTargetMode() {
+      return $("rotPageTargetAll")?.checked ? "all" : "selected";
+    }
+    function runNowTimeMode() {
+      return $("rotNowTimeWindows")?.checked ? "windows" : "gap_chain";
+    }
+    function mediaPatternMode() {
+      return $("rotNowMediaMode")?.value || "page_sequence";
+    }
+    function syncRunNowMediaUi() {
+      const mode = mediaPatternMode();
+      if ($("rotNowPostTypeWrap")) $("rotNowPostTypeWrap").style.opacity = mode === "fixed" ? "1" : "0.45";
+      if ($("rotNowPatternWrap")) $("rotNowPatternWrap").style.opacity = mode === "pattern" ? "1" : "0.45";
+      if ($("rotNowGapBox")) $("rotNowGapBox").style.opacity = runNowTimeMode() === "gap_chain" ? "1" : "0.5";
+      if ($("rotNowPerDay")) $("rotNowPerDay").disabled = runNowTimeMode() === "windows";
+      const help = $("rotNowMediaHelp");
+      if (help) {
+        if (mode === "pattern") {
+          help.textContent = `Pattern lặp theo #bài trong ngày. Ví dụ 4 bài + "photo,video,video,photo" → ảnh, video, video, ảnh.`;
+        } else if (mode === "fixed") {
+          help.textContent = "Mọi bài cùng một loại (photo / video / text).";
+        } else {
+          help.textContent = "Dùng sequence từng Page (cấu hình Page: photo, video, …).";
+        }
+      }
+    }
+
     function collectRotationBody(extra = {}) {
       const autoMeta = $("rotAutoMeta")?.checked !== false;
       const g1 = parseIdsCsv($("rotG1").value);
@@ -1527,10 +1596,15 @@
       const windows = $("rotMode").value === "windows"
         ? readRotationWindowsStrict()
         : parseWindowsText($("rotWindows").value);
+      const target = pageTargetMode();
+      const mediaMode = mediaPatternMode();
       const body = {
         mode: $("rotMode").value,
         days_ahead: Number($("rotDays").value) || 1,
-        post_type: $("rotPostType").value,
+        post_type: mediaMode === "fixed" ? ($("rotPostType").value || $("rotNowPostType").value) : ($("rotPostType").value || "auto"),
+        page_target_mode: target,
+        media_pattern_mode: mediaMode,
+        media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
         app_rotation_mode: $("rotAppStrategy")?.value || "interleave_apps",
         between_tasks_gap_minutes_min: Number($("rotTaskGapMin")?.value) || 15,
         between_tasks_gap_minutes_max: Number($("rotTaskGapMax")?.value) || 25,
@@ -1549,26 +1623,45 @@
           gap_hours_max: Number($("rotGapMax").value) || 2.5,
         },
         posts_per_page_per_day: Number($("rotPerDay").value) || 2,
-        page_row_ids: selectedPageIds(),
+        page_row_ids: target === "all" ? [] : selectedPageIds(),
         ...extra,
       };
       return body;
     }
 
     function collectRunNowBody() {
+      const target = pageTargetMode();
+      const timeMode = runNowTimeMode();
+      const mediaMode = mediaPatternMode();
+      let windows = [];
+      try {
+        windows = timeMode === "windows"
+          ? readRotationWindowsStrict()
+          : parseWindowsText($("rotWindows")?.value || "");
+      } catch (e) {
+        if (timeMode === "windows") throw e;
+        windows = parseWindowsText($("rotWindows")?.value || "") || [];
+      }
+      const fixedType = $("rotNowPostType")?.value || "photo";
       return {
         posts_per_page_per_day: Number($("rotNowPerDay").value) || 1,
-        post_type: $("rotNowPostType").value || "auto",
+        post_type: mediaMode === "fixed" ? fixedType : mediaMode === "page_sequence" ? "auto" : fixedType,
+        page_target_mode: target,
+        run_now_time_mode: timeMode,
+        media_pattern_mode: mediaMode,
+        media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
+        mode: timeMode === "windows" ? "windows" : "fixed_gap",
+        windows,
         app_rotation_mode: $("rotAppStrategy")?.value || "interleave_apps",
         between_tasks_gap_minutes_min: Number($("rotTaskGapMin")?.value) || 15,
         between_tasks_gap_minutes_max: Number($("rotTaskGapMax")?.value) || 25,
         same_page_gap_hours_min: Number($("rotNowGapMin").value) || 1.75,
         same_page_gap_hours_max: Number($("rotNowGapMax").value) || 2.5,
         tz_offset_minutes: 420,
-        page_row_ids: selectedPageIds(),
+        page_row_ids: target === "all" ? [] : selectedPageIds(),
         auto_groups_by_meta_app: true,
         groups: [],
-        only_enabled_pages: false,
+        only_enabled_pages: target === "all" ? !!$("rotOnlyEnabled")?.checked : false,
       };
     }
 
@@ -1586,6 +1679,26 @@
       $("rotJitMax").value = s.jitter_minutes_max ?? 35;
       $("rotOnlyEnabled").checked = !!s.only_enabled_pages;
       $("rotPerDay").value = s.posts_per_page_per_day ?? 2;
+      if (s.page_target_mode === "all") {
+        if ($("rotPageTargetAll")) $("rotPageTargetAll").checked = true;
+      } else if ($("rotPageTargetSelected")) {
+        $("rotPageTargetSelected").checked = true;
+      }
+      if (s.run_now_time_mode === "windows") {
+        if ($("rotNowTimeWindows")) $("rotNowTimeWindows").checked = true;
+      } else if ($("rotNowTimeGap")) {
+        $("rotNowTimeGap").checked = true;
+      }
+      if ($("rotNowMediaMode") && s.media_pattern_mode) {
+        $("rotNowMediaMode").value = s.media_pattern_mode;
+      }
+      if ($("rotNowMediaPattern") && s.media_pattern) {
+        $("rotNowMediaPattern").value = s.media_pattern;
+      }
+      if ($("rotNowPostType") && s.post_type && s.post_type !== "auto") {
+        $("rotNowPostType").value = s.post_type;
+      }
+      syncRunNowMediaUi();
       if ($("rotAutoMeta")) {
         $("rotAutoMeta").checked = s.auto_groups_by_meta_app !== false;
       }
@@ -1898,10 +2011,13 @@
     $("btnRotPreview").onclick = async () => {
       $("rotResult").innerHTML = "Đang lập kế hoạch…";
       try {
-        if (!selectedPageIds().length) throw new Error("Chọn ít nhất một Page ở bước 1 trước khi xem lịch");
+        const body = collectRotationBody();
+        if (body.page_target_mode === "selected" && !selectedPageIds().length) {
+          throw new Error("Chế độ tick: chọn Page ở bước 1, hoặc chọn «Tất cả page»");
+        }
         const r = await api("/api/jobs/rotation/plan", {
           method: "POST",
-          body: JSON.stringify(collectRotationBody()),
+          body: JSON.stringify(body),
         });
         renderRotResult(r, false);
         flash(`Preview · ${r.summary?.total_final || 0} slot`, true);
@@ -1911,8 +2027,15 @@
       }
     };
     $("btnRotRun").onclick = async () => {
-      if (!selectedPageIds().length) return flash("Chọn ít nhất một Page ở bước 1", false);
-      const body = collectRotationBody({ save: true });
+      let body;
+      try {
+        body = collectRotationBody({ save: true });
+      } catch (e) {
+        return flash(e.message, false);
+      }
+      if (body.page_target_mode === "selected" && !selectedPageIds().length) {
+        return flash("Chế độ tick: chọn Page — hoặc chọn «Tất cả page»", false);
+      }
       if (!confirm("Hẹn giờ FB theo thứ tự rotation so-le?\n(Gọi Graph tuần tự, không đăng song song)")) return;
       $("rotResult").innerHTML = "Đang tạo job…";
       try {
@@ -1932,9 +2055,10 @@
     $("btnRotNowPreview").onclick = async () => {
       $("rotResult").innerHTML = "Đang tính lịch theo giờ Việt Nam…";
       try {
-        const selectedIds = selectedPageIds();
-        if (!selectedIds.length) throw new Error("Chọn ít nhất một Profile/Page ở bước 1 trước khi xem lịch direct local");
         const settingsBody = collectRunNowBody();
+        if (settingsBody.page_target_mode === "selected" && !selectedPageIds().length) {
+          throw new Error("Chế độ tick: chọn Page ở bước 1, hoặc chọn «Tất cả page»");
+        }
         const body = { ...settingsBody, dry_run: true };
         const r = await api("/api/jobs/rotation/run-now", { method: "POST", body: JSON.stringify(body) });
         runNowPlanId = r.plan_id || null;
@@ -1952,6 +2076,20 @@
       runNowPlanId = null;
       runNowPlanSignature = null;
     };
+    ["rotNowMediaMode", "rotNowMediaPattern", "rotNowPostType", "rotNowTimeGap", "rotNowTimeWindows",
+      "rotPageTargetSelected", "rotPageTargetAll", "rotNowPerDay"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener("change", () => {
+        syncRunNowMediaUi();
+        runNowPlanId = null;
+        runNowPlanSignature = null;
+      });
+      el.addEventListener("input", () => {
+        runNowPlanId = null;
+        runNowPlanSignature = null;
+      });
+    });
     $("btnRotPickMedia").onclick = () => pickFolderInto("rotMediaFolder", "Chọn kho ảnh / video dùng chung");
     $("btnRotPickPosted").onclick = () => pickFolderInto("rotPostedFolder", "Chọn kho Posted dùng chung");
     $("btnRotPickCaptions").onclick = () => pickFolderInto("rotCaptionsFolder", "Chọn kho Caption dùng chung");
@@ -1979,14 +2117,24 @@
       }
     };
     $("btnRotNowRun").onclick = async () => {
-      const count = Number($("rotNowPerDay").value) || 1;
-      const selectedIds = selectedPageIds();
-      if (!selectedIds.length) return flash("Chọn ít nhất một Profile/Page ở bước 1", false);
-      const settingsBody = collectRunNowBody();
+      let settingsBody;
+      try {
+        settingsBody = collectRunNowBody();
+      } catch (e) {
+        return flash(e.message, false);
+      }
+      if (settingsBody.page_target_mode === "selected" && !selectedPageIds().length) {
+        return flash("Chế độ tick: chọn ít nhất một Page — hoặc chọn «Tất cả page»", false);
+      }
       if (!runNowPlanId || runNowPlanSignature !== JSON.stringify(settingsBody)) {
         return flash("Cài đặt đã thay đổi hoặc chưa preview. Bấm Xem lịch đăng trực tiếp trước.", false);
       }
-      if (!confirm(`Bắt đầu job đăng TRỰC TIẾP local?\n${count} bài/Page/ngày · giờ Việt Nam\n\nTool sẽ chờ trên máy và đăng khi đến giờ. KHÔNG tạo lịch hẹn Facebook. Phải giữ tool/PC hoạt động.`)) return;
+      const scope = settingsBody.page_target_mode === "all" ? "TẤT CẢ page" : `${selectedPageIds().length} page đã tick`;
+      const timeLbl = settingsBody.run_now_time_mode === "windows" ? "khung Sáng/Tối" : "liên tục + gap";
+      const mediaLbl = settingsBody.media_pattern_mode === "pattern"
+        ? `pattern ${settingsBody.media_pattern}`
+        : settingsBody.media_pattern_mode;
+      if (!confirm(`Bắt đầu job đăng TRỰC TIẾP local?\nPhạm vi: ${scope}\nGiờ: ${timeLbl}\nMedia: ${mediaLbl}\n\nKHÔNG tạo lịch hẹn Facebook. Giữ tool/PC bật.`)) return;
       try {
         const body = { plan_id: runNowPlanId };
         const r = await api("/api/jobs/rotation/run-now", { method: "POST", body: JSON.stringify(body) });
@@ -2215,7 +2363,16 @@
       await Promise.all([loadLogs(), loadRotation()]);
       applyControls(workspaceState.bulk || {}, bulkWorkspaceControlIds);
       applyControls(workspaceState.rotation || {}, rotationWorkspaceControlIds);
-      $("rotUseTicked").checked = true;
+      if (!$("rotPageTargetSelected")?.checked && !$("rotPageTargetAll")?.checked) {
+        if ($("rotPageTargetSelected")) $("rotPageTargetSelected").checked = true;
+      }
+      if (!$("rotNowTimeGap")?.checked && !$("rotNowTimeWindows")?.checked) {
+        if ($("rotNowTimeGap")) $("rotNowTimeGap").checked = true;
+      }
+      if ($("rotWindows") && !$("rotWindows").value.trim()) {
+        $("rotWindows").value = "Sáng | 07:30 | 11:30 | 1\nTối | 18:00 | 21:30 | 1";
+      }
+      syncRunNowMediaUi();
       bindPersistentWorkspaceEvents();
       if (selectedId) await loadConfig(selectedId);
       setWorkspaceView(workspaceViewFromHash() || activeWorkspaceView, { save: false });

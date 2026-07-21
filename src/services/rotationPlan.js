@@ -69,12 +69,66 @@ export const DEFAULT_ROTATION = {
   interleave_stagger_sec_max: 90,
   tz_offset_minutes: 420,
   post_type: "auto",
+  /**
+   * selected = chỉ page đã tick (page_row_ids bắt buộc)
+   * all = mọi page active (bỏ qua tick; page_row_ids = [])
+   * Mutual exclusive — không được vừa “tất cả” vừa “một phần tick” mơ hồ.
+   */
+  page_target_mode: "selected",
+  /**
+   * Direct Local time:
+   * gap_chain = bài #1 now, các bài sau + gap (cũ)
+   * windows = dùng khung Sáng/Tối (rot windows) trong ngày
+   */
+  run_now_time_mode: "gap_chain",
+  /**
+   * fixed = post_type cố định (photo|video|text)
+   * page_sequence = sequence từng page (post_type auto cũ)
+   * pattern = pattern chung: photo,video hoặc photo,video,video,photo
+   */
+  media_pattern_mode: "page_sequence",
+  /** e.g. "photo,video" or "photo,video,video,photo" */
+  media_pattern: "photo,video",
   /** only include enabled page configs if true */
   only_enabled_pages: false,
   /** account_ids filter (empty = all) when groups empty */
   account_ids: [],
-  page_row_ids: [], // empty = all pages of selected accounts
+  page_row_ids: [], // empty = all pages when page_target_mode=all
 };
+
+/** @param {string} raw */
+export function parseMediaPattern(raw) {
+  const allowed = new Set(["photo", "video", "text"]);
+  return String(raw || "")
+    .split(/[,|;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => allowed.has(s));
+}
+
+/**
+ * Resolve post type for round index (0-based) for one page config.
+ */
+export function resolvePlannedPostType(settings, cfg, roundIndex = 0) {
+  const mode =
+    settings.media_pattern_mode ||
+    (settings.post_type && settings.post_type !== "auto" ? "fixed" : "page_sequence");
+  const round = Math.max(0, Number(roundIndex) || 0);
+
+  if (mode === "pattern") {
+    const pat = parseMediaPattern(settings.media_pattern);
+    if (pat.length) return pat[round % pat.length];
+  }
+  if (mode === "fixed") {
+    const t = String(settings.post_type || "photo").toLowerCase();
+    if (t && t !== "auto") return t;
+  }
+  const sequence =
+    Array.isArray(cfg?.sequence) && cfg.sequence.length
+      ? cfg.sequence.map((x) => String(x).toLowerCase())
+      : ["photo", "text"];
+  const base = Math.max(0, Number(cfg?.next_slot_index) || 0);
+  return String(sequence[(base + round) % sequence.length] || "photo").toLowerCase();
+}
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
@@ -189,12 +243,28 @@ export function normalizeSettings(s) {
     2880
   );
   out.post_type = out.post_type || "auto";
+  out.page_target_mode = out.page_target_mode === "all" ? "all" : "selected";
+  out.run_now_time_mode = out.run_now_time_mode === "windows" ? "windows" : "gap_chain";
+  const mpm = String(out.media_pattern_mode || "").toLowerCase();
+  if (mpm === "fixed" || mpm === "pattern" || mpm === "page_sequence") {
+    out.media_pattern_mode = mpm;
+  } else if (out.post_type && out.post_type !== "auto") {
+    out.media_pattern_mode = "fixed";
+  } else {
+    out.media_pattern_mode = "page_sequence";
+  }
+  const pat = parseMediaPattern(out.media_pattern);
+  out.media_pattern = pat.length ? pat.join(",") : "photo,video";
   out.account_ids = Array.isArray(out.account_ids)
     ? out.account_ids.map(Number).filter((n) => n > 0)
     : [];
   out.page_row_ids = Array.isArray(out.page_row_ids)
     ? out.page_row_ids.map(Number).filter((n) => n > 0)
     : [];
+  // Mutual exclusive page scope
+  if (out.page_target_mode === "all") {
+    out.page_row_ids = [];
+  }
 
   if (Array.isArray(out.windows) && out.windows.length) {
     const rawWindows = out.windows;
@@ -696,15 +766,50 @@ export function buildRotationPlan(inputSettings = {}) {
  */
 export function buildRunNowPlan(inputSettings = {}) {
   const settings = normalizeSettings({ ...loadRotationSettings(), ...inputSettings });
+  if (settings.page_target_mode === "selected" && !settings.page_row_ids.length) {
+    throw new Error(
+      "Chế độ «Chỉ page đã tick»: hãy tick ít nhất 1 Page ở bước 1, hoặc chọn «Tất cả page»."
+    );
+  }
   const matrix = loadAccountPageMatrix(settings).filter((a) => a.pages.length > 0);
+  if (!matrix.length) {
+    throw new Error(
+      settings.page_target_mode === "all"
+        ? "Không có Page active nào để chạy."
+        : "Không có Page đã tick (hoặc Page không active)."
+    );
+  }
   const groups = resolveGroups(settings, matrix);
-  // Run-now count is independent from windows mode (windows normally rewrites this count).
-  const rounds = clamp(
-    Number(inputSettings.posts_per_page_per_day) || settings.posts_per_page_per_day,
-    1,
-    12
-  );
+  const useWindows = settings.run_now_time_mode === "windows";
+  // Windows: số bài/ngày = tổng posts trong khung Sáng/Tối (authoritative).
+  // Gap chain: posts_per_page_per_day from Direct Local input.
+  let rounds;
+  let dayWindowTimes = null;
   const tz = settings.tz_offset_minutes;
+  const todayVn = todayYmd(tz);
+  if (useWindows) {
+    const winSettings = normalizeSettings({
+      ...settings,
+      mode: "windows",
+    });
+    const sum = (winSettings.windows || []).reduce((n, w) => n + (Number(w.posts) || 0), 0);
+    if (sum < 1) {
+      throw new Error(
+        "Chế độ khung giờ Direct Local cần ít nhất 1 bài trong các dòng Sáng/Tối (ví dụ Sáng|07:30|11:30|1 và Tối|18:00|21:30|1)."
+      );
+    }
+    rounds = clamp(sum, 1, 12);
+    dayWindowTimes = planTimesForPageDay(winSettings, todayVn);
+    if (!dayWindowTimes.length) {
+      throw new Error("Không lập được giờ trong khung Sáng/Tối — kiểm tra HH:mm start < end.");
+    }
+  } else {
+    rounds = clamp(
+      Number(inputSettings.posts_per_page_per_day) || settings.posts_per_page_per_day,
+      1,
+      12
+    );
+  }
   const anti = getAntiSpamSettings();
   const pageConfigs = new Map();
   for (const account of matrix) {
@@ -712,7 +817,6 @@ export function buildRunNowPlan(inputSettings = {}) {
       pageConfigs.set(page.page_row_id, getPagePostConfig(page.page_row_id));
     }
   }
-  const todayVn = todayYmd(tz);
   const maxPageIntervalHours = Math.max(
     0,
     ...[...pageConfigs.values()].map((c) => (Number(c.interval_minutes) || 0) / 60)
@@ -764,16 +868,22 @@ export function buildRunNowPlan(inputSettings = {}) {
           );
           const pageRounds = Math.min(rounds, remainingToday);
           if (round >= pageRounds) return;
-          const sequence = Array.isArray(cfg?.sequence) && cfg.sequence.length ? cfg.sequence : ["photo", "text"];
-          const forcedType = settings.post_type && settings.post_type !== "auto" ? settings.post_type : null;
-          const plannedPostType = String(
-            forcedType || sequence[((cfg?.next_slot_index || 0) + round) % sequence.length]
-          ).toLowerCase();
-          const when = new Date(cursorMs);
+          const plannedPostType = resolvePlannedPostType(settings, cfg, round);
+          let when;
+          if (useWindows && dayWindowTimes[round]) {
+            // Base = planned window time; never before now; small stagger by order.
+            const baseMs = dayWindowTimes[round].getTime();
+            const stagger = (order + 1) * 1500;
+            when = new Date(Math.max(Date.now() + 2000, baseMs + stagger));
+            cursorMs = when.getTime();
+          } else {
+            when = new Date(cursorMs);
+          }
           order += 1;
           slots.push({
             order,
-            immediate: order === 1,
+            // Only "immediate" if due within ~5s — windows mode may plan evening later today.
+            immediate: when.getTime() <= Date.now() + 5000,
             post_round: round + 1,
             page_index: pageIdx + 1,
             group_id: g.id,
@@ -787,9 +897,14 @@ export function buildRunNowPlan(inputSettings = {}) {
             unix: Math.floor(when.getTime() / 1000),
             iso: when.toISOString(),
             local_label: formatLocal(when, tz),
+            time_mode: useWindows ? "windows" : "gap_chain",
           });
           lastSlotMs = when.getTime();
-          cursorMs += randBetween(taskGapMinMs, taskGapMaxMs);
+          if (!useWindows) {
+            cursorMs += randBetween(taskGapMinMs, taskGapMaxMs);
+          } else {
+            cursorMs = when.getTime() + randBetween(taskGapMinMs * 0.15, taskGapMinMs * 0.35);
+          }
     };
 
     if (settings.app_rotation_mode === "per_app") {
@@ -925,6 +1040,11 @@ export function buildRunNowPlan(inputSettings = {}) {
       effective_gap_hours_max: effectiveGapMaxHours,
       tz_offset_minutes: tz,
       post_type: settings.post_type,
+      page_target_mode: settings.page_target_mode,
+      run_now_time_mode: settings.run_now_time_mode,
+      media_pattern_mode: settings.media_pattern_mode,
+      media_pattern: settings.media_pattern,
+      windows: settings.windows,
       app_rotation_mode: settings.app_rotation_mode,
       between_tasks_gap_minutes_min: settings.between_tasks_gap_minutes_min,
       between_tasks_gap_minutes_max: settings.between_tasks_gap_minutes_max,
@@ -936,10 +1056,19 @@ export function buildRunNowPlan(inputSettings = {}) {
       total_planned: slots.length,
       total_final: finalSlots.length,
       anti_spam_trimmed: false,
+      page_scope: settings.page_target_mode === "all" ? "tất cả page active" : "chỉ page đã tick",
+      media_logic:
+        settings.media_pattern_mode === "pattern"
+          ? `pattern xen kẽ: ${settings.media_pattern}`
+          : settings.media_pattern_mode === "fixed"
+            ? `cố định: ${settings.post_type}`
+            : "sequence từng Page",
       order_logic: settings.app_rotation_mode === "per_app"
         ? "vòng bài# → từng App → pageIndex → toàn bộ admin của App"
         : "vòng bài# → pageIndex → adminIndex → App 1/App 2 so le",
-      wait_logic: `Task đầu đăng ngay; mỗi Page/Admin kế tiếp cách ${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút; vòng sau vẫn giữ gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours} giờ`,
+      wait_logic: useWindows
+        ? `Khung giờ Sáng/Tối trong ngày (VN); task trong cùng khung so le Page/Admin ~${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút`
+        : `Task đầu đăng ngay; mỗi Page/Admin kế tiếp cách ${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút; vòng sau gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours} giờ`,
       timezone: "Asia/Ho_Chi_Minh (UTC+7)",
       can_run: blockers.length === 0,
     },

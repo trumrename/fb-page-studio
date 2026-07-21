@@ -178,8 +178,22 @@ check("UI App rotation strategies", posting.includes("rotAppStrategy") && postin
 check("UI Page/Admin wait range", posting.includes("rotTaskGapMin") && posting.includes("rotTaskGapMax"));
 check("Direct Local has independent post type and same-Page gap controls", ["rotNowPostType", "rotNowGapMin", "rotNowGapMax", "collectRunNowBody"].every((x) => posting.includes(x)));
 const directBody = posting.slice(posting.indexOf("function collectRunNowBody"), posting.indexOf("function applyRotationSettings"));
-check("Direct Local request does not read Facebook window controls", directBody.includes("rotNowPerDay") && !directBody.includes("rotWindows") && !directBody.includes("rotMode") && !directBody.includes("rotDays"));
-check("UI explicitly separates direct local from Facebook scheduling", posting.includes("Không tạo scheduled post trên Facebook") && posting.includes("Không đọc “Khung giờ”"));
+check(
+  "Direct Local supports optional morning/evening windows and media pattern",
+  directBody.includes("run_now_time_mode") &&
+    directBody.includes("media_pattern_mode") &&
+    directBody.includes("page_target_mode") &&
+    posting.includes("rotNowMediaPattern") &&
+    posting.includes("rotPageTargetSelected") &&
+    posting.includes("rotNowTimeWindows")
+);
+check(
+  "UI separates page target modes (selected XOR all)",
+  posting.includes('name="rotPageTarget"') &&
+    posting.includes('value="selected"') &&
+    posting.includes('value="all"') &&
+    posting.includes("page_target_mode")
+);
 check("UI run-now Media/Posted/Caption pickers", ["btnRotPickMedia", "btnRotPickPosted", "btnRotPickCaptions", "btnRotApplyFolders"].every((x) => posting.includes(x)));
 check("UI live job progress + notifications", ["liveJobBar", "liveJobPct", "liveResources", "liveNotifs", "watchLiveJob"].every((x) => posting.includes(x)));
 check("bulk schedule uses live job runner", posting.includes('"/api/jobs/bulk-schedule"') && posting.includes("watchLiveJob(r.job.id)"));
@@ -193,7 +207,12 @@ check("Page selection persists outside transient checkboxes", posting.includes("
 check("active config Page is constrained to selected Pages", read("src/routes/posting.js").includes("selected.includes(requestedActiveId)") && read("src/routes/posting.js").includes("active_page_id: activeId"));
 check("Page config auto-saves before switching workspaces", posting.includes("queueConfigAutosave") && posting.includes("flushConfigAutosave") && posting.includes("persistPageConfig"));
 check("posting workspaces are visually separated", ["configure", "run", "schedule", "monitor"].every((view) => posting.includes(`data-workspace-view="${view}"`)) && posting.includes("data-workspace-panel"));
-check("rotation always targets explicitly selected Pages", posting.includes('page_row_ids: selectedPageIds()') && posting.includes("Luôn chỉ chạy đúng Page đã chọn"));
+check(
+  "rotation page scope is explicit selected-or-all",
+  read("src/services/rotationPlan.js").includes('page_target_mode: "selected"') &&
+    read("src/services/rotationPlan.js").includes("resolvePlannedPostType") &&
+    posting.includes("page_target_mode")
+);
 
 check("OAuth flash escapes URL values", index.includes('escapeHtml(p.get("error"))'));
 check("UI escapes attribute quotes and rejects non-HTTP external URLs", [dashboardUi, posting, index].every((text) => text.includes("safeHttpUrl")) && dashboardUi.includes("&quot;") && posting.includes("&quot;") && index.includes("&#39;"));
