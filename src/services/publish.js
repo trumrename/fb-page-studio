@@ -6,33 +6,44 @@
 import fs from "fs";
 import path from "path";
 import { Blob } from "buffer";
-import { config, graphBase } from "../config.js";
+import { graphBase } from "../config.js";
 import { noteGraphResponse } from "./rateLimit.js";
-import { appsecretProof } from "./facebook.js";
+import {
+  appsecretProof,
+  isInvalidAppSecretProofError,
+  resolveAppSecret,
+} from "./facebook.js";
 
-function appendProof(formOrParams, pageToken) {
-  const secret = String(config.facebook.appSecret || process.env.FB_APP_SECRET || "").trim();
-  const proof = appsecretProof(pageToken, secret);
-  return proof;
+function proofForToken(pageToken, metaAppKey = "") {
+  const secret = resolveAppSecret("", metaAppKey);
+  return appsecretProof(pageToken, secret);
 }
 
-async function graphPostForm(urlPath, pageToken, fields = {}, fileField = null) {
-  const url = `${graphBase()}${urlPath}`;
-  const form = new FormData();
-  form.append("access_token", pageToken);
-  const proof = appendProof(form, pageToken);
-  if (proof) form.append("appsecret_proof", proof);
-  for (const [k, v] of Object.entries(fields)) {
-    if (v !== undefined && v !== null) form.append(k, String(v));
+async function graphPostForm(urlPath, pageToken, fields = {}, fileField = null, metaAppKey = "") {
+  const tryOnce = async (withProof) => {
+    const url = `${graphBase()}${urlPath}`;
+    const form = new FormData();
+    form.append("access_token", pageToken);
+    if (withProof) {
+      const proof = proofForToken(pageToken, metaAppKey);
+      if (proof) form.append("appsecret_proof", proof);
+    }
+    for (const [k, v] of Object.entries(fields)) {
+      if (v !== undefined && v !== null) form.append(k, String(v));
+    }
+    if (fileField) {
+      const { name, filePath } = fileField;
+      const buf = fs.readFileSync(filePath);
+      form.append(name, new Blob([buf]), path.basename(filePath));
+    }
+    const res = await fetch(url, { method: "POST", body: form });
+    noteGraphResponse(res);
+    return res.json();
+  };
+  let data = await tryOnce(true);
+  if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
+    data = await tryOnce(false);
   }
-  if (fileField) {
-    const { name, filePath } = fileField;
-    const buf = fs.readFileSync(filePath);
-    form.append(name, new Blob([buf]), path.basename(filePath));
-  }
-  const res = await fetch(url, { method: "POST", body: form });
-  noteGraphResponse(res);
-  const data = await res.json();
   if (data.error) {
     const err = new Error(data.error.message || "Graph publish error");
     err.code = data.error.code;
@@ -42,18 +53,26 @@ async function graphPostForm(urlPath, pageToken, fields = {}, fileField = null) 
   return data;
 }
 
-async function graphPostJson(urlPath, pageToken, body = {}) {
-  const url = new URL(`${graphBase()}${urlPath}`);
-  url.searchParams.set("access_token", pageToken);
-  const proof = appendProof(null, pageToken);
-  if (proof) url.searchParams.set("appsecret_proof", proof);
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  noteGraphResponse(res);
-  const data = await res.json();
+async function graphPostJson(urlPath, pageToken, body = {}, metaAppKey = "") {
+  const tryOnce = async (withProof) => {
+    const url = new URL(`${graphBase()}${urlPath}`);
+    url.searchParams.set("access_token", pageToken);
+    if (withProof) {
+      const proof = proofForToken(pageToken, metaAppKey);
+      if (proof) url.searchParams.set("appsecret_proof", proof);
+    }
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    noteGraphResponse(res);
+    return res.json();
+  };
+  let data = await tryOnce(true);
+  if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
+    data = await tryOnce(false);
+  }
   if (data.error) {
     const err = new Error(data.error.message || "Graph publish error");
     err.code = data.error.code;
@@ -63,15 +82,23 @@ async function graphPostJson(urlPath, pageToken, body = {}) {
   return data;
 }
 
-async function graphGetJson(urlPath, pageToken, fields) {
-  const url = new URL(`${graphBase()}${urlPath}`);
-  url.searchParams.set("access_token", pageToken);
-  const proof = appendProof(null, pageToken);
-  if (proof) url.searchParams.set("appsecret_proof", proof);
-  if (fields) url.searchParams.set("fields", fields);
-  const res = await fetch(url);
-  noteGraphResponse(res);
-  const data = await res.json();
+async function graphGetJson(urlPath, pageToken, fields, metaAppKey = "") {
+  const tryOnce = async (withProof) => {
+    const url = new URL(`${graphBase()}${urlPath}`);
+    url.searchParams.set("access_token", pageToken);
+    if (withProof) {
+      const proof = proofForToken(pageToken, metaAppKey);
+      if (proof) url.searchParams.set("appsecret_proof", proof);
+    }
+    if (fields) url.searchParams.set("fields", fields);
+    const res = await fetch(url);
+    noteGraphResponse(res);
+    return res.json();
+  };
+  let data = await tryOnce(true);
+  if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
+    data = await tryOnce(false);
+  }
   if (data.error) {
     const err = new Error(data.error.message || "Graph read error");
     err.code = data.error.code;

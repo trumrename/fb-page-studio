@@ -72,10 +72,10 @@ export async function connectFromUserToken(userToken, opts = {}) {
   } catch (e) {
     if (/appsecret_proof/i.test(e.message || "")) {
       throw new Error(
-        "Meta yêu cầu appsecret_proof. " +
-          "Gói nội bộ: thêm FB_APP_SECRET (và _2) vào .env cạnh EXE. " +
-          "Gói khách / chỉ relay: tắt «Require App Secret Proof» trên Meta App, " +
-          "hoặc copy secret App lên máy EXE (nội bộ tin cậy)."
+        e.message +
+          " | Gói khách: xóa FB_APP_SECRET trong .env (không để secret sai). " +
+          "Meta: tắt Require App Secret Proof nếu không ship secret. " +
+          "Gói nội bộ: secret phải đúng App 1/App 2 đã Connect."
       );
     }
     throw e;

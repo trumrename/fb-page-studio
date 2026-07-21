@@ -14,14 +14,32 @@ import { noteGraphResponse } from "./rateLimit.js";
 export function appsecretProof(accessToken, appSecret) {
   const token = String(accessToken || "").trim();
   const secret = String(appSecret || "").trim();
-  if (!token || !secret) return "";
+  // Ignore placeholders / too-short values that would produce invalid proofs.
+  if (!token || secret.length < 16) return "";
   return crypto.createHmac("sha256", secret).update(token).digest("hex");
 }
 
-function resolveAppSecret(explicit) {
+export function isInvalidAppSecretProofError(message) {
+  return /invalid appsecret_proof/i.test(String(message || ""));
+}
+
+/**
+ * Resolve App Secret for Graph proof.
+ * @param {string} [explicit]
+ * @param {string} [metaAppKey] app1 | app2
+ */
+export function resolveAppSecret(explicit, metaAppKey = "") {
   const s = String(explicit || "").trim();
-  if (s) return s;
-  return String(config.facebook.appSecret || process.env.FB_APP_SECRET || "").trim();
+  if (s.length >= 16) return s;
+  const key = String(metaAppKey || "").trim().toLowerCase();
+  if (key === "app2") {
+    const s2 = String(process.env.FB_APP_SECRET_2 || "").trim();
+    if (s2.length >= 16) return s2;
+  }
+  const s1 = String(
+    process.env.FB_APP_SECRET || config.facebook?.appSecret || ""
+  ).trim();
+  return s1.length >= 16 ? s1 : "";
 }
 
 /**
@@ -56,28 +74,44 @@ export function buildLoginUrl(state, opts = {}) {
  * @param {string} path
  * @param {string|null} accessToken
  * @param {Record<string, unknown>} [query]
- * @param {{ appSecret?: string }} [opts]
+ * @param {{ appSecret?: string, metaAppKey?: string, skipAppsecretProof?: boolean }} [opts]
  */
 async function graphGet(path, accessToken, query = {}, opts = {}) {
-  const url = new URL(`${graphBase()}${path}`);
-  for (const [k, v] of Object.entries(query)) {
-    if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-  }
-  if (accessToken) {
-    url.searchParams.set("access_token", accessToken);
-    const secret = resolveAppSecret(opts.appSecret);
-    const proof = appsecretProof(accessToken, secret);
-    if (proof) url.searchParams.set("appsecret_proof", proof);
-  }
+  const tryOnce = async (withProof) => {
+    const url = new URL(`${graphBase()}${path}`);
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+    }
+    if (accessToken) {
+      url.searchParams.set("access_token", accessToken);
+      if (withProof && !opts.skipAppsecretProof) {
+        const secret = resolveAppSecret(opts.appSecret, opts.metaAppKey);
+        const proof = appsecretProof(accessToken, secret);
+        if (proof) url.searchParams.set("appsecret_proof", proof);
+      }
+    }
+    const res = await fetch(url);
+    noteGraphResponse(res);
+    return res.json();
+  };
 
-  const res = await fetch(url);
-  noteGraphResponse(res);
-  const data = await res.json();
+  let data = await tryOnce(true);
+  // Customer packs may have wrong/stale secret → invalid proof. Retry without proof
+  // when Meta does not require it (common for gói khách).
+  if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
+    data = await tryOnce(false);
+  }
   if (data.error) {
     const err = new Error(data.error.message || "Graph API error");
     err.code = data.error.code;
     err.type = data.error.type;
     err.fb = data.error;
+    if (isInvalidAppSecretProofError(err.message)) {
+      err.message =
+        "Invalid appsecret_proof: FB_APP_SECRET trên máy này không khớp App đã Connect. " +
+        "Gói khách: xóa hẳn dòng FB_APP_SECRET trong .env (để trống) và tắt Require App Secret Proof trên Meta. " +
+        "Gói nội bộ: điền đúng secret của đúng App (App 1 / App 2).";
+    }
     throw err;
   }
   return data;
@@ -85,18 +119,29 @@ async function graphGet(path, accessToken, query = {}, opts = {}) {
 
 /** Follow paging.next absolute URLs while keeping appsecret_proof. */
 async function graphFetchAbsolute(absoluteUrl, accessToken, opts = {}) {
-  const url = new URL(absoluteUrl);
-  if (accessToken && !url.searchParams.get("access_token")) {
-    url.searchParams.set("access_token", accessToken);
-  }
-  const secret = resolveAppSecret(opts.appSecret);
-  const token = url.searchParams.get("access_token") || accessToken;
-  const proof = appsecretProof(token, secret);
-  if (proof) url.searchParams.set("appsecret_proof", proof);
+  const tryOnce = async (withProof) => {
+    const url = new URL(absoluteUrl);
+    if (accessToken && !url.searchParams.get("access_token")) {
+      url.searchParams.set("access_token", accessToken);
+    }
+    if (withProof && !opts.skipAppsecretProof) {
+      const secret = resolveAppSecret(opts.appSecret, opts.metaAppKey);
+      const token = url.searchParams.get("access_token") || accessToken;
+      const proof = appsecretProof(token, secret);
+      if (proof) url.searchParams.set("appsecret_proof", proof);
+      else url.searchParams.delete("appsecret_proof");
+    } else {
+      url.searchParams.delete("appsecret_proof");
+    }
+    const res = await fetch(url);
+    noteGraphResponse(res);
+    return res.json();
+  };
 
-  const res = await fetch(url);
-  noteGraphResponse(res);
-  const data = await res.json();
+  let data = await tryOnce(true);
+  if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
+    data = await tryOnce(false);
+  }
   if (data.error) {
     const err = new Error(data.error.message || "Graph API error");
     err.code = data.error.code;

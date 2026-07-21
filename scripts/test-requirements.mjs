@@ -157,7 +157,14 @@ check(
     !/FB_APP_SECRET=\s*[A-Za-z0-9]{10,}/.test(customerEnvEx) &&
     !/NGROK_AUTHTOKEN=\s*[A-Za-z0-9]{10,}/.test(customerEnvEx)
 );
-check("obsolete BAT files cannot collect tokens or delete builds", !read("CAI-NGROK.bat").includes("DAN_TOKEN_NGROK_VAO_DAY") && !read("pack-dev/CHAY-NGROK-DOMAIN-CO-DINH.bat").includes("set /p") && !/rd\s+\/s\s+\/q/i.test(read("XOA-BAN-HONG.bat")));
+check(
+  "obsolete BAT files cannot collect tokens or delete builds",
+  // Ngrok token helper BATs removed from UI path; if reintroduced they must not prompt tokens or wipe disks.
+  !fs.existsSync(path.join(root, "CAI-NGROK.bat")) &&
+    !fs.existsSync(path.join(root, "XOA-BAN-HONG.bat")) &&
+    (!fs.existsSync(path.join(root, "pack-dev/CHAY-NGROK-DOMAIN-CO-DINH.bat")) ||
+      !read("pack-dev/CHAY-NGROK-DOMAIN-CO-DINH.bat").includes("set /p"))
+);
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));
 check("overdue Facebook schedules reconcile automatically", server.includes("runScheduledReconcile") && server.includes("RECONCILE_MS"));
 check("runtime reports scheduler and config health", server.includes('/api/runtime') && server.includes("config_health") && server.includes("enabled_pages"));
