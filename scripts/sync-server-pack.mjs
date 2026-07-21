@@ -4,10 +4,9 @@
  */
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { PROJECT_ROOT as root, packServerDir } from "./deliver-paths.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const out = path.join(root, "pack-server");
+const out = packServerDir();
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 
 function rimraf(dir) {
@@ -197,7 +196,7 @@ fs.writeFileSync(
 const gi = path.join(root, ".gitignore");
 let giText = fs.existsSync(gi) ? fs.readFileSync(gi, "utf8") : "";
 if (!giText.includes("pack-server/")) {
-  fs.appendFileSync(gi, "\npack-server/\n");
+  fs.appendFileSync(gi, "\npack-server/\nTổng Hợp Tool/pack-server/\n");
 }
 
 // Sanity: install-server.ps1 must not be empty / broken
