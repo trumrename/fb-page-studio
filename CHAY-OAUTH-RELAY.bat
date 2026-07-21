@@ -1,19 +1,18 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-title FB Page Studio - OAuth Relay
-echo.
-echo  Relay domain: https://videoviral1.chainityai.com
-echo  Can co file: oauth-relay\.env
-echo  Giu cua so nay MO 24/7 (may treo).
-echo.
-if not exist "oauth-relay\.env" (
-  echo [LOI] Chua co oauth-relay\.env
-  echo Copy oauth-relay\.env.example thanh .env va dien FB_APP_ID / SECRET.
-  pause
-  exit /b 1
+if exist "%~dp0Tổng Hợp Tool\pack-server\CHAY-RELAY-ONLY.bat" (
+  cd /d "%~dp0Tổng Hợp Tool\pack-server"
+  call CHAY-RELAY-ONLY.bat
+  exit /b %ERRORLEVEL%
 )
-node oauth-relay\server.mjs
-echo.
-echo Relay da dung.
+if exist "%~dp0Tổng Hợp Tool\pack-server\oauth-relay\server.mjs" (
+  cd /d "%~dp0Tổng Hợp Tool\pack-server"
+  title OAuth Relay - modelswiki.top
+  node oauth-relay\server.mjs
+  pause
+  exit /b %ERRORLEVEL%
+)
+echo [LOI] Khong thay pack-server. Chay: npm run pack:server
 pause
+exit /b 1
