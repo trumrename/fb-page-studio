@@ -13,6 +13,7 @@ import {
   enrichPageById,
   enrichAccountPages,
   enrichAllPages,
+  enrichMissingProfilesForAccount,
 } from "../services/enrich.js";
 import {
   exportPagesToWorkbook,
@@ -764,17 +765,33 @@ router.post("/accounts/:id/sync", async (req, res) => {
     if (!token) return res.status(400).json({ error: "No user token stored" });
 
     const pages = await syncPagesForAccount(id, token);
+    // Tự lấy follow + avatar cho page còn thiếu (profile only — không chờ bấm Sync details)
+    let profile_enrich = null;
+    try {
+      profile_enrich = await enrichMissingProfilesForAccount(id, {
+        delayMs: Number(req.body?.delay_ms) || 150,
+      });
+    } catch (enrichErr) {
+      console.warn("[sync] profile enrich:", enrichErr.message);
+      profile_enrich = { ok: false, error: enrichErr.message };
+    }
+    // Re-read after enrich so UI gets followers/picture ngay
+    const fresh = listPages({ accountId: id, limit: 5000 });
     res.json({
       account: getAccountPublic(id),
-      page_count: pages.length,
-      pages: pages.map((p) => ({
+      page_count: fresh.length,
+      pages: fresh.map((p) => ({
         id: p.id,
         page_id: p.page_id,
         name: p.name,
         category: p.category,
         status: p.status,
+        followers_count: p.followers_count ?? null,
+        fan_count: p.fan_count ?? null,
+        picture_url: p.picture_url || null,
       })),
       sync_summary: pages.sync_summary || null,
+      profile_enrich,
     });
   } catch (e) {
     console.error("[sync]", e);

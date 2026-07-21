@@ -591,10 +591,12 @@
       }
       tbody.innerHTML = data.pages.map((p) => {
         const g = growthLabel(p);
-        const pic = safeHttpUrl(p.picture_url);
+        const stored = safeHttpUrl(p.picture_url);
+        const pid = String(p.page_id || "").trim();
+        const pic = stored || (/^\d{5,}$/.test(pid) ? `https://graph.facebook.com/${pid}/picture?type=large` : "");
         const initial = String(p.name || "?").trim().charAt(0).toUpperCase() || "?";
         const avatar = pic
-          ? `<img class="page-avatar" src="${escapeHtml(pic)}" alt="" loading="lazy" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:1px solid var(--border);vertical-align:middle;margin-right:.55rem" onerror="this.style.display='none'" />`
+          ? `<img class="page-avatar" src="${escapeHtml(pic)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:1px solid var(--border);vertical-align:middle;margin-right:.55rem" onerror="this.style.display='none';const s=this.nextElementSibling;if(s)s.style.display='inline-flex'" /><span class="page-avatar-fallback" style="display:none;width:36px;height:36px;border-radius:50%;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;background:#1e2a44;border:1px solid var(--border);margin-right:.55rem;vertical-align:middle">${escapeHtml(initial)}</span>`
           : `<span class="page-avatar-fallback" style="display:inline-flex;width:36px;height:36px;border-radius:50%;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;background:#1e2a44;border:1px solid var(--border);margin-right:.55rem;vertical-align:middle">${escapeHtml(initial)}</span>`;
         return `
         <tr class="clickable" data-id="${p.id}">
@@ -677,9 +679,19 @@
       try {
         const r = await api(`/api/accounts/${selectedAccountId}/sync`, { method: "POST", body: "{}" });
         const s = r.sync_summary || {};
-        alert(`Đã đồng bộ: ${r.page_count} Page đang hoạt động` +
-          (s.added_pages ? `\nThêm mới: ${s.added_pages}` : "") +
-          (s.skipped_license ? `\nBỏ qua do license: ${s.skipped_license} Page` : ""));
+        const pe = r.profile_enrich || {};
+        const withFl = (r.pages || []).filter((p) => p.followers_count != null).length;
+        const withPic = (r.pages || []).filter((p) => p.picture_url).length;
+        alert(
+          `Đã đồng bộ: ${r.page_count} Page đang hoạt động` +
+            (s.added_pages ? `\nThêm mới: ${s.added_pages}` : "") +
+            (s.skipped_license ? `\nBỏ qua do license: ${s.skipped_license} Page` : "") +
+            `\nĐã có follow: ${withFl}/${r.page_count} · avatar: ${withPic}/${r.page_count}` +
+            (pe.total
+              ? `\nVừa lấy profile: ok ${pe.ok_count || 0} · lỗi ${pe.fail_count || 0}`
+              : "") +
+            (pe.error ? `\nProfile enrich: ${pe.error}` : "")
+        );
         await refreshAll();
       } catch (e) {
         alert(e.message);

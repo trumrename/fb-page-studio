@@ -130,15 +130,21 @@ export async function enrichPageById(pageRowId, opts = {}) {
   const db = getDb();
   const row = db
     .prepare(
-      `SELECT id, account_id, page_id, page_token_enc, name, enriched_at, followers_count
+      `SELECT id, account_id, page_id, page_token_enc, name, enriched_at,
+              followers_count, picture_url
        FROM fb_pages WHERE id = ?`
     )
     .get(pageRowId);
   if (!row) throw new Error("Page not found");
 
   const force = opts.force === true;
+  const profileOnly = opts.profileOnly === true;
   const ttlH = config.enrichTtlHours ?? 12;
-  if (!force && row.enriched_at && row.followers_count != null) {
+  // Chỉ skip khi đã có follow + avatar; thiếu 1 trong 2 thì enrich lại
+  const hasCore =
+    row.followers_count != null &&
+    String(row.picture_url || "").trim().length > 0;
+  if (!force && hasCore && row.enriched_at) {
     const ageMs2 = Date.now() - new Date(row.enriched_at.replace(" ", "T") + "Z").getTime();
     if (Number.isFinite(ageMs2) && ageMs2 < ttlH * 3600 * 1000) {
       return {
@@ -149,6 +155,7 @@ export async function enrichPageById(pageRowId, opts = {}) {
         skipped: true,
         reason: `fresh (<${ttlH}h)`,
         followers_count: row.followers_count,
+        picture_url: row.picture_url || null,
       };
     }
   }
@@ -173,12 +180,24 @@ export async function enrichPageById(pageRowId, opts = {}) {
     };
   }
 
-  const insightsR = await getPageInsights(row.page_id, pageToken);
-  const insights = mapInsights(insightsR);
-  if (!insights.ok) errors.push(`insights: ${insights.error}`);
+  let insights = {
+    ok: true,
+    error: null,
+    metrics: {},
+    growth_7d: null,
+    label: "—",
+  };
+  if (!profileOnly) {
+    const insightsR = await getPageInsights(row.page_id, pageToken);
+    insights = mapInsights(insightsR);
+    if (!insights.ok) errors.push(`insights: ${insights.error}`);
+  }
 
   const picture =
-    profile.picture?.data?.url || profile.picture?.url || null;
+    profile.picture?.data?.url ||
+    profile.picture?.url ||
+    row.picture_url ||
+    null;
 
   db.prepare(
     `UPDATE fb_pages SET
@@ -196,7 +215,7 @@ export async function enrichPageById(pageRowId, opts = {}) {
       business_name = NULL,
       roles_json = NULL,
       assigned_users_json = NULL,
-      insights_json = ?,
+      insights_json = CASE WHEN ? = 1 THEN insights_json ELSE ? END,
       enrich_error = ?,
       enriched_at = datetime('now'),
       updated_at = datetime('now')
@@ -210,7 +229,8 @@ export async function enrichPageById(pageRowId, opts = {}) {
     profile.link || null,
     profile.about || null,
     picture,
-    JSON.stringify(insights),
+    profileOnly ? 1 : 0,
+    profileOnly ? null : JSON.stringify(insights),
     errors.length ? errors.join(" | ") : null,
     pageRowId
   );
@@ -228,15 +248,17 @@ export async function enrichPageById(pageRowId, opts = {}) {
     ok: true,
     followers_count: profile.followers_count ?? null,
     fan_count: profile.fan_count ?? null,
+    picture_url: picture,
     growth_7d: insights.growth_7d || null,
     insights_ok: insights.ok,
+    profile_only: profileOnly,
     warnings: errors,
   };
 }
 
 export async function enrichAccountPages(
   accountId,
-  { delayMs = DEFAULT_DELAY_MS, force = false } = {}
+  { delayMs = DEFAULT_DELAY_MS, force = false, profileOnly = false } = {}
 ) {
   const db = getDb();
   const pages = db
@@ -249,7 +271,7 @@ export async function enrichAccountPages(
   let skipped = 0;
   for (let i = 0; i < pages.length; i++) {
     try {
-      const r = await enrichPageById(pages[i].id, { force });
+      const r = await enrichPageById(pages[i].id, { force, profileOnly });
       if (r.skipped) skipped++;
       results.push(r);
     } catch (e) {
@@ -263,6 +285,54 @@ export async function enrichAccountPages(
     total: pages.length,
     ok_count: results.filter((r) => r.ok && !r.skipped).length,
     skipped_count: skipped,
+    fail_count: results.filter((r) => !r.ok).length,
+    results,
+    app_usage: getLastUsage(),
+    usage_warning: usageWarning(),
+  };
+}
+
+/**
+ * Sau Sync list: lấy follow + avatar cho page còn thiếu (nhanh, không insights).
+ */
+export async function enrichMissingProfilesForAccount(accountId, opts = {}) {
+  const db = getDb();
+  const pages = db
+    .prepare(
+      `SELECT id FROM fb_pages
+       WHERE account_id = ? AND status = 'active'
+         AND (followers_count IS NULL OR picture_url IS NULL OR picture_url = '')
+       ORDER BY name COLLATE NOCASE`
+    )
+    .all(accountId);
+  if (!pages.length) {
+    return {
+      account_id: accountId,
+      total: 0,
+      ok_count: 0,
+      skipped_count: 0,
+      fail_count: 0,
+      results: [],
+      message: "all_profiles_present",
+    };
+  }
+  const delayMs = opts.delayMs ?? DEFAULT_DELAY_MS;
+  const results = [];
+  for (let i = 0; i < pages.length; i++) {
+    try {
+      results.push(
+        await enrichPageById(pages[i].id, { force: true, profileOnly: true })
+      );
+    } catch (e) {
+      results.push({ id: pages[i].id, ok: false, error: e.message });
+    }
+    if (i < pages.length - 1) await sleep(suggestedDelayMs(delayMs));
+  }
+  return {
+    account_id: accountId,
+    total: pages.length,
+    ok_count: results.filter((r) => r.ok).length,
+    skipped_count: 0,
     fail_count: results.filter((r) => !r.ok).length,
     results,
     app_usage: getLastUsage(),

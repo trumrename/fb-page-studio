@@ -201,7 +201,9 @@ export async function getMe(userToken, opts = {}) {
 export async function getAllPages(userToken, opts = {}) {
   const onPage = typeof opts === "function" ? opts : opts.onPage;
   const appSecret = typeof opts === "object" && opts ? opts.appSecret : undefined;
-  const fields = "id,name,category,access_token,tasks";
+  // picture + followers khi Graph cho phép (không phải lúc nào cũng có đủ → enrich bổ sung)
+  const fields =
+    "id,name,category,access_token,tasks,followers_count,fan_count,link,picture.type(large)";
   let urlPath = "/me/accounts";
   let query = { fields, limit: 100 };
   const pages = [];

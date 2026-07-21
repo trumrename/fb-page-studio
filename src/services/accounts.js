@@ -146,10 +146,24 @@ export async function connectFromUserToken(userToken, opts = {}) {
     appSecret: appSecretForProof,
   });
 
+  // Connect xong: lấy follow + avatar ngay (page còn thiếu)
+  let profile_enrich = null;
+  try {
+    const { enrichMissingProfilesForAccount } = await import("./enrich.js");
+    profile_enrich = await enrichMissingProfilesForAccount(accountId, {
+      delayMs: 150,
+    });
+  } catch (e) {
+    console.warn("[connect] profile enrich:", e.message);
+    profile_enrich = { ok: false, error: e.message };
+  }
+
+  const fresh = listPages({ accountId, limit: 5000 });
   return {
     account: getAccountPublic(accountId),
-    pages: pages.map(publicPage),
+    pages: fresh.map(publicPage),
     sync_summary: pages.sync_summary || null,
+    profile_enrich,
     meta_app_key: metaAppKey,
   };
 }
@@ -216,13 +230,25 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
   }
 
   const upsert = db.prepare(`
-    INSERT INTO fb_pages (account_id, page_id, name, category, tasks_json, page_token_enc, status, last_synced_at, updated_at)
-    VALUES (@account_id, @page_id, @name, @category, @tasks_json, @page_token_enc, 'active', datetime('now'), datetime('now'))
+    INSERT INTO fb_pages (
+      account_id, page_id, name, category, tasks_json, page_token_enc,
+      followers_count, fan_count, picture_url, link,
+      status, last_synced_at, updated_at
+    )
+    VALUES (
+      @account_id, @page_id, @name, @category, @tasks_json, @page_token_enc,
+      @followers_count, @fan_count, @picture_url, @link,
+      'active', datetime('now'), datetime('now')
+    )
     ON CONFLICT(account_id, page_id) DO UPDATE SET
       name = excluded.name,
       category = excluded.category,
       tasks_json = excluded.tasks_json,
       page_token_enc = excluded.page_token_enc,
+      followers_count = COALESCE(excluded.followers_count, fb_pages.followers_count),
+      fan_count = COALESCE(excluded.fan_count, fb_pages.fan_count),
+      picture_url = COALESCE(excluded.picture_url, fb_pages.picture_url),
+      link = COALESCE(excluded.link, fb_pages.link),
       status = 'active',
       last_synced_at = datetime('now'),
       updated_at = datetime('now')
@@ -252,6 +278,8 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
         acceptedNew++;
       }
       seen.add(p.id);
+      const pictureUrl =
+        p.picture?.data?.url || p.picture?.url || null;
       upsert.run({
         account_id: accountId,
         page_id: p.id,
@@ -259,6 +287,16 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
         category: p.category || null,
         tasks_json: JSON.stringify(p.tasks || []),
         page_token_enc: encryptToken(p.access_token),
+        followers_count:
+          p.followers_count != null && Number.isFinite(Number(p.followers_count))
+            ? Number(p.followers_count)
+            : null,
+        fan_count:
+          p.fan_count != null && Number.isFinite(Number(p.fan_count))
+            ? Number(p.fan_count)
+            : null,
+        picture_url: pictureUrl,
+        link: p.link || null,
       });
     }
     // Soft-disable pages no longer returned

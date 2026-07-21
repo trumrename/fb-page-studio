@@ -414,13 +414,15 @@
         return;
       }
       el.innerHTML = pages.map((p) => {
-        const pic = safeHttpUrl(p.picture_url);
+        const stored = safeHttpUrl(p.picture_url);
+        const pid = String(p.page_id || "").trim();
+        const pic = stored || (/^\d{5,}$/.test(pid) ? `https://graph.facebook.com/${pid}/picture?type=large` : "");
         const initial = String(p.name || "?").trim().charAt(0).toUpperCase() || "?";
         const fl = p.followers_count != null || p.fan_count != null
           ? Number(p.followers_count ?? p.fan_count).toLocaleString("vi-VN") + " follow"
           : "Chưa có follow";
         const avatar = pic
-          ? `<img class="page-avatar" src="${esc(pic)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='inline-flex')" /><span class="page-avatar-fallback" style="display:none">${esc(initial)}</span>`
+          ? `<img class="page-avatar" src="${esc(pic)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='inline-flex')" /><span class="page-avatar-fallback" style="display:none">${esc(initial)}</span>`
           : `<span class="page-avatar-fallback">${esc(initial)}</span>`;
         return `
         <label class="page-item" style="cursor:pointer;display:flex;gap:.65rem;align-items:flex-start">

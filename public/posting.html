@@ -736,11 +736,22 @@
       return `<span class="page-follow" title="followers">${s} follow</span>`;
     }
 
+    /** Prefer stored CDN URL; fallback Graph picture by Page ID (public redirect). */
+    function pagePictureSrc(p) {
+      const stored = safeHttpUrl(p?.picture_url);
+      if (stored) return stored;
+      const pid = String(p?.page_id || "").trim();
+      if (/^\d{5,}$/.test(pid)) {
+        return `https://graph.facebook.com/${pid}/picture?type=large`;
+      }
+      return "";
+    }
+
     function pageAvatarHtml(p) {
-      const url = safeHttpUrl(p?.picture_url);
+      const url = pagePictureSrc(p);
       const initial = String(p?.name || "?").trim().charAt(0).toUpperCase() || "?";
       if (url) {
-        return `<img class="page-avatar" src="${esc(url)}" alt="" loading="lazy"
+        return `<img class="page-avatar" src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer"
           onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='inline-flex')" />
           <span class="page-avatar-fallback" style="display:none">${esc(initial)}</span>`;
       }
