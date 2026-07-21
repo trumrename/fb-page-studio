@@ -562,12 +562,56 @@ tr.clickable { cursor: pointer; }
   background: var(--accent-soft);
   border-color: rgba(24, 119, 242, 0.3);
 }
-.account img {
+.account img,
+.page-item img.page-avatar {
   width: 42px; height: 42px;
   border-radius: 50%;
   background: #222;
   object-fit: cover;
   border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.page-item .page-avatar-fallback {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #e8eefc;
+  background: linear-gradient(145deg, #3a4a6b, #1e2a44);
+  border: 1px solid var(--border);
+}
+.page-item .page-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.55rem;
+  align-items: center;
+  margin-top: 0.22rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.page-item .page-meta code {
+  font-size: 0.7rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #9eb6e0;
+}
+.page-item .page-follow {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  color: #c8d6f0;
+}
+.page-item .page-follow.missing {
+  font-weight: 500;
+  color: var(--muted);
+  opacity: 0.85;
 }
 .account .name, .page-item strong { font-weight: 650; font-size: 0.9rem; }
 .account .sub, .page-item .sub {

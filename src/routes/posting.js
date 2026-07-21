@@ -285,7 +285,8 @@ router.get("/pages", (_req, res) => {
   const pages = db
     .prepare(
       `SELECT p.id, p.page_id, p.name, p.status, p.account_id,
-              p.followers_count, p.fan_count, p.enrich_error, p.enriched_at,
+              p.followers_count, p.fan_count, p.picture_url,
+              p.enrich_error, p.enriched_at,
               a.name AS account_name, a.fb_user_id AS account_fb_user_id,
               a.meta_app_key, a.meta_app_id,
               c.enabled, c.max_posts_per_day, c.interval_minutes,

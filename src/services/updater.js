@@ -384,9 +384,12 @@ export async function applyUpdate() {
   }
 
   // Replace IN PLACE: old → .bak → delete; .new → same original name; start same path
+  // Also move sibling versioned EXEs (v1.2.25, v1.2.27, …) into Luu-Tru-Ban-Cu so
+  // the app folder only keeps the file you run + data/.env.
+  const vaultName = "Luu-Tru-Ban-Cu";
   const bat = [
     "@echo off",
-    "setlocal",
+    "setlocal EnableExtensions",
     `cd /d "${exeDir}"`,
     `del /f /q "_update-error.txt" 2>nul`,
     "timeout /t 1 /nobreak >nul",
@@ -414,6 +417,19 @@ export async function applyUpdate() {
     `  if not exist "data" mkdir "data"`,
     `  copy /y "license.backup.json" "data\\license.json" >nul`,
     `)`,
+    // Archive other versioned Desktop EXEs sitting beside this app (leftovers from old packs)
+    `if not exist "${vaultName}" mkdir "${vaultName}"`,
+    `for %%F in ("FB-Page-Studio-Desktop-v*.exe") do (`,
+    `  if /I not "%%~nxF"=="${targetName}" (`,
+    `    move /y "%%~fF" "${vaultName}\\" >nul 2>nul`,
+    `  )`,
+    `)`,
+    `for %%F in ("FB-Page-Studio-Desktop-v*.exe.sha256.txt") do (`,
+    `  if /I not "%%~nxF"=="${targetName}.sha256.txt" (`,
+    `    move /y "%%~fF" "${vaultName}\\" >nul 2>nul`,
+    `  )`,
+    `)`,
+    `del /f /q "*.bak" 2>nul`,
     `start "" "${targetName}"`,
     `del /f /q "%~f0"`,
     "endlocal",
@@ -438,7 +454,8 @@ export async function applyUpdate() {
     message:
       `Cập nhật tại chỗ: ${currentExe}\n` +
       `v${check.current_version} → v${check.latest_version}\n` +
-      `Cùng file/tên — không tạo bản app khác. License & data giữ nguyên.` +
+      `Cùng file/tên — không tạo bản app khác. License & data giữ nguyên.\n` +
+      `EXE bản cũ cùng thư mục (nếu có) → folder Luu-Tru-Ban-Cu.` +
       "\nĐã tải xong. App sẽ tự khởi động lại…",
     from: check.current_version,
     to: check.latest_version,
@@ -447,6 +464,7 @@ export async function applyUpdate() {
     bat: batPath,
     inplace: true,
     preserves: ["data/", ".env", "license.json", "license.backup.json"],
+    archives_old_to: path.join(exeDir, vaultName),
     sha256: actualHash,
   };
 

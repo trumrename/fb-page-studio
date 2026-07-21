@@ -591,11 +591,21 @@
       }
       tbody.innerHTML = data.pages.map((p) => {
         const g = growthLabel(p);
+        const pic = safeHttpUrl(p.picture_url);
+        const initial = String(p.name || "?").trim().charAt(0).toUpperCase() || "?";
+        const avatar = pic
+          ? `<img class="page-avatar" src="${escapeHtml(pic)}" alt="" loading="lazy" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:1px solid var(--border);vertical-align:middle;margin-right:.55rem" onerror="this.style.display='none'" />`
+          : `<span class="page-avatar-fallback" style="display:inline-flex;width:36px;height:36px;border-radius:50%;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;background:#1e2a44;border:1px solid var(--border);margin-right:.55rem;vertical-align:middle">${escapeHtml(initial)}</span>`;
         return `
         <tr class="clickable" data-id="${p.id}">
           <td>
-            <strong>${escapeHtml(p.name || "—")}</strong>
-            <div class="muted" style="font-size:.72rem;margin-top:.15rem"><code>${escapeHtml(p.page_id)}</code></div>
+            <div style="display:flex;align-items:center;gap:.15rem;min-width:0">
+              ${avatar}
+              <div style="min-width:0">
+                <strong>${escapeHtml(p.name || "—")}</strong>
+                <div class="muted" style="font-size:.72rem;margin-top:.15rem">Page ID <code>${escapeHtml(p.page_id)}</code></div>
+              </div>
+            </div>
           </td>
           <td class="num">${fmtNum(p.followers_count ?? p.fan_count)}</td>
           <td class="num ${g.cls}">${escapeHtml(g.text)}</td>

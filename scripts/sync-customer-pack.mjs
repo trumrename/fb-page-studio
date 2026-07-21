@@ -10,7 +10,8 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { PROJECT_ROOT as root, packCustomerDir } from "./deliver-paths.mjs";
+import { PROJECT_ROOT as root, packCustomerDir, archiveVaultDir } from "./deliver-paths.mjs";
+import { archiveOldInDir } from "./archive-old-builds.mjs";
 
 const out = packCustomerDir();
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -37,6 +38,15 @@ const srcEnv = {
 
 fs.mkdirSync(out, { recursive: true });
 fs.mkdirSync(path.join(out, "media-sample", "captions"), { recursive: true });
+
+// Gom EXE/ZIP bản cũ → Luu-Tru-Ban-Cu (chỉ giữ bản package.json)
+{
+  const pruned = archiveOldInDir(out, { currentVersion: pkg.version });
+  if (pruned.moved.length) {
+    console.log(`[pack-customer] Đã gom bản cũ → ${archiveVaultDir()}`);
+    for (const line of pruned.moved) console.log("  ", line);
+  }
+}
 
 // Safety: never ship secrets that may have been copied in by mistake
 const forbidden = [

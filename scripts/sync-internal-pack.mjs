@@ -7,7 +7,8 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { PROJECT_ROOT as root, packInternalDir, packCustomerDir } from "./deliver-paths.mjs";
+import { PROJECT_ROOT as root, packInternalDir, packCustomerDir, archiveVaultDir } from "./deliver-paths.mjs";
+import { archiveOldInDir } from "./archive-old-builds.mjs";
 
 const out = packInternalDir();
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -15,6 +16,15 @@ const ver = pkg.version;
 const exeName = `FB-Page-Studio-Desktop-v${ver}.exe`;
 
 fs.mkdirSync(out, { recursive: true });
+
+// Trước khi copy: gom EXE/ZIP bản cũ → 1 ổ Luu-Tru-Ban-Cu (chỉ giữ bản mới)
+{
+  const pruned = archiveOldInDir(out, { currentVersion: ver });
+  if (pruned.moved.length) {
+    console.log(`[pack-internal] Đã gom bản cũ → ${archiveVaultDir()}`);
+    for (const line of pruned.moved) console.log("  ", line);
+  }
+}
 
 function readEnvFile(p) {
   const map = {};
@@ -101,11 +111,30 @@ const exeSrc = [
 ].find((p) => fs.existsSync(p));
 
 if (exeSrc) {
+  // Xóa mọi Desktop*.exe còn sót (kể cả unversioned) rồi chỉ để 1 file bản mới
+  for (const entry of fs.readdirSync(out)) {
+    if (/^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe(?:\.sha256\.txt)?$/i.test(entry)) {
+      const p = path.join(out, entry);
+      if (entry === exeName || entry === `${exeName}.sha256.txt`) continue;
+      try {
+        const dest = path.join(archiveVaultDir(), entry);
+        fs.mkdirSync(archiveVaultDir(), { recursive: true });
+        if (fs.existsSync(dest)) fs.unlinkSync(p);
+        else fs.renameSync(p, dest);
+      } catch {
+        try {
+          fs.unlinkSync(p);
+        } catch {
+          /* locked — user may be running old EXE */
+        }
+      }
+    }
+  }
   const dest = path.join(out, exeName);
   fs.copyFileSync(exeSrc, dest);
   const hash = crypto.createHash("sha256").update(fs.readFileSync(dest)).digest("hex");
   fs.writeFileSync(path.join(out, `${exeName}.sha256.txt`), `${hash}  ${exeName}\n`);
-  console.log("EXE →", dest);
+  console.log("EXE →", dest, `(chỉ giữ v${ver})`);
 } else {
   console.warn("⚠ Chưa có EXE — chạy npm run build:desktop rồi sync lại");
 }
@@ -117,8 +146,15 @@ fs.writeFileSync(
     "====================",
     "- Da nhung .env (CO App Secret) - chi may tin cay.",
     "- OAUTH_RELAY=1 - Connect FB khong Ngrok (can may server pack-server).",
-    "- Mo EXE -> Connect Facebook. Folder anh local.",
+    `- Mo DUNG 1 file: ${exeName}`,
     "- KHONG public, KHONG dua khach ngoai, KHONG commit git.",
+    "",
+    "CHI GIU 1 EXE ban moi nhat trong folder nay.",
+    "Ban cu (v1.2.25, v1.2.27, ...) tu dong vao:",
+    "  Tong Hop Tool\\Luu-Tru-Ban-Cu\\",
+    "Neu con 2 EXE: dong app dang chay roi chay lai:",
+    "  node scripts/archive-old-builds.mjs --dir \"Tong Hop Tool/pack-internal\"",
+    "  (hoac npm run pack:internal)",
     "",
     "Can co may server (pack-server) dang chay khi Connect:",
     "  CHAY-SERVER-TAT-CA.bat",
@@ -146,6 +182,7 @@ fs.writeFileSync(
     "Nội dung pack-internal (CÓ SECRET):",
     ...fs.readdirSync(out).sort().map((f) => ` - ${f}`),
     "",
+    "Chỉ 1 EXE bản mới nhất. Bản cũ: Tổng Hợp Tool\\Luu-Tru-Ban-Cu\\",
     "CẤM: public GitHub Release, gửi khách ngoài, share Zalo lung tung.",
     "",
   ].join("\n"),

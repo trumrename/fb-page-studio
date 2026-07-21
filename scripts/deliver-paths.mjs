@@ -18,3 +18,5 @@ export const packDevDir = () => path.join(DELIVER_ROOT, "pack-dev");
 export const packServerDir = () => path.join(DELIVER_ROOT, "pack-server");
 export const releaseAssetsDir = () => path.join(DELIVER_ROOT, "release-assets");
 export const adminDir = () => path.join(DELIVER_ROOT, "Admin-Quan-Ly");
+/** Một ổ gom mọi EXE/ZIP phiên bản cũ (không rải trong pack-*) */
+export const archiveVaultDir = () => path.join(DELIVER_ROOT, "Luu-Tru-Ban-Cu");

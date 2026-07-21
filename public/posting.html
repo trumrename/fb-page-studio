@@ -117,10 +117,15 @@
               <span class="hint">tick hoặc bấm dòng Page</span>
             </h2>
             <div class="panel-body tight">
-              <div class="actions" style="margin:0 0 .5rem;padding:0 .35rem">
+              <div class="actions" style="margin:0 0 .5rem;padding:0 .35rem;flex-wrap:wrap;align-items:center">
                 <button type="button" class="btn-ghost btn-sm" id="btnSelAll">Chọn tất cả</button>
                 <button type="button" class="btn-ghost btn-sm" id="btnSelNone">Bỏ chọn</button>
+                <input type="search" id="pagePickFilter" placeholder="Lọc tên / Page ID / follow…"
+                  style="flex:1;min-width:10rem;margin:0" autocomplete="off" />
               </div>
+              <p class="muted" style="margin:0 .35rem .45rem;font-size:.78rem">
+                Mỗi dòng: <b>avatar</b> · tên · <b>Page ID</b> · <b>số follow</b> — tick để chạy.
+              </p>
               <div class="panel-body scroll tight" id="pageList" style="max-height:62vh;padding:0.35rem">
                 <div class="muted">Loading…</div>
               </div>
@@ -713,6 +718,35 @@
       activeWorkspaceView = workspaceState.active_view || "configure";
     }
 
+    function fmtNum(n) {
+      if (n == null || n === "") return null;
+      const v = Number(n);
+      if (!Number.isFinite(v)) return null;
+      return v.toLocaleString("vi-VN");
+    }
+
+    function pageFollowLabel(p) {
+      const n = p?.followers_count ?? p?.fan_count;
+      const s = fmtNum(n);
+      if (s == null) {
+        return p?.enrich_error
+          ? `<span class="page-follow missing" title="${esc(p.enrich_error)}">Chưa có follow</span>`
+          : `<span class="page-follow missing">Chưa có follow</span>`;
+      }
+      return `<span class="page-follow" title="followers">${s} follow</span>`;
+    }
+
+    function pageAvatarHtml(p) {
+      const url = safeHttpUrl(p?.picture_url);
+      const initial = String(p?.name || "?").trim().charAt(0).toUpperCase() || "?";
+      if (url) {
+        return `<img class="page-avatar" src="${esc(url)}" alt="" loading="lazy"
+          onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='inline-flex')" />
+          <span class="page-avatar-fallback" style="display:none">${esc(initial)}</span>`;
+      }
+      return `<span class="page-avatar-fallback">${esc(initial)}</span>`;
+    }
+
     function renderSelectionSummary() {
       const chosen = pages.filter((page) => selectedPageSet.has(Number(page.id)));
       const text = $("selectionSummaryText");
@@ -723,9 +757,12 @@
         text.innerHTML = `<span class="fail">Chưa chọn Page — chưa thể chạy hoặc hẹn lịch.</span>`;
         return;
       }
-      const names = chosen.slice(0, 4).map((p) => esc(p.name)).join(", ");
-      const more = chosen.length > 4 ? ` · +${chosen.length - 4} Page khác` : "";
-      text.innerHTML = `<span class="ok"><b>${chosen.length} Page</b></span> · ${names}${more}`;
+      const bits = chosen.slice(0, 3).map((p) => {
+        const fl = fmtNum(p.followers_count ?? p.fan_count);
+        return `${esc(p.name)} <code style="font-size:.72rem">${esc(p.page_id || "")}</code>${fl != null ? ` · ${fl}` : ""}`;
+      });
+      const more = chosen.length > 3 ? ` · +${chosen.length - 3} Page khác` : "";
+      text.innerHTML = `<span class="ok"><b>${chosen.length} Page</b></span> · ${bits.join(" · ")}${more}`;
     }
 
     function setWorkspaceView(view, { save = true } = {}) {
@@ -826,71 +863,25 @@
       }).join("");
     }
 
-    async function loadPages() {
-      const data = await api("/api/posting/pages");
-      pages = data.pages || [];
-      const el = $("pageList");
-      if (!pages.length) {
-        el.innerHTML = `<p class="muted" style="padding:1rem">Chưa có page. <a href="/">Connect + sync</a>.</p>`;
-        return;
-      }
-      const activeIds = new Set(pages.map((p) => Number(p.id)));
-      const beforeSize = selectedPageSet.size;
-      selectedPageSet = new Set([...selectedPageSet].filter((id) => activeIds.has(id)));
-      if (selectedPageSet.size !== beforeSize) queueWorkspaceSave();
-      const q = Number(new URLSearchParams(location.search).get("page") || 0);
-      if (q && activeIds.has(q)) selectedId = q;
-      if (!activeIds.has(Number(selectedId))) {
-        selectedId = selectedPageIds()[0] || Number(pages[0].id);
-      }
-      const checked = selectedPageSet;
-      const groups = new Map();
-      for (const p of pages) {
-        const key = String(p.account_id || 0);
-        if (!groups.has(key)) groups.set(key, {
-          id: p.account_id,
-          name: p.account_name || "Profile",
-          appKey: p.meta_app_key || "app1",
-          appName: p.meta_app_name || p.meta_app_key || "App 1",
-          appId: p.meta_app_id || "",
-          pages: [],
-        });
-        groups.get(key).pages.push(p);
-      }
-      el.innerHTML = [...groups.values()].map((g) => `
-        <details class="account-group" ${g.pages.some((p) => p.id === selectedId) ? "open" : ""}
-          style="margin-bottom:.45rem;border:1px solid var(--border);border-radius:10px;overflow:hidden">
-          <summary style="cursor:pointer;padding:.7rem .65rem;font-weight:700;display:flex;align-items:center;gap:.55rem">
-            <input type="checkbox" class="acc-check" data-account-id="${g.id}" onclick="event.stopPropagation()" />
-            <span style="flex:1">👤 ${esc(g.name)} <span class="badge live">${esc(g.appName)} · ${esc(g.appKey)}${g.appId ? " · ID " + esc(g.appId) : ""}</span></span>
-            <span class="badge">${g.pages.length} Page</span>
-          </summary>
-          <div style="padding:.25rem .35rem .45rem">
-          ${g.pages.map((p) => `
-        <div class="page-item ${selectedId === p.id ? "active" : ""} ${checked.has(p.id) ? "selected" : ""}" data-id="${p.id}">
-          <input type="checkbox" class="pg-check" value="${p.id}" data-account-id="${p.account_id}" ${checked.has(p.id) ? "checked" : ""}
-            onclick="event.stopPropagation()" />
-          <div style="min-width:0;flex:1">
-            <strong>${esc(p.name)}</strong>
-            <div class="sub">
-              <span class="badge ${p.enabled ? "on" : "off"}">${p.enabled ? "ON" : "OFF"}</span>
-              · ${p.posts_today || 0}/${p.max_posts_per_day || "?"} today
-              · ${p.interval_minutes || "?"}m
-            </div>
-            <div class="page-tools">
-              <button type="button" class="btn-warn btn-sm btn-active" data-id="${p.id}">⏱ Giờ</button>
-              <button type="button" class="btn-ghost btn-sm btn-fb-sched" data-id="${p.id}">FB sched</button>
-            </div>
-            <div class="active-box muted" id="active-${p.id}" style="margin-top:.35rem"></div>
-          </div>
-        </div>
-          `).join("")}
-          </div>
-        </details>
-      `).join("");
+    function pageMatchesFilter(p, raw) {
+      const q = String(raw || "").trim().toLowerCase();
+      if (!q) return true;
+      const fl = String(p.followers_count ?? p.fan_count ?? "");
+      return (
+        String(p.name || "").toLowerCase().includes(q) ||
+        String(p.page_id || "").toLowerCase().includes(q) ||
+        String(p.account_name || "").toLowerCase().includes(q) ||
+        fl.includes(q) ||
+        fl.replace(/\D/g, "").includes(q.replace(/\D/g, ""))
+      );
+    }
 
+    function bindPageListEvents(el) {
+      const checked = selectedPageSet;
       el.querySelectorAll(".acc-check").forEach((box) => {
-        const ids = pages.filter((p) => p.account_id === Number(box.dataset.accountId)).map((p) => p.id);
+        const ids = pages
+          .filter((p) => p.account_id === Number(box.dataset.accountId))
+          .map((p) => p.id);
         box.checked = ids.length > 0 && ids.every((id) => checked.has(id));
         box.onchange = () => {
           ids.forEach((id) => {
@@ -953,7 +944,8 @@
               box.innerHTML = "<i>FB: chưa có scheduled_posts</i>";
               return;
             }
-            box.innerHTML = `<b>FB scheduled (${r.posts.length}):</b><br/>` +
+            box.innerHTML =
+              `<b>FB scheduled (${r.posts.length}):</b><br/>` +
               r.posts.slice(0, 8).map((p) => {
                 const t = p.scheduled_publish_time
                   ? new Date(Number(p.scheduled_publish_time) * 1000).toISOString()
@@ -966,6 +958,99 @@
         };
       });
       renderSelectionSummary();
+    }
+
+    function renderPageList() {
+      const el = $("pageList");
+      if (!el) return;
+      if (!pages.length) {
+        el.innerHTML = `<p class="muted" style="padding:1rem">Chưa có page. <a href="/">Connect + sync</a>.</p>`;
+        renderSelectionSummary();
+        return;
+      }
+      const filterQ = $("pagePickFilter")?.value || "";
+      const filtered = pages.filter((p) => pageMatchesFilter(p, filterQ));
+      if (!filtered.length) {
+        el.innerHTML = `<p class="muted" style="padding:1rem">Không khớp «${esc(filterQ)}». Thử tên, Page ID hoặc số follow.</p>`;
+        renderSelectionSummary();
+        return;
+      }
+      const checked = selectedPageSet;
+      const groups = new Map();
+      for (const p of filtered) {
+        const key = String(p.account_id || 0);
+        if (!groups.has(key)) {
+          groups.set(key, {
+            id: p.account_id,
+            name: p.account_name || "Profile",
+            appKey: p.meta_app_key || "app1",
+            appName: p.meta_app_name || p.meta_app_key || "App 1",
+            appId: p.meta_app_id || "",
+            pages: [],
+          });
+        }
+        groups.get(key).pages.push(p);
+      }
+      el.innerHTML = [...groups.values()]
+        .map((g) => {
+          const open =
+            !filterQ ||
+            g.pages.some((p) => p.id === selectedId) ||
+            g.pages.some((p) => checked.has(p.id));
+          return `
+        <details class="account-group" ${open ? "open" : ""}
+          style="margin-bottom:.45rem;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+          <summary style="cursor:pointer;padding:.7rem .65rem;font-weight:700;display:flex;align-items:center;gap:.55rem">
+            <input type="checkbox" class="acc-check" data-account-id="${g.id}" onclick="event.stopPropagation()" />
+            <span style="flex:1">👤 ${esc(g.name)} <span class="badge live">${esc(g.appName)} · ${esc(g.appKey)}${g.appId ? " · ID " + esc(g.appId) : ""}</span></span>
+            <span class="badge">${g.pages.length} Page</span>
+          </summary>
+          <div style="padding:.25rem .35rem .45rem">
+          ${g.pages
+            .map(
+              (p) => `
+        <div class="page-item ${selectedId === p.id ? "active" : ""} ${checked.has(p.id) ? "selected" : ""}" data-id="${p.id}"
+          style="align-items:flex-start">
+          <input type="checkbox" class="pg-check" value="${p.id}" data-account-id="${p.account_id}" ${checked.has(p.id) ? "checked" : ""}
+            onclick="event.stopPropagation()" style="margin-top:.55rem" />
+          ${pageAvatarHtml(p)}
+          <div style="min-width:0;flex:1">
+            <strong title="${esc(p.name)}">${esc(p.name)}</strong>
+            <div class="page-meta">
+              <span title="Facebook Page ID">ID <code>${esc(p.page_id || "—")}</code></span>
+              ${pageFollowLabel(p)}
+              <span class="badge ${p.enabled ? "on" : "off"}">${p.enabled ? "ON" : "OFF"}</span>
+              <span>${p.posts_today || 0}/${p.max_posts_per_day || "?"} today · ${p.interval_minutes || "?"}m</span>
+            </div>
+            <div class="page-tools" style="margin-top:.35rem">
+              <button type="button" class="btn-warn btn-sm btn-active" data-id="${p.id}">⏱ Giờ</button>
+              <button type="button" class="btn-ghost btn-sm btn-fb-sched" data-id="${p.id}">FB sched</button>
+            </div>
+            <div class="active-box muted" id="active-${p.id}" style="margin-top:.35rem"></div>
+          </div>
+        </div>`
+            )
+            .join("")}
+          </div>
+        </details>`;
+        })
+        .join("");
+      bindPageListEvents(el);
+    }
+
+    async function loadPages() {
+      const data = await api("/api/posting/pages");
+      pages = data.pages || [];
+      const activeIds = new Set(pages.map((p) => Number(p.id)));
+      const beforeSize = selectedPageSet.size;
+      selectedPageSet = new Set([...selectedPageSet].filter((id) => activeIds.has(id)));
+      if (selectedPageSet.size !== beforeSize) queueWorkspaceSave();
+      const q = Number(new URLSearchParams(location.search).get("page") || 0);
+      if (q && activeIds.has(q)) selectedId = q;
+      if (pages.length && !activeIds.has(Number(selectedId))) {
+        selectedId = selectedPageIds()[0] || Number(pages[0].id);
+      }
+      renderPageList();
     }
 
     async function loadActiveTimes(id, force) {
@@ -1472,21 +1557,21 @@
       flash(`Đã lấy giờ ${ids.length} page (preferred / preset)`, true);
     });
     $("btnSelAll").onclick = () => {
-      pages.forEach((page) => selectedPageSet.add(Number(page.id)));
-      document.querySelectorAll(".pg-check,.acc-check").forEach((c) => (c.checked = true));
-      document.querySelectorAll(".page-item").forEach((row) => row.classList.add("selected"));
-      renderSelectionSummary();
+      const q = $("pagePickFilter")?.value || "";
+      pages.filter((p) => pageMatchesFilter(p, q)).forEach((page) => selectedPageSet.add(Number(page.id)));
+      renderPageList();
       invalidateRunNowPlan();
       queueWorkspaceSave();
     };
     $("btnSelNone").onclick = () => {
       selectedPageSet.clear();
-      document.querySelectorAll(".pg-check,.acc-check").forEach((c) => (c.checked = false));
-      document.querySelectorAll(".page-item").forEach((row) => row.classList.remove("selected"));
-      renderSelectionSummary();
+      renderPageList();
       invalidateRunNowPlan();
       queueWorkspaceSave();
     };
+    $("pagePickFilter")?.addEventListener("input", () => {
+      renderPageList();
+    });
 
     (() => {
       const d = new Date(Date.now() + 2 * 60 * 60 * 1000);

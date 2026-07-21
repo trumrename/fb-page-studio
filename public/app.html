@@ -413,18 +413,30 @@
         el.innerHTML = `<div class="empty">Chưa có page. <a href="/index.html">Connect Facebook</a></div>`;
         return;
       }
-      el.innerHTML = pages.map((p) => `
+      el.innerHTML = pages.map((p) => {
+        const pic = safeHttpUrl(p.picture_url);
+        const initial = String(p.name || "?").trim().charAt(0).toUpperCase() || "?";
+        const fl = p.followers_count != null || p.fan_count != null
+          ? Number(p.followers_count ?? p.fan_count).toLocaleString("vi-VN") + " follow"
+          : "Chưa có follow";
+        const avatar = pic
+          ? `<img class="page-avatar" src="${esc(pic)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='inline-flex')" /><span class="page-avatar-fallback" style="display:none">${esc(initial)}</span>`
+          : `<span class="page-avatar-fallback">${esc(initial)}</span>`;
+        return `
         <label class="page-item" style="cursor:pointer;display:flex;gap:.65rem;align-items:flex-start">
-          <input type="checkbox" class="pg" value="${p.id}" style="margin-top:.35rem" />
-          <div>
+          <input type="checkbox" class="pg" value="${p.id}" style="margin-top:.55rem" />
+          ${avatar}
+          <div style="min-width:0;flex:1">
             <strong>${esc(p.name)}</strong>
-            <div class="sub">
+            <div class="page-meta">
+              <span>ID <code>${esc(p.page_id || "—")}</code></span>
+              <span class="page-follow">${esc(fl)}</span>
               <span class="badge ${p.enabled ? "on" : "off"}">${p.enabled ? "sched ON" : "OFF"}</span>
-              · ${p.posts_today || 0}/${p.max_posts_per_day || "?"} today
+              <span>${p.posts_today || 0}/${p.max_posts_per_day || "?"} today</span>
             </div>
           </div>
-        </label>
-      `).join("");
+        </label>`;
+      }).join("");
       renderPageOperations();
     }
 

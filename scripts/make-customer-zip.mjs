@@ -8,7 +8,8 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { spawnSync } from "child_process";
-import { PROJECT_ROOT as root, packCustomerDir, releaseAssetsDir } from "./deliver-paths.mjs";
+import { PROJECT_ROOT as root, packCustomerDir, releaseAssetsDir, archiveVaultDir } from "./deliver-paths.mjs";
+import { archiveOldInDir } from "./archive-old-builds.mjs";
 
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const version = pkg.version;
@@ -33,18 +34,11 @@ for (const name of forbidden) {
   }
 }
 
-// Remove old zips in pack-customer
-for (const f of fs.readdirSync(packDir)) {
-  if (/\.zip$/i.test(f)) {
-    try {
-      fs.unlinkSync(path.join(packDir, f));
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
+// Gom ZIP/EXE bản cũ trong pack-customer + release-assets → 1 ổ
+archiveOldInDir(packDir, { currentVersion: version });
 fs.mkdirSync(releaseDir, { recursive: true });
+archiveOldInDir(releaseDir, { currentVersion: version });
+console.log("Archive vault (bản cũ):", archiveVaultDir());
 
 // Prefer PowerShell Compress-Archive (Windows)
 const ps = `
