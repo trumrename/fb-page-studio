@@ -20,8 +20,12 @@ function check(name, cond, detail = "") {
 
 console.log("\n========== STATIC REQUIREMENT MAP ==========\n");
 
+const deliverRoot = path.join(root, "Tổng Hợp Tool");
 for (const f of ["pack-customer/.env", "pack-customer/data", "pack-customer/src", "pack-customer/desktop-startup.log"]) {
-  check(`customer pack excludes ${f.replace("pack-customer/", "")}`, !fs.existsSync(path.join(root, f)));
+  check(
+    `customer pack excludes ${f.replace("pack-customer/", "")}`,
+    !fs.existsSync(path.join(deliverRoot, f))
+  );
 }
 
 const need = [
@@ -147,7 +151,7 @@ check("Ngrok uses current --url flag and explains busy fixed domain", ngrokManag
 check("Ngrok reuses exact local tunnel on the same port", ngrokManager.includes("inspectLocalTunnel") && ngrokManager.includes("local?.same_port") && ngrokManager.includes("đã dùng lại tunnel cục bộ"));
 check("Ngrok restart cannot lose the new child process", /await stopNgrok\(\);\s*stopRequested = false/.test(ngrokManager) && ngrokManager.includes("child === proc"));
 check("Ngrok shuts down through Electron IPC", read("src/server.js").includes('msg?.type === "shutdown"') && read("electron/main.cjs").includes("serverProc.send({ type: \"shutdown\" })"));
-const customerEnvEx = read("pack-customer/.env.example");
+const customerEnvEx = read(path.join("Tổng Hợp Tool", "pack-customer", ".env.example"));
 check(
   "customer env is public-safe (relay, no secret values)",
   customerEnvEx.includes("OAUTH_RELAY=1") &&
@@ -162,8 +166,8 @@ check(
   // Ngrok token helper BATs removed from UI path; if reintroduced they must not prompt tokens or wipe disks.
   !fs.existsSync(path.join(root, "CAI-NGROK.bat")) &&
     !fs.existsSync(path.join(root, "XOA-BAN-HONG.bat")) &&
-    (!fs.existsSync(path.join(root, "pack-dev/CHAY-NGROK-DOMAIN-CO-DINH.bat")) ||
-      !read("pack-dev/CHAY-NGROK-DOMAIN-CO-DINH.bat").includes("set /p"))
+    (!fs.existsSync(path.join(deliverRoot, "pack-dev/CHAY-NGROK-DOMAIN-CO-DINH.bat")) ||
+      !read(path.join("Tổng Hợp Tool", "pack-dev/CHAY-NGROK-DOMAIN-CO-DINH.bat")).includes("set /p"))
 );
 check("scheduler prevents overlapping ticks", server.includes("schedulerRunning"));
 check("overdue Facebook schedules reconcile automatically", server.includes("runScheduledReconcile") && server.includes("RECONCILE_MS"));

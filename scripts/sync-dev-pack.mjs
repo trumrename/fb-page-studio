@@ -5,10 +5,9 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { fileURLToPath } from "url";
+import { PROJECT_ROOT as root, packDevDir } from "./deliver-paths.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const out = path.join(root, "pack-dev");
+const out = packDevDir();
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 
 fs.mkdirSync(out, { recursive: true });
@@ -67,7 +66,7 @@ fs.writeFileSync(
     ...files.map((f) => ` - ${f}`),
     "",
     "Source / keys / data thật nằm ở project root, không copy full secret vào đây.",
-    "Admin cấp key: Admin-Quan-Ly\\MENU-ADMIN.bat",
+    "Admin cấp key: Tổng Hợp Tool\\Admin-Quan-Ly\\MENU-ADMIN.bat",
     "Lưu trữ bản cũ: Luu-Tru-Ban-Cu\\",
     "",
   ].join("\n"),

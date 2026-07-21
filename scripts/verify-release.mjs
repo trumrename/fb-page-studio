@@ -48,9 +48,10 @@ const lock = json(path.join(root, "package-lock.json"));
 const exe = path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe");
 const versionedExe = path.join(root, "dist-desktop-oauth", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
 const checksumFile = `${versionedExe}.sha256.txt`;
-const customerExe = path.join(root, "pack-customer", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
+const deliverRoot = path.join(root, "Tổng Hợp Tool");
+const customerExe = path.join(deliverRoot, "pack-customer", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
 const appAsar = path.join(root, "dist-desktop-oauth", "win-unpacked", "resources", "app.asar");
-const customerVersionFile = path.join(root, "pack-customer", "VERSION.txt");
+const customerVersionFile = path.join(deliverRoot, "pack-customer", "VERSION.txt");
 
 assert(/^\d+\.\d+\.\d+$/.test(pkg.version), "package version is strict semver", pkg.version);
 assert(lock.version === pkg.version && lock.packages?.[""]?.version === pkg.version, "package-lock versions match package.json");
@@ -97,8 +98,17 @@ if (fs.existsSync(exe) && fs.existsSync(versionedExe)) {
   assert(checksumText.startsWith(sha256(versionedExe)), "SHA-256 sidecar matches versioned asset");
 }
 
-for (const rel of ["pack-customer/.env", "pack-customer/data", "pack-customer/src", "pack-customer/desktop-startup.log", "pack-customer/keys/license-private.pem"]) {
-  assert(!fs.existsSync(path.join(root, rel)), `customer pack excludes ${rel.replace("pack-customer/", "")}`);
+for (const rel of [
+  "pack-customer/.env",
+  "pack-customer/data",
+  "pack-customer/src",
+  "pack-customer/desktop-startup.log",
+  "pack-customer/keys/license-private.pem",
+]) {
+  assert(
+    !fs.existsSync(path.join(deliverRoot, rel)),
+    `customer pack excludes ${rel.replace("pack-customer/", "")}`
+  );
 }
 
 if (!process.argv.includes("--offline")) {

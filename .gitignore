@@ -18,18 +18,28 @@ FB-Page-Studio-App/
 _test-server.*
 .tmp-ui-test/
 _clear_backoff.mjs
-# Gói khách: giữ README/.env.example trên git, không commit file .exe lớn
+# --- Tổng Hợp Tool (gói giao / admin) ---
+# Khách: giữ README/.env.example trên git, không commit EXE/ZIP
+Tổng Hợp Tool/pack-customer/*.exe
+Tổng Hợp Tool/pack-customer/**/*.exe
+Tổng Hợp Tool/pack-customer/*.zip
+Tổng Hợp Tool/pack-dev/*.exe
+Tổng Hợp Tool/pack-dev/**/*.exe
+# Nội bộ CÓ SECRET + release ZIP
+Tổng Hợp Tool/pack-internal/
+Tổng Hợp Tool/release-assets/
+# Legacy paths (nếu còn sót sau chuyển)
 pack-customer/*.exe
 pack-customer/**/*.exe
 pack-customer/*.zip
 pack-dev/*.exe
 pack-dev/**/*.exe
-# Gói nội bộ CÓ SECRET — không commit
 pack-internal/
-oauth-relay/.env
 release-assets/
+oauth-relay/.env
 Luu-Tru-Ban-Cu/
 license.backup.json
 
 # Goi server (co the co .env sau cai)
 pack-server/
+Tổng Hợp Tool/pack-server/

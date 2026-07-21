@@ -4,8 +4,11 @@
 
 | Gói | Path | Mục đích |
 |-----|------|----------|
-| **Gốc DEV** | `D:\fb-page-poster\` + `pack-dev\` | Code, fix, build, cấp key |
-| **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` | Chỉ file giao khách |
+| **Gốc DEV** | `D:\fb-page-poster\` | Code, fix, build |
+| **Tổng Hợp Tool** | `D:\fb-page-poster\Tổng Hợp Tool\` | Admin + khách + nội bộ + dev + release ZIP |
+| **Gói KHÁCH** | `Tổng Hợp Tool\pack-customer\` | Chỉ file giao khách |
+| **Gói NỘI BỘ** | `Tổng Hợp Tool\pack-internal\` | EXE + secret (tin cậy) |
+| **Gói DEV** | `Tổng Hợp Tool\pack-dev\` | Test admin |
 
 Khi **fix tool** hoặc **build**: cập nhật logic trên gốc DEV, rồi **đồng bộ pack-customer** (`node scripts/sync-customer-pack.mjs`).
 

@@ -8,15 +8,14 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { spawnSync } from "child_process";
-import { fileURLToPath } from "url";
+import { PROJECT_ROOT as root, packCustomerDir, releaseAssetsDir } from "./deliver-paths.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const version = pkg.version;
-const packDir = path.join(root, "pack-customer");
+const packDir = packCustomerDir();
 const zipName = `FB-Page-Studio-v${version}-Windows.zip`;
 const zipOut = path.join(packDir, zipName);
-const releaseDir = path.join(root, "release-assets");
+const releaseDir = releaseAssetsDir();
 const releaseZip = path.join(releaseDir, zipName);
 
 const exeName = `FB-Page-Studio-Desktop-v${version}.exe`;

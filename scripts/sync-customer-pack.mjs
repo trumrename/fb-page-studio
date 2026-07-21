@@ -10,10 +10,9 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { fileURLToPath } from "url";
+import { PROJECT_ROOT as root, packCustomerDir } from "./deliver-paths.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const out = path.join(root, "pack-customer");
+const out = packCustomerDir();
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const customerAssetName = `FB-Page-Studio-Desktop-v${pkg.version}.exe`;
 

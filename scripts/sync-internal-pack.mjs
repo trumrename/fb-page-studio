@@ -7,10 +7,9 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { fileURLToPath } from "url";
+import { PROJECT_ROOT as root, packInternalDir, packCustomerDir } from "./deliver-paths.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const out = path.join(root, "pack-internal");
+const out = packInternalDir();
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const ver = pkg.version;
 const exeName = `FB-Page-Studio-Desktop-v${ver}.exe`;
@@ -98,7 +97,7 @@ fs.writeFileSync(path.join(out, ".env"), lines.join("\n"), "utf8");
 const exeSrc = [
   path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe"),
   path.join(root, "dist-desktop-oauth", exeName),
-  path.join(root, "pack-customer", exeName),
+  path.join(packCustomerDir(), exeName),
 ].find((p) => fs.existsSync(p));
 
 if (exeSrc) {
@@ -156,8 +155,13 @@ fs.writeFileSync(
 // Ensure gitignore
 const gi = path.join(root, ".gitignore");
 let giText = fs.existsSync(gi) ? fs.readFileSync(gi, "utf8") : "";
-if (!giText.includes("pack-internal/")) {
-  fs.appendFileSync(gi, "\n# Gói nội bộ có secret\npack-internal/\npack-internal/**\n");
+if (!giText.includes("pack-internal/") && !giText.includes("Tổng Hợp Tool")) {
+  fs.appendFileSync(
+    gi,
+    "\n# Gói giao (Tổng Hợp Tool) — nội bộ có secret\n" +
+      "Tổng Hợp Tool/pack-internal/\n" +
+      "Tổng Hợp Tool/release-assets/\n"
+  );
 }
 
 console.log("pack-internal sẵn sàng:", out);
