@@ -418,9 +418,14 @@
         const pid = String(p.page_id || "").trim();
         const pic = stored || (/^\d{5,}$/.test(pid) ? `https://graph.facebook.com/${pid}/picture?type=large` : "");
         const initial = String(p.name || "?").trim().charAt(0).toUpperCase() || "?";
-        const fl = p.followers_count != null || p.fan_count != null
-          ? Number(p.followers_count ?? p.fan_count).toLocaleString("vi-VN") + " follow"
-          : "Chưa có follow";
+        const flNum =
+          p.followers_count != null || p.fan_count != null
+            ? Number(p.followers_count ?? p.fan_count)
+            : null;
+        const flOk = Number.isFinite(flNum);
+        const flLabel = flOk
+          ? flNum.toLocaleString("vi-VN") + " follow"
+          : "Follow —";
         const avatar = pic
           ? `<img class="page-avatar" src="${esc(pic)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='inline-flex')" /><span class="page-avatar-fallback" style="display:none">${esc(initial)}</span>`
           : `<span class="page-avatar-fallback">${esc(initial)}</span>`;
@@ -429,10 +434,12 @@
           <input type="checkbox" class="pg" value="${p.id}" style="margin-top:.55rem" />
           ${avatar}
           <div style="min-width:0;flex:1">
-            <strong>${esc(p.name)}</strong>
+            <div class="page-title-row">
+              <strong>${esc(p.name)}</strong>
+              <span class="badge page-follow-badge ${flOk ? "" : "missing"}">${esc(flLabel)}</span>
+            </div>
             <div class="page-meta">
               <span>ID <code>${esc(p.page_id || "—")}</code></span>
-              <span class="page-follow">${esc(fl)}</span>
               <span class="badge ${p.enabled ? "on" : "off"}">${p.enabled ? "sched ON" : "OFF"}</span>
               <span>${p.posts_today || 0}/${p.max_posts_per_day || "?"} today</span>
             </div>

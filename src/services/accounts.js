@@ -221,7 +221,7 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
 
   let pages;
   try {
-    pages = await getAllPages(userToken, { appSecret });
+    pages = await getAllPages(userToken, { appSecret, metaAppKey: metaKey });
   } catch (e) {
     db.prepare(
       `UPDATE fb_accounts SET status = 'error', last_error = ?, updated_at = datetime('now') WHERE id = ?`

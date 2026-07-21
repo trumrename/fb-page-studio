@@ -130,9 +130,12 @@ export async function enrichPageById(pageRowId, opts = {}) {
   const db = getDb();
   const row = db
     .prepare(
-      `SELECT id, account_id, page_id, page_token_enc, name, enriched_at,
-              followers_count, picture_url
-       FROM fb_pages WHERE id = ?`
+      `SELECT p.id, p.account_id, p.page_id, p.page_token_enc, p.name, p.enriched_at,
+              p.followers_count, p.picture_url,
+              a.meta_app_key AS meta_app_key
+       FROM fb_pages p
+       LEFT JOIN fb_accounts a ON a.id = p.account_id
+       WHERE p.id = ?`
     )
     .get(pageRowId);
   if (!row) throw new Error("Page not found");
@@ -163,10 +166,12 @@ export async function enrichPageById(pageRowId, opts = {}) {
   const pageToken = decryptToken(row.page_token_enc);
   if (!pageToken) throw new Error("No page token");
 
+  const metaAppKey = String(row.meta_app_key || opts.metaAppKey || "app1");
   const errors = [];
   let profile;
   try {
-    profile = await getPageProfile(row.page_id, pageToken);
+    // Phải đúng App secret (app1/app2) — sai secret → Meta báo require/invalid appsecret_proof
+    profile = await getPageProfile(row.page_id, pageToken, { metaAppKey });
   } catch (e) {
     db.prepare(
       `UPDATE fb_pages SET enrich_error = ?, enriched_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`

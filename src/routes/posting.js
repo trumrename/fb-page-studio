@@ -312,8 +312,28 @@ router.get("/pages", (_req, res) => {
     pages: pages.map((p) => {
       const cfg = getPagePostConfig(p.id);
       const counts = todayCounts.get(Number(p.id)) || {};
+      // Ép số rõ ràng — UI chọn page đọc đúng field (tránh null/object lạ)
+      const followers =
+        p.followers_count != null && p.followers_count !== ""
+          ? Number(p.followers_count)
+          : null;
+      const fans =
+        p.fan_count != null && p.fan_count !== "" ? Number(p.fan_count) : null;
       return {
-        ...p,
+        id: Number(p.id),
+        page_id: p.page_id != null ? String(p.page_id) : null,
+        name: p.name || null,
+        status: p.status,
+        account_id: Number(p.account_id),
+        account_name: p.account_name || null,
+        account_fb_user_id: p.account_fb_user_id || null,
+        meta_app_key: p.meta_app_key || "app1",
+        meta_app_id: p.meta_app_id || null,
+        picture_url: p.picture_url || null,
+        enrich_error: p.enrich_error || null,
+        enriched_at: p.enriched_at || null,
+        followers_count: Number.isFinite(followers) ? followers : null,
+        fan_count: Number.isFinite(fans) ? fans : null,
         enabled: cfg.enabled,
         max_posts_per_day: cfg.max_posts_per_day,
         interval_minutes: cfg.interval_minutes,
@@ -330,9 +350,12 @@ router.get("/pages", (_req, res) => {
         direct_today: Number(counts.direct_today || 0),
         scheduled_today: Number(counts.scheduled_today || 0),
         total_planned_today: Number(counts.direct_today || 0) + Number(counts.scheduled_today || 0),
-        follower_growth: getFollowerGrowth(p.id, p.followers_count, todayVn),
+        follower_growth: getFollowerGrowth(
+          p.id,
+          Number.isFinite(followers) ? followers : null,
+          todayVn
+        ),
         meta_app_name: appNames.get(p.meta_app_key || "app1") || p.meta_app_key || "App 1",
-        sequence_json: undefined,
       };
     }),
   });

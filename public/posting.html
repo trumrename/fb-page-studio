@@ -725,15 +725,29 @@
       return v.toLocaleString("vi-VN");
     }
 
+    /** Followers for picker — same source as dashboard (followers_count || fan_count). */
+    function pageFollowersNum(p) {
+      const raw =
+        p?.followers_count ??
+        p?.fan_count ??
+        p?.followers ??
+        p?.fans ??
+        null;
+      if (raw == null || raw === "") return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    }
+
     function pageFollowLabel(p) {
-      const n = p?.followers_count ?? p?.fan_count;
+      const n = pageFollowersNum(p);
       const s = fmtNum(n);
       if (s == null) {
-        return p?.enrich_error
-          ? `<span class="page-follow missing" title="${esc(p.enrich_error)}">Chưa có follow</span>`
-          : `<span class="page-follow missing">Chưa có follow</span>`;
+        const tip = p?.enrich_error
+          ? esc(p.enrich_error)
+          : "Chưa lấy được từ Graph — Sync list / Sync details trên Connect";
+        return `<span class="badge page-follow-badge missing" title="${tip}">Follow —</span>`;
       }
-      return `<span class="page-follow" title="followers">${s} follow</span>`;
+      return `<span class="badge page-follow-badge" title="followers_count">${s} follow</span>`;
     }
 
     /** Prefer stored CDN URL; fallback Graph picture by Page ID (public redirect). */
@@ -1018,18 +1032,23 @@
           </summary>
           <div style="padding:.25rem .35rem .45rem">
           ${g.pages
-            .map(
-              (p) => `
+            .map((p) => {
+              const fl = pageFollowersNum(p);
+              const flBadge = pageFollowLabel(p);
+              return `
         <div class="page-item ${selectedId === p.id ? "active" : ""} ${checked.has(p.id) ? "selected" : ""}" data-id="${p.id}"
-          style="align-items:flex-start">
+          style="align-items:flex-start"
+          data-followers="${fl == null ? "" : fl}">
           <input type="checkbox" class="pg-check" value="${p.id}" data-account-id="${p.account_id}" ${checked.has(p.id) ? "checked" : ""}
             onclick="event.stopPropagation()" style="margin-top:.55rem" />
           ${pageAvatarHtml(p)}
           <div style="min-width:0;flex:1">
-            <strong title="${esc(p.name)}">${esc(p.name)}</strong>
+            <div class="page-title-row">
+              <strong title="${esc(p.name)}">${esc(p.name)}</strong>
+              ${flBadge}
+            </div>
             <div class="page-meta">
               <span title="Facebook Page ID">ID <code>${esc(p.page_id || "—")}</code></span>
-              ${pageFollowLabel(p)}
               <span class="badge ${p.enabled ? "on" : "off"}">${p.enabled ? "ON" : "OFF"}</span>
               <span>${p.posts_today || 0}/${p.max_posts_per_day || "?"} today · ${p.interval_minutes || "?"}m</span>
             </div>
@@ -1039,8 +1058,8 @@
             </div>
             <div class="active-box muted" id="active-${p.id}" style="margin-top:.35rem"></div>
           </div>
-        </div>`
-            )
+        </div>`;
+            })
             .join("")}
           </div>
         </details>`;
@@ -1052,6 +1071,20 @@
     async function loadPages() {
       const data = await api("/api/posting/pages");
       pages = data.pages || [];
+      // Debug: số page có follow (mở DevTools → Console)
+      try {
+        const withFl = pages.filter((p) => pageFollowersNum(p) != null).length;
+        console.info(
+          `[posting] pages=${pages.length} · có follow=${withFl}`,
+          pages.slice(0, 5).map((p) => ({
+            name: p.name,
+            followers_count: p.followers_count,
+            fan_count: p.fan_count,
+          }))
+        );
+      } catch {
+        /* ignore */
+      }
       const activeIds = new Set(pages.map((p) => Number(p.id)));
       const beforeSize = selectedPageSet.size;
       selectedPageSet = new Set([...selectedPageSet].filter((id) => activeIds.has(id)));

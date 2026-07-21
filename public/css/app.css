@@ -603,6 +603,37 @@ tr.clickable { cursor: pointer; }
   background: rgba(255, 255, 255, 0.06);
   color: #9eb6e0;
 }
+.page-item .page-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+  min-width: 0;
+}
+.page-item .page-title-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Follow badge cạnh tên — cùng độ nổi bật dashboard */
+.page-item .page-follow-badge {
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  font-size: 0.72rem;
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(61, 214, 140, 0.16);
+  color: #7df0c0;
+  border: 1px solid rgba(61, 214, 140, 0.35);
+  flex-shrink: 0;
+}
+.page-item .page-follow-badge.missing {
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  border-color: var(--border);
+  opacity: 0.9;
+}
 .page-item .page-follow {
   font-variant-numeric: tabular-nums;
   font-weight: 650;

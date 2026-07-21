@@ -201,15 +201,17 @@ export async function getMe(userToken, opts = {}) {
 export async function getAllPages(userToken, opts = {}) {
   const onPage = typeof opts === "function" ? opts : opts.onPage;
   const appSecret = typeof opts === "object" && opts ? opts.appSecret : undefined;
+  const metaAppKey = typeof opts === "object" && opts ? opts.metaAppKey : undefined;
   // picture + followers khi Graph cho phép (không phải lúc nào cũng có đủ → enrich bổ sung)
   const fields =
     "id,name,category,access_token,tasks,followers_count,fan_count,link,picture.type(large)";
   let urlPath = "/me/accounts";
   let query = { fields, limit: 100 };
   const pages = [];
+  const graphOpts = { appSecret, metaAppKey };
 
   // First request via helper; subsequent via absolute paging URL
-  let data = await graphGet(urlPath, userToken, query, { appSecret });
+  let data = await graphGet(urlPath, userToken, query, graphOpts);
 
   while (true) {
     const batch = data.data || [];
@@ -221,7 +223,7 @@ export async function getAllPages(userToken, opts = {}) {
     const next = data.paging?.next;
     if (!next) break;
 
-    data = await graphFetchAbsolute(next, userToken, { appSecret });
+    data = await graphFetchAbsolute(next, userToken, graphOpts);
   }
 
   return pages;
@@ -255,28 +257,47 @@ export async function graphGetSoft(path, accessToken, query = {}, opts = {}) {
  * Core page profile (no business field — that needs business_management
  * and can fail the whole request with #200 if missing).
  */
-export async function getPageProfile(pageId, pageToken) {
+/**
+ * @param {string} pageId
+ * @param {string} pageToken
+ * @param {{ metaAppKey?: string, appSecret?: string }} [opts]
+ */
+export async function getPageProfile(pageId, pageToken, opts = {}) {
+  const graphOpts = {
+    metaAppKey: opts.metaAppKey,
+    appSecret: opts.appSecret,
+  };
   // Try full set first
-  let r = await graphGetSoft(`/${pageId}`, pageToken, {
-    fields: [
-      "id",
-      "name",
-      "category",
-      "followers_count",
-      "fan_count",
-      "verification_status",
-      "link",
-      "about",
-      "picture.type(large)",
-      "is_published",
-    ].join(","),
-  });
+  let r = await graphGetSoft(
+    `/${pageId}`,
+    pageToken,
+    {
+      fields: [
+        "id",
+        "name",
+        "category",
+        "followers_count",
+        "fan_count",
+        "verification_status",
+        "link",
+        "about",
+        "picture.type(large)",
+        "is_published",
+      ].join(","),
+    },
+    graphOpts
+  );
 
   if (r.ok) return r.data;
 
-  r = await graphGetSoft(`/${pageId}`, pageToken, {
-    fields: "id,name,category,followers_count,fan_count,link,picture.type(large)",
-  });
+  r = await graphGetSoft(
+    `/${pageId}`,
+    pageToken,
+    {
+      fields: "id,name,category,followers_count,fan_count,link,picture.type(large)",
+    },
+    graphOpts
+  );
   if (r.ok) return r.data;
 
   const err = new Error(r.error || "Failed to load page profile");
