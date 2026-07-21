@@ -871,8 +871,12 @@ export function buildRunNowPlan(inputSettings = {}) {
           const plannedPostType = resolvePlannedPostType(settings, cfg, round);
           let when;
           if (useWindows && dayWindowTimes[round]) {
-            // Base = planned window time; never before now; small stagger by order.
-            const baseMs = dayWindowTimes[round].getTime();
+            // Base = planned window time (Sáng/Tối). Tool waits until due then Graph publish.
+            // If window already passed today, bump +1 day once (same idea as FB schedule).
+            let baseMs = dayWindowTimes[round].getTime();
+            if (baseMs < Date.now() - 60 * 1000) {
+              baseMs += 24 * 60 * 60 * 1000;
+            }
             const stagger = (order + 1) * 1500;
             when = new Date(Math.max(Date.now() + 2000, baseMs + stagger));
             cursorMs = when.getTime();

@@ -360,19 +360,29 @@
                   </label>
                 </div>
                 <div>
-                  <label style="font-weight:700">Giờ đăng trong ngày (chọn 1)</label>
+                  <label style="font-weight:700">Giờ đăng TRỰC TIẾP (tool chờ → đăng API)</label>
                   <label class="checks" style="display:block;margin-top:.35rem">
                     <input type="radio" name="rotNowTimeMode" id="rotNowTimeGap" value="gap_chain" checked />
                     Liên tục: bài 1 ngay · các bài sau + gap
                   </label>
                   <label class="checks" style="display:block">
                     <input type="radio" name="rotNowTimeMode" id="rotNowTimeWindows" value="windows" />
-                    Khung <b>Sáng / Tối</b> (dòng khung giờ bên dưới phần hẹn FB)
+                    Hẹn giờ local Sáng/Tối: <b>tool chờ đến giờ rồi đăng trực tiếp</b>
                   </label>
                   <p class="muted" style="margin:.35rem 0 0;font-size:.78rem" id="rotNowTimeHelp">
-                    Mode Sáng/Tối: số bài/ngày = tổng cột «số bài» trong khung (vd 1 sáng + 1 tối = 2).
+                    Không tạo “scheduled post” trên Facebook — PC/tool phải bật; đến giờ tự gọi Graph đăng ngay.
                   </p>
                 </div>
+              </div>
+              <div id="rotNowWindowsBox" style="display:none;margin-top:.65rem;padding:.75rem;border:1px dashed rgba(61,214,140,.5);border-radius:10px;background:rgba(0,0,0,.15)">
+                <label style="font-weight:700;display:block">Khung Sáng / Tối cho Direct Local</label>
+                <p class="muted" style="margin:.3rem 0 .45rem;font-size:.78rem">
+                  Mỗi dòng: <code>Tên | HH:mm bắt đầu | HH:mm kết thúc | số bài</code>.
+                  Ví dụ 1 sáng + 1 tối = 2 bài/page/ngày. Tool xếp giờ trong khung rồi <b>chờ local</b> đến đúng lúc đăng.
+                  (Khác hẹn FB: không đẩy <code>scheduled_publish_time</code> lên Meta.)
+                </p>
+                <textarea id="rotNowWindows" rows="3" placeholder="Sáng | 07:30 | 11:30 | 1&#10;Tối | 18:00 | 21:30 | 1"></textarea>
+                <p class="muted" id="rotNowWindowTotal" style="margin:.35rem 0 0;font-size:.82rem"></p>
               </div>
               <div class="row3" style="margin-top:.55rem">
                 <div>
@@ -569,6 +579,7 @@
       "rotFirstStart", "rotFirstEnd", "rotGapMin", "rotGapMax", "rotJitMin",
       "rotJitMax", "rotAutoMeta", "rotG1", "rotG2", "rotOnlyEnabled",
       "rotPageTargetSelected", "rotPageTargetAll", "rotNowTimeGap", "rotNowTimeWindows",
+      "rotNowWindows",
       "rotMediaFolder", "rotPostedFolder", "rotCaptionsFolder",
     ];
     const workspaceHashes = {
@@ -1566,12 +1577,65 @@
     function mediaPatternMode() {
       return $("rotNowMediaMode")?.value || "page_sequence";
     }
+    function readDirectLocalWindowsStrict() {
+      const raw = String($("rotNowWindows")?.value || $("rotWindows")?.value || "").trim();
+      if (!raw) {
+        throw new Error("Chưa có khung Sáng/Tối. Ví dụ:\nSáng | 07:30 | 11:30 | 1\nTối | 18:00 | 21:30 | 1");
+      }
+      // reuse same parser as FB windows (lines from textarea)
+      const prev = $("rotWindows")?.value;
+      if ($("rotWindows") && $("rotNowWindows")) {
+        // parse via temporary path using rotWindows parser helpers
+      }
+      const lines = raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      const windows = parseWindowsText(lines.join("\n"));
+      if (!windows.length) throw new Error("Không đọc được khung giờ Direct Local");
+      if (windows.length !== lines.length) {
+        throw new Error("Có dòng khung giờ Direct Local không hợp lệ");
+      }
+      for (const item of windows) {
+        if (!Number.isInteger(item.posts) || item.posts < 1 || item.posts > 12) {
+          throw new Error(`Số bài không hợp lệ ở khung ${item.name}`);
+        }
+      }
+      return windows;
+    }
+    function syncDirectLocalWindowTotal() {
+      const box = $("rotNowWindowTotal");
+      if (!box) return;
+      try {
+        const windows = readDirectLocalWindowsStrict();
+        const total = windows.reduce((sum, item) => sum + item.posts, 0);
+        box.innerHTML =
+          `→ <b>${total} bài/Page/ngày</b> · tool <b>chờ đến giờ rồi đăng trực tiếp</b> ` +
+          `(${windows.map((item) => `${esc(item.name)}×${item.posts}`).join(" + ")}). ` +
+          `Không hẹn lịch trên Facebook.`;
+      } catch (e) {
+        box.innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+      }
+    }
     function syncRunNowMediaUi() {
       const mode = mediaPatternMode();
+      const timeMode = runNowTimeMode();
       if ($("rotNowPostTypeWrap")) $("rotNowPostTypeWrap").style.opacity = mode === "fixed" ? "1" : "0.45";
       if ($("rotNowPatternWrap")) $("rotNowPatternWrap").style.opacity = mode === "pattern" ? "1" : "0.45";
-      if ($("rotNowGapBox")) $("rotNowGapBox").style.opacity = runNowTimeMode() === "gap_chain" ? "1" : "0.5";
-      if ($("rotNowPerDay")) $("rotNowPerDay").disabled = runNowTimeMode() === "windows";
+      if ($("rotNowGapBox")) $("rotNowGapBox").style.opacity = timeMode === "gap_chain" ? "1" : "0.5";
+      if ($("rotNowPerDay")) $("rotNowPerDay").disabled = timeMode === "windows";
+      if ($("rotNowWindowsBox")) $("rotNowWindowsBox").style.display = timeMode === "windows" ? "block" : "none";
+      // seed Direct Local windows from FB windows textarea once if empty
+      if ($("rotNowWindows") && !$("rotNowWindows").value.trim()) {
+        $("rotNowWindows").value =
+          ($("rotWindows")?.value || "").trim() ||
+          "Sáng | 07:30 | 11:30 | 1\nTối | 18:00 | 21:30 | 1";
+      }
+      if (timeMode === "windows") syncDirectLocalWindowTotal();
+      const th = $("rotNowTimeHelp");
+      if (th) {
+        th.textContent =
+          timeMode === "windows"
+            ? "Sáng/Tối: tool treo, đến giờ trong khung → đăng API ngay (không scheduled FB)."
+            : "Liên tục: bài đầu ngay; các vòng sau + gap cùng Page.";
+      }
       const help = $("rotNowMediaHelp");
       if (help) {
         if (mode === "pattern") {
@@ -1635,12 +1699,16 @@
       const mediaMode = mediaPatternMode();
       let windows = [];
       try {
-        windows = timeMode === "windows"
-          ? readRotationWindowsStrict()
-          : parseWindowsText($("rotWindows")?.value || "");
+        if (timeMode === "windows") {
+          windows = readDirectLocalWindowsStrict();
+          // keep FB advanced windows in sync for reuse
+          if ($("rotWindows")) $("rotWindows").value = $("rotNowWindows")?.value || $("rotWindows").value;
+        } else {
+          windows = parseWindowsText($("rotNowWindows")?.value || $("rotWindows")?.value || "") || [];
+        }
       } catch (e) {
         if (timeMode === "windows") throw e;
-        windows = parseWindowsText($("rotWindows")?.value || "") || [];
+        windows = parseWindowsText($("rotNowWindows")?.value || $("rotWindows")?.value || "") || [];
       }
       const fixedType = $("rotNowPostType")?.value || "photo";
       return {
@@ -1706,9 +1774,14 @@
         $("rotFirstStart").value = s.fixed_gap.first_start || "08:00";
         $("rotFirstEnd").value = s.fixed_gap.first_end || "10:00";
       }
-      if (s.windows?.length) $("rotWindows").value = windowsToText(s.windows);
-      else if (!$("rotWindows").value.trim()) {
-        $("rotWindows").value = "Sáng | 07:30 | 11:30 | 1\nTối | 18:00 | 21:30 | 1";
+      if (s.windows?.length) {
+        const wt = windowsToText(s.windows);
+        $("rotWindows").value = wt;
+        if ($("rotNowWindows")) $("rotNowWindows").value = wt;
+      } else if (!$("rotWindows").value.trim()) {
+        const defW = "Sáng | 07:30 | 11:30 | 1\nTối | 18:00 | 21:30 | 1";
+        $("rotWindows").value = defW;
+        if ($("rotNowWindows") && !$("rotNowWindows").value.trim()) $("rotNowWindows").value = defW;
       }
       const g = s.groups || [];
       $("rotG1").value = (g[0]?.account_ids || []).join(",");
@@ -2077,7 +2150,7 @@
       runNowPlanSignature = null;
     };
     ["rotNowMediaMode", "rotNowMediaPattern", "rotNowPostType", "rotNowTimeGap", "rotNowTimeWindows",
-      "rotPageTargetSelected", "rotPageTargetAll", "rotNowPerDay"].forEach((id) => {
+      "rotPageTargetSelected", "rotPageTargetAll", "rotNowPerDay", "rotNowWindows"].forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.addEventListener("change", () => {
@@ -2086,6 +2159,7 @@
         runNowPlanSignature = null;
       });
       el.addEventListener("input", () => {
+        if (id === "rotNowWindows") syncDirectLocalWindowTotal();
         runNowPlanId = null;
         runNowPlanSignature = null;
       });

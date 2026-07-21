@@ -7,5 +7,5 @@ Gói DEV (máy admin) — KHÔNG zip gửi khách:
  - VERSION.txt
 
 Source / keys / data thật nằm ở project root, không copy full secret vào đây.
-Admin cấp key: Admin-Quan-Ly\MENU-ADMIN.bat
+Admin cấp key: Tổng Hợp Tool\Admin-Quan-Ly\MENU-ADMIN.bat
 Lưu trữ bản cũ: Luu-Tru-Ban-Cu\
