@@ -963,6 +963,15 @@
 
     async function refreshAll() {
       await Promise.all([loadDeployMode(), loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadFirstRunStatus(), loadOAuthDomain(), loadBrowserProfiles()]);
+      try {
+        const v = await api("/api/version");
+        if ($("sidebarVer") && v?.version) {
+          $("sidebarVer").textContent = `v${v.version} · GitHub update`;
+        }
+        document.title = `FB Page Studio v${v.version || ""} · Connect`;
+      } catch {
+        /* ignore */
+      }
     }
 
     showFlash();

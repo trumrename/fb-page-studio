@@ -314,11 +314,13 @@ export async function applyUpdate() {
   // Prefer exact path of running outer portable exe (FB_OUTER_EXE from Electron)
   const currentExe = getOuterExePath();
   const exeDir = path.dirname(currentExe);
-  const targetName = path.basename(currentExe) || getUpdateConfig().asset_name;
-  // Always stage next to current app — same folder, same final name
-  const destNew = path.join(exeDir, targetName + ".new");
-  const checksumFile = destNew + ".sha256.txt";
-  const destBak = path.join(exeDir, targetName + ".bak");
+  const currentName = path.basename(currentExe) || getUpdateConfig().asset_name;
+  // Always end as versioned filename so Explorer / shortcut show NEW version (not v1.2.27 after update).
+  const finalName = `FB-Page-Studio-Desktop-v${check.latest_version}.exe`;
+  // Stage next to app; may differ from currentName when upgrading from old versioned/unversioned name
+  const destNew = path.join(exeDir, `${finalName}.new`);
+  const checksumFile = `${destNew}.sha256.txt`;
+  const destBak = path.join(exeDir, `${currentName}.bak`);
   const batPath = path.join(exeDir, "_apply_update.bat");
 
   // Clean old leftovers so user doesn't see "many versions"
@@ -327,6 +329,7 @@ export async function applyUpdate() {
     checksumFile,
     path.join(exeDir, "FB-Page-Studio-Desktop.exe.new"),
     path.join(exeDir, "FB-Page-Studio.exe.new"),
+    path.join(exeDir, `${currentName}.new`),
   ]) {
     try {
       if (fs.existsSync(junk)) fs.unlinkSync(junk);
@@ -383,10 +386,10 @@ export async function applyUpdate() {
     /* ignore */
   }
 
-  // Replace IN PLACE: old → .bak → delete; .new → same original name; start same path
-  // Also move sibling versioned EXEs (v1.2.25, v1.2.27, …) into Luu-Tru-Ban-Cu so
-  // the app folder only keeps the file you run + data/.env.
-  const vaultName = "Luu-Tru-Ban-Cu";
+  // 1) Unlock current EXE → .bak  2) Place new as finalName (v{new})  3) DELETE all other Desktop EXEs
+  //    so Explorer shows the new version number and no leftover v1.2.25/v1.2.27.
+  const bakBase = path.basename(destBak);
+  const newBase = path.basename(destNew);
   const bat = [
     "@echo off",
     "setlocal EnableExtensions",
@@ -397,51 +400,64 @@ export async function applyUpdate() {
     `:retry`,
     "set /a tries+=1",
     "if %tries% GTR 30 goto locked",
-    `if exist "${targetName}" (`,
-    `  del /f /q "${path.basename(destBak)}" 2>nul`,
-    `  ren "${targetName}" "${path.basename(destBak)}" 2>nul`,
-    `  if exist "${targetName}" (`,
+    // Free the currently running file (any old name)
+    `if exist "${currentName}" (`,
+    `  del /f /q "${bakBase}" 2>nul`,
+    `  ren "${currentName}" "${bakBase}" 2>nul`,
+    `  if exist "${currentName}" (`,
     `    timeout /t 1 /nobreak >nul`,
     `    goto retry`,
     `  )`,
     `)`,
-    `if not exist "${path.basename(destNew)}" (`,
+    // If finalName already exists (another copy), free it too
+    `if /I not "${currentName}"=="${finalName}" if exist "${finalName}" (`,
+    `  del /f /q "${finalName}.old" 2>nul`,
+    `  ren "${finalName}" "${finalName}.old" 2>nul`,
+    `  if exist "${finalName}" (`,
+    `    timeout /t 1 /nobreak >nul`,
+    `    goto retry`,
+    `  )`,
+    `)`,
+    `if not exist "${newBase}" (`,
     `  echo LOI: khong thay file .new > "_update-error.txt"`,
     `  exit /b 1`,
     `)`,
-    `move /y "${path.basename(destNew)}" "${targetName}" >nul`,
-    `if not exist "${targetName}" goto replace_failed`,
-    `del /f /q "${path.basename(destBak)}" 2>nul`,
-    `del /f /q "*.new" 2>nul`,
+    // Install as versioned final name so UI/Explorer show v${check.latest_version}
+    `move /y "${newBase}" "${finalName}" >nul`,
+    `if not exist "${finalName}" goto replace_failed`,
+    // Restore license if needed
     `if exist "license.backup.json" if not exist "data\\license.json" (`,
     `  if not exist "data" mkdir "data"`,
     `  copy /y "license.backup.json" "data\\license.json" >nul`,
     `)`,
-    // Archive other versioned Desktop EXEs sitting beside this app (leftovers from old packs)
-    `if not exist "${vaultName}" mkdir "${vaultName}"`,
-    `for %%F in ("FB-Page-Studio-Desktop-v*.exe") do (`,
-    `  if /I not "%%~nxF"=="${targetName}" (`,
-    `    move /y "%%~fF" "${vaultName}\\" >nul 2>nul`,
-    `  )`,
+    // DELETE every other Desktop EXE / sha / bak / .new / .old (keep only finalName)
+    `for %%F in ("FB-Page-Studio-Desktop*.exe" "FB-Page-Studio.exe" "FB Page Studio.exe") do (`,
+    `  if /I not "%%~nxF"=="${finalName}" del /f /q "%%~fF" 2>nul`,
     `)`,
-    `for %%F in ("FB-Page-Studio-Desktop-v*.exe.sha256.txt") do (`,
-    `  if /I not "%%~nxF"=="${targetName}.sha256.txt" (`,
-    `    move /y "%%~fF" "${vaultName}\\" >nul 2>nul`,
-    `  )`,
+    `for %%F in ("FB-Page-Studio-Desktop*.exe.sha256.txt" "FB-Page-Studio-Desktop*.exe.bak" "FB-Page-Studio-Desktop*.exe.old" "FB-Page-Studio-Desktop*.exe.new" "*.bak" "*.new") do (`,
+    `  del /f /q "%%~fF" 2>nul`,
     `)`,
-    `del /f /q "*.bak" 2>nul`,
-    `start "" "${targetName}"`,
+    `del /f /q "${bakBase}" 2>nul`,
+    `del /f /q "${finalName}.old" 2>nul`,
+    `del /f /q "${finalName}.new" 2>nul`,
+    // Optional: drop empty leftover vault copies that clutter pack folders (best-effort)
+    `if exist "Luu-Tru-Ban-Cu" (`,
+    `  del /f /q "Luu-Tru-Ban-Cu\\FB-Page-Studio-Desktop*.exe" 2>nul`,
+    `  del /f /q "Luu-Tru-Ban-Cu\\FB-Page-Studio-Desktop*.exe.sha256.txt" 2>nul`,
+    `)`,
+    `start "" "${finalName}"`,
     `del /f /q "%~f0"`,
     "endlocal",
     "exit /b 0",
     `:replace_failed`,
-    `if exist "${path.basename(destBak)}" ren "${path.basename(destBak)}" "${targetName}" 2>nul`,
+    `if exist "${bakBase}" ren "${bakBase}" "${currentName}" 2>nul`,
     `echo LOI: khong the thay EXE moi, da rollback ban cu > "_update-error.txt"`,
-    `if exist "${targetName}" start "" "${targetName}"`,
+    `if exist "${currentName}" start "" "${currentName}"`,
+    `if exist "${finalName}" start "" "${finalName}"`,
     `exit /b 1`,
     `:locked`,
     `echo LOI: EXE van dang bi khoa sau 30 giay > "_update-error.txt"`,
-    `if exist "${targetName}" start "" "${targetName}"`,
+    `if exist "${currentName}" start "" "${currentName}"`,
     `exit /b 1`,
     "",
   ].join("\r\n");
@@ -452,19 +468,21 @@ export async function applyUpdate() {
     ok: true,
     updated: true,
     message:
-      `Cập nhật tại chỗ: ${currentExe}\n` +
+      `Cập nhật tại chỗ:\n` +
       `v${check.current_version} → v${check.latest_version}\n` +
-      `Cùng file/tên — không tạo bản app khác. License & data giữ nguyên.\n` +
-      `EXE bản cũ cùng thư mục (nếu có) → folder Luu-Tru-Ban-Cu.` +
+      `File mới: ${finalName}\n` +
+      `EXE bản cũ cùng thư mục sẽ bị XÓA. License & data giữ nguyên.` +
       "\nĐã tải xong. App sẽ tự khởi động lại…",
     from: check.current_version,
     to: check.latest_version,
-    target_exe: currentExe,
+    target_exe: path.join(exeDir, finalName),
+    previous_exe: currentExe,
+    final_name: finalName,
     dest: destNew,
     bat: batPath,
     inplace: true,
     preserves: ["data/", ".env", "license.json", "license.backup.json"],
-    archives_old_to: path.join(exeDir, vaultName),
+    deletes_old_exes: true,
     sha256: actualHash,
   };
 

@@ -12,17 +12,43 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))
 
 fs.mkdirSync(out, { recursive: true });
 
-const exeSrc = path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe");
-const exeDest = path.join(out, "FB-Page-Studio-Desktop.exe");
-if (fs.existsSync(exeSrc)) {
+const ver = pkg.version;
+const versionedName = `FB-Page-Studio-Desktop-v${ver}.exe`;
+const exeSrc =
+  [
+    path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe"),
+    path.join(root, "dist-desktop-oauth", versionedName),
+  ].find((p) => fs.existsSync(p)) || null;
+
+// Chỉ giữ 1 EXE bản mới (versioned) — xóa Desktop.exe / v cũ
+for (const entry of fs.readdirSync(out)) {
+  if (/^FB-Page-Studio(?:-Desktop)?(?:-v\d+\.\d+\.\d+)?\.exe(?:\.sha256\.txt)?$/i.test(entry) ||
+      /^FB Page Studio\.exe$/i.test(entry)) {
+    try {
+      fs.unlinkSync(path.join(out, entry));
+    } catch {
+      /* locked */
+    }
+  }
+}
+
+if (exeSrc) {
+  const exeDest = path.join(out, versionedName);
   fs.copyFileSync(exeSrc, exeDest);
+  // Stable alias for scripts that still expect unversioned name
+  fs.copyFileSync(exeSrc, path.join(out, "FB-Page-Studio-Desktop.exe"));
   const hash = crypto.createHash("sha256").update(fs.readFileSync(exeDest)).digest("hex");
+  fs.writeFileSync(
+    path.join(out, `${versionedName}.sha256.txt`),
+    `${hash}  ${versionedName}\n`,
+    "utf8"
+  );
   fs.writeFileSync(
     path.join(out, "FB-Page-Studio-Desktop.exe.sha256.txt"),
     `${hash}  FB-Page-Studio-Desktop.exe\n`,
     "utf8"
   );
-  console.log("Copied DEV exe", exeSrc);
+  console.log("Copied DEV exe", exeSrc, "→", versionedName, "+ Desktop.exe alias");
 } else {
   console.warn("⚠ Chưa có dist-desktop-oauth EXE — chạy npm run build:desktop trước");
 }

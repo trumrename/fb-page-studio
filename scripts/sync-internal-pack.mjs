@@ -111,21 +111,27 @@ const exeSrc = [
 ].find((p) => fs.existsSync(p));
 
 if (exeSrc) {
-  // Xóa mọi Desktop*.exe còn sót (kể cả unversioned) rồi chỉ để 1 file bản mới
+  // XÓA hẳn EXE/sha bản cũ (không để song song v1.2.25 + v1.2.32 trong pack)
   for (const entry of fs.readdirSync(out)) {
-    if (/^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe(?:\.sha256\.txt)?$/i.test(entry)) {
-      const p = path.join(out, entry);
+    if (
+      /^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe(?:\.(?:sha256\.txt|bak|old|new))?$/i.test(
+        entry
+      ) ||
+      /^FB-Page-Studio\.exe$/i.test(entry) ||
+      /^FB Page Studio\.exe$/i.test(entry)
+    ) {
       if (entry === exeName || entry === `${exeName}.sha256.txt`) continue;
       try {
-        const dest = path.join(archiveVaultDir(), entry);
-        fs.mkdirSync(archiveVaultDir(), { recursive: true });
-        if (fs.existsSync(dest)) fs.unlinkSync(p);
-        else fs.renameSync(p, dest);
+        fs.unlinkSync(path.join(out, entry));
+        console.log("[pack-internal] đã xóa bản cũ:", entry);
       } catch {
         try {
-          fs.unlinkSync(p);
+          // fallback: đẩy vault nếu đang lock
+          const vault = archiveVaultDir();
+          fs.mkdirSync(vault, { recursive: true });
+          fs.renameSync(path.join(out, entry), path.join(vault, entry));
         } catch {
-          /* locked — user may be running old EXE */
+          /* still locked */
         }
       }
     }

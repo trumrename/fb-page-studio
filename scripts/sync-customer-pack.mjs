@@ -190,8 +190,16 @@ const exeCandidates = [
 let copiedExe = null;
 for (const c of exeCandidates) {
   if (!fs.existsSync(c)) continue;
+  // Xóa hết EXE/sha bản cũ — chỉ còn file version hiện tại
   for (const entry of fs.readdirSync(out)) {
-    if (/^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe(?:\.sha256\.txt)?$/i.test(entry)) {
+    if (
+      /^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe(?:\.(?:sha256\.txt|bak|old|new))?$/i.test(
+        entry
+      ) ||
+      /^FB-Page-Studio\.exe$/i.test(entry) ||
+      /^FB Page Studio\.exe$/i.test(entry) ||
+      /^FB-Page-Studio-v\d+\.\d+\.\d+-Windows\.zip(?:\.sha256\.txt)?$/i.test(entry)
+    ) {
       try {
         fs.unlinkSync(path.join(out, entry));
       } catch {

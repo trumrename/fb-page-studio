@@ -177,10 +177,11 @@
         return;
       }
       const ok = confirm(
-        `Cập nhật TẠI CHỖ (cùng app, cùng file .exe)?\n\n` +
+        `Cập nhật TẠI CHỖ?\n\n` +
           `v${check.current_version} → v${check.latest_version}\n` +
           `Nguồn: GitHub ${check.asset.name}\n` +
-          `→ Ghi đè file đang chạy, KHÔNG tạo bản app khác.\n` +
+          `→ File mới: FB-Page-Studio-Desktop-v${check.latest_version}.exe\n` +
+          `→ XÓA các EXE bản cũ cùng thư mục (tên file cũ không còn).\n` +
           `License + data giữ nguyên. App tự mở lại.`
       );
       if (!ok) return;

@@ -143,6 +143,16 @@ check("tag release workflow runs verification gate", fs.existsSync(path.join(roo
 check("release asset filename includes exact version", fs.existsSync(path.join(root, "scripts/prepare-release-asset.mjs")) && read("scripts/prepare-release-asset.mjs").includes("Desktop-v${pkg.version}.exe") && read(".github/workflows/release-desktop.yml").includes("Desktop-v$version.exe"));
 check("customer pack includes SHA-256 sidecar for its versioned EXE", read("scripts/sync-customer-pack.mjs").includes("sha256") && read("scripts/sync-customer-pack.mjs").includes(".sha256.txt"));
 check("opening new EXE warns when old version is still running", read("electron/main.cjs").includes("additionalData?.version") && read("electron/main.cjs").includes("Đang có một phiên bản FB Page Studio khác chạy nền"));
+check(
+  "updater renames to versioned final EXE and deletes old siblings",
+  read("src/services/updater.js").includes("FB-Page-Studio-Desktop-v${check.latest_version}.exe") &&
+    read("src/services/updater.js").includes("deletes_old_exes") &&
+    read("src/services/updater.js").includes('del /f /q "%%~fF"')
+);
+check(
+  "window title includes app version",
+  read("electron/main.cjs").includes("FB Page Studio v${app.getVersion()}")
+);
 const ngrokManager = read("src/services/ngrokManager.js");
 const index = read("public/index.html");
 check("Ngrok manager handles token, install and exact domain", ngrokManager.includes("NGROK_AUTHTOKEN") && ngrokManager.includes("ensureExe") && ngrokManager.includes("domainOf(item.public_url) === domain"));

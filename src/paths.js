@@ -143,21 +143,46 @@ export function getOuterExePath() {
   ) {
     return path.resolve(process.env.PORTABLE_EXECUTABLE_FILE);
   }
-  const names = [
-    "FB-Page-Studio-Desktop.exe",
-    "FB-Page-Studio.exe",
-    "FB Page Studio.exe",
-  ];
-  if (process.env.PORTABLE_EXECUTABLE_DIR) {
-    for (const n of names) {
-      const c = path.join(process.env.PORTABLE_EXECUTABLE_DIR, n);
-      if (fs.existsSync(c)) return path.resolve(c);
+  function pickDesktopIn(dir) {
+    if (!dir || !fs.existsSync(dir)) return null;
+    try {
+      const files = fs
+        .readdirSync(dir)
+        .filter((n) =>
+          /^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe$/i.test(n) ||
+          /^FB-Page-Studio\.exe$/i.test(n) ||
+          /^FB Page Studio\.exe$/i.test(n)
+        );
+      if (!files.length) return null;
+      // Prefer highest -vX.Y.Z.exe then unversioned
+      files.sort((a, b) => {
+        const va = (a.match(/-v(\d+\.\d+\.\d+)\.exe$/i) || [])[1];
+        const vb = (b.match(/-v(\d+\.\d+\.\d+)\.exe$/i) || [])[1];
+        if (va && vb) {
+          const pa = va.split(".").map(Number);
+          const pb = vb.split(".").map(Number);
+          for (let i = 0; i < 3; i++) {
+            if ((pa[i] || 0) !== (pb[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
+          }
+          return 0;
+        }
+        if (va && !vb) return -1;
+        if (!va && vb) return 1;
+        return a.localeCompare(b);
+      });
+      return path.resolve(path.join(dir, files[0]));
+    } catch {
+      return null;
     }
   }
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    const hit = pickDesktopIn(process.env.PORTABLE_EXECUTABLE_DIR);
+    if (hit) return hit;
+  }
   const dir = getExeDir();
-  for (const n of names) {
-    const c = path.join(dir, n);
-    if (fs.existsSync(c)) return c;
+  {
+    const hit = pickDesktopIn(dir);
+    if (hit) return hit;
   }
   // Never prefer Temp extract path for updates
   if (process.execPath && !/[\\/]Temp[\\/]/i.test(process.execPath)) {

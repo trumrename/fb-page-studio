@@ -1,5 +1,7 @@
 Gói DEV (máy admin) — KHÔNG zip gửi khách:
  - CHAY-NGROK-DOMAIN-CO-DINH.bat
+ - FB-Page-Studio-Desktop-v1.2.33.exe
+ - FB-Page-Studio-Desktop-v1.2.33.exe.sha256.txt
  - FB-Page-Studio-Desktop.exe
  - FB-Page-Studio-Desktop.exe.sha256.txt
  - MANIFEST-DEV.txt

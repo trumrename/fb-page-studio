@@ -112,13 +112,50 @@ function iconPath(name) {
  * Path of the portable .exe the user double-clicked (on disk).
  * electron-builder portable extracts to %TEMP% — process.execPath is NOT the install file.
  */
+function listDesktopExesIn(dir) {
+  if (!dir || !fs.existsSync(dir)) return [];
+  try {
+    return fs
+      .readdirSync(dir)
+      .filter((n) => /^FB-Page-Studio-Desktop(?:-v\d+\.\d+\.\d+)?\.exe$/i.test(n) || /^FB-Page-Studio\.exe$/i.test(n) || /^FB Page Studio\.exe$/i.test(n))
+      .map((n) => {
+        const full = path.join(dir, n);
+        let mtime = 0;
+        try {
+          mtime = fs.statSync(full).mtimeMs;
+        } catch {
+          /* */
+        }
+        const ver = (n.match(/-v(\d+\.\d+\.\d+)\.exe$/i) || [])[1] || "";
+        return { full: path.resolve(full), name: n, mtime, ver };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** Prefer newest versioned Desktop-vX.Y.Z.exe, else unversioned Desktop.exe */
+function pickBestDesktopExe(dir) {
+  const list = listDesktopExesIn(dir);
+  if (!list.length) return null;
+  list.sort((a, b) => {
+    // Prefer highest semver if both versioned
+    if (a.ver && b.ver) {
+      const pa = a.ver.split(".").map(Number);
+      const pb = b.ver.split(".").map(Number);
+      for (let i = 0; i < 3; i++) {
+        if ((pa[i] || 0) !== (pb[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
+      }
+    }
+    if (a.ver && !b.ver) return -1;
+    if (!a.ver && b.ver) return 1;
+    return b.mtime - a.mtime;
+  });
+  return list[0].full;
+}
+
 function resolveOuterPortableExe(userDir) {
-  const names = [
-    "FB-Page-Studio-Desktop.exe",
-    "FB-Page-Studio.exe",
-    "FB Page Studio.exe",
-  ];
-  // 1) Official portable env (electron-builder)
+  // 1) Official portable env (electron-builder) — exact file user double-clicked
   if (
     process.env.PORTABLE_EXECUTABLE_FILE &&
     fs.existsSync(process.env.PORTABLE_EXECUTABLE_FILE)
@@ -126,18 +163,13 @@ function resolveOuterPortableExe(userDir) {
     return path.resolve(process.env.PORTABLE_EXECUTABLE_FILE);
   }
   if (process.env.PORTABLE_EXECUTABLE_DIR) {
-    const dir = process.env.PORTABLE_EXECUTABLE_DIR;
-    for (const n of names) {
-      const p = path.join(dir, n);
-      if (fs.existsSync(p)) return path.resolve(p);
-    }
+    const hit = pickBestDesktopExe(process.env.PORTABLE_EXECUTABLE_DIR);
+    if (hit) return hit;
   }
-  // 2) Next to data/.env folder (USER_DIR)
+  // 2) Next to data/.env folder (USER_DIR) — versioned packs live here
   if (userDir) {
-    for (const n of names) {
-      const p = path.join(userDir, n);
-      if (fs.existsSync(p)) return path.resolve(p);
-    }
+    const hit = pickBestDesktopExe(userDir);
+    if (hit) return hit;
   }
   // 3) Fallback: current process (dev / non-portable)
   return process.execPath;
@@ -400,7 +432,7 @@ function createWindow() {
     height: 860,
     minWidth: 960,
     minHeight: 640,
-    title: "FB Page Studio",
+    title: `FB Page Studio v${app.getVersion()}`,
     icon,
     backgroundColor: "#07090f",
     show: true,
@@ -511,7 +543,7 @@ function createTray() {
     /* ignore */
   }
   tray = new Tray(trayIcon.isEmpty() ? icon : trayIcon);
-  tray.setToolTip("FB Page Studio");
+  tray.setToolTip(`FB Page Studio v${app.getVersion()}`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
