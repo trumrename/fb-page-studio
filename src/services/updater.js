@@ -105,86 +105,194 @@ export function isNewerVersion(remote, local) {
   return false;
 }
 
-function fetchJson(url, headers = {}) {
+const MANUAL_RELEASE =
+  "https://github.com/trumrename/fb-page-studio/releases/latest";
+
+/** Prefer system/proxy-friendly TLS; avoid hanging forever on blocked ISPs. */
+function requestText(url, { headers = {}, timeoutMs = 20000, maxRedirects = 5 } = {}) {
   return new Promise((resolve, reject) => {
-    const lib = url.startsWith("https") ? https : http;
+    if (maxRedirects < 0) {
+      reject(new Error("Quá nhiều redirect HTTP"));
+      return;
+    }
+    const lib = String(url).startsWith("https") ? https : http;
     const req = lib.get(
       url,
       {
         headers: {
-          "User-Agent": "FB-Page-Studio-Updater",
-          Accept: "application/vnd.github+json",
+          "User-Agent": "FB-Page-Studio-Updater/1.2",
+          Accept: "application/vnd.github+json, application/json;q=0.9, */*;q=0.1",
           "Cache-Control": "no-cache, no-store, must-revalidate",
           Pragma: "no-cache",
           ...headers,
         },
+        timeout: timeoutMs,
       },
       (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          fetchJson(res.headers.location, headers).then(resolve, reject);
+          const next = res.headers.location.startsWith("http")
+            ? res.headers.location
+            : new URL(res.headers.location, url).toString();
+          res.resume();
+          requestText(next, { headers, timeoutMs, maxRedirects: maxRedirects - 1 }).then(
+            resolve,
+            reject
+          );
           return;
         }
-        let body = "";
-        res.on("data", (c) => (body += c));
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
         res.on("end", () => {
-          if (res.statusCode && res.statusCode >= 400) {
-            reject(
-              new Error(
-                `GitHub HTTP ${res.statusCode}: ${body.slice(0, 200)}. ` +
-                  `Nếu mạng chặn GitHub: tải tay https://github.com/trumrename/fb-page-studio/releases/latest`
-              )
-            );
-            return;
-          }
-          try {
-            resolve(JSON.parse(body));
-          } catch (e) {
-            reject(e);
-          }
+          const body = Buffer.concat(chunks).toString("utf8");
+          resolve({ status: res.statusCode || 0, body, headers: res.headers });
         });
       }
     );
-    req.on("error", (e) => {
-      reject(
-        new Error(
-          `Không kết nối GitHub (${e.message || e}). ` +
-            `Tắt VPN lạ / thử mạng khác, hoặc tải tay: https://github.com/trumrename/fb-page-studio/releases/latest`
-        )
-      );
-    });
-    req.setTimeout(30000, () => {
+    req.on("error", (e) => reject(e));
+    req.on("timeout", () => {
       req.destroy();
-      reject(
-        new Error(
-          "GitHub request timeout (mạng chậm hoặc chặn api.github.com). " +
-            "Tải tay: https://github.com/trumrename/fb-page-studio/releases/latest"
-        )
-      );
+      reject(new Error(`timeout ${timeoutMs}ms`));
     });
   });
 }
 
-function downloadFile(url, dest, onProgress) {
+async function fetchJson(url, headers = {}) {
+  const { status, body } = await requestText(url, { headers, timeoutMs: 25000 });
+  if (status >= 400) {
+    throw new Error(`GitHub HTTP ${status}: ${String(body || "").slice(0, 180)}`);
+  }
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error(`GitHub JSON parse fail (${url.slice(0, 80)})`);
+  }
+}
+
+/**
+ * Build list of release JSON endpoints. Some ISPs block api.github.com
+ * but still allow github.com or public mirrors.
+ */
+function releaseJsonUrls(owner, name) {
+  const repo = `${owner}/${name}`;
+  const ts = Date.now();
+  const primary = `https://api.github.com/repos/${repo}/releases/latest?ts=${ts}`;
+  const list = `https://api.github.com/repos/${repo}/releases?per_page=5&ts=${ts}`;
+  const custom = String(process.env.UPDATE_GITHUB_API || process.env.GITHUB_API_MIRROR || "").trim();
+  const urls = [];
+  if (custom) {
+    // e.g. https://ghproxy.com/https://api.github.com/repos/OWNER/REPO/releases/latest
+    urls.push(
+      custom
+        .replace(/\{owner\}/g, owner)
+        .replace(/\{name\}/g, name)
+        .replace(/\{repo\}/g, repo)
+    );
+  }
+  urls.push(primary, list);
+  // Common public proxies (best-effort; skipped if dead)
+  const mirrors = [
+    `https://ghfast.top/https://api.github.com/repos/${repo}/releases/latest`,
+    `https://mirror.ghproxy.com/https://api.github.com/repos/${repo}/releases/latest`,
+    `https://gh-proxy.com/https://api.github.com/repos/${repo}/releases/latest`,
+  ];
+  if (process.env.UPDATE_DISABLE_MIRRORS !== "1") {
+    urls.push(...mirrors);
+  }
+  return [...new Set(urls.filter(Boolean))];
+}
+
+function normalizeReleasePayload(data) {
+  if (!data) return null;
+  // /releases returns array
+  if (Array.isArray(data)) {
+    const stable = data.find((r) => r && !r.draft && !r.prerelease) || data[0];
+    return stable || null;
+  }
+  if (data.tag_name || data.assets) return data;
+  return null;
+}
+
+async function fetchLatestRelease(owner, name) {
+  const urls = releaseJsonUrls(owner, name);
+  const errors = [];
+  for (const url of urls) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const raw = await fetchJson(url);
+        const release = normalizeReleasePayload(raw);
+        if (release?.tag_name || release?.name) {
+          return { release, source: url };
+        }
+        errors.push(`${url}: empty payload`);
+      } catch (e) {
+        errors.push(`${url}#${attempt}: ${e.message || e}`);
+        await new Promise((r) => setTimeout(r, 400 * attempt));
+      }
+    }
+  }
+  throw new Error(
+    `Không kết nối được GitHub Releases.\n` +
+      `Thử: tắt VPN / đổi mạng / DNS 8.8.8.8.\n` +
+      `Hoặc tải tay: ${MANUAL_RELEASE}\n` +
+      `Chi tiết: ${errors.slice(0, 4).join(" | ")}`
+  );
+}
+
+function downloadUrlCandidates(primaryUrl) {
+  const u = String(primaryUrl || "").trim();
+  if (!u) return [];
+  const list = [u];
+  if (process.env.UPDATE_DISABLE_MIRRORS !== "1") {
+    // Proxy raw github release assets when direct github.com is blocked
+    list.push(
+      `https://ghfast.top/${u}`,
+      `https://mirror.ghproxy.com/${u}`,
+      `https://gh-proxy.com/${u}`
+    );
+  }
+  return [...new Set(list)];
+}
+
+function downloadFileOnce(url, dest, onProgress, maxRedirects = 8) {
   return new Promise((resolve, reject) => {
-    const lib = url.startsWith("https") ? https : http;
+    if (maxRedirects < 0) {
+      reject(new Error("Quá nhiều redirect khi tải EXE"));
+      return;
+    }
+    const lib = String(url).startsWith("https") ? https : http;
     const file = fs.createWriteStream(dest);
     const req = lib.get(
       url,
       {
         headers: {
-          "User-Agent": "FB-Page-Studio-Updater",
+          "User-Agent": "FB-Page-Studio-Updater/1.2",
           Accept: "application/octet-stream",
         },
+        timeout: 120000,
       },
       (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           file.close();
-          fs.unlinkSync(dest);
-          downloadFile(res.headers.location, dest, onProgress).then(resolve, reject);
+          try {
+            fs.unlinkSync(dest);
+          } catch {
+            /* ignore */
+          }
+          const next = res.headers.location.startsWith("http")
+            ? res.headers.location
+            : new URL(res.headers.location, url).toString();
+          res.resume();
+          downloadFileOnce(next, dest, onProgress, maxRedirects - 1).then(resolve, reject);
           return;
         }
         if (res.statusCode && res.statusCode >= 400) {
           file.close();
+          try {
+            fs.unlinkSync(dest);
+          } catch {
+            /* ignore */
+          }
+          res.resume();
           reject(new Error(`Download HTTP ${res.statusCode}`));
           return;
         }
@@ -207,7 +315,37 @@ function downloadFile(url, dest, onProgress) {
       }
       reject(e);
     });
+    req.on("timeout", () => {
+      req.destroy();
+      try {
+        file.close();
+        fs.unlinkSync(dest);
+      } catch {
+        /* ignore */
+      }
+      reject(new Error("Download timeout"));
+    });
   });
+}
+
+async function downloadFile(url, dest, onProgress) {
+  const candidates = downloadUrlCandidates(url);
+  const errors = [];
+  for (const u of candidates) {
+    try {
+      try {
+        if (fs.existsSync(dest)) fs.unlinkSync(dest);
+      } catch {
+        /* ignore */
+      }
+      return await downloadFileOnce(u, dest, onProgress);
+    } catch (e) {
+      errors.push(`${u.slice(0, 60)}… → ${e.message || e}`);
+    }
+  }
+  throw new Error(
+    `Tải EXE thất bại (mạng/GitHub).\n${errors.slice(0, 3).join("\n")}\nTải tay: ${MANUAL_RELEASE}`
+  );
 }
 
 /**
@@ -226,19 +364,20 @@ export async function checkForUpdate() {
     };
   }
 
-  // Some ISP/proxy caches keep GitHub's /releases/latest response for too long.
-  // A cache-busting query plus no-cache headers ensures a newly published
-  // version is visible immediately from customer machines.
-  const url = `https://api.github.com/repos/${parsed.owner}/${parsed.name}/releases/latest?ts=${Date.now()}`;
+  // Some ISP/proxy caches or block api.github.com — try primary + mirrors.
   let release;
+  let releaseSource = "";
   try {
-    release = await fetchJson(url);
+    const got = await fetchLatestRelease(parsed.owner, parsed.name);
+    release = got.release;
+    releaseSource = got.source || "";
   } catch (e) {
     return {
       ok: false,
       error: e.message,
       current_version: cfg.current_version,
       github_repo: `${parsed.owner}/${parsed.name}`,
+      manual_url: MANUAL_RELEASE,
     };
   }
 
@@ -248,6 +387,7 @@ export async function checkForUpdate() {
       error: release.message,
       current_version: cfg.current_version,
       github_repo: `${parsed.owner}/${parsed.name}`,
+      manual_url: MANUAL_RELEASE,
     };
   }
 
@@ -287,6 +427,8 @@ export async function checkForUpdate() {
       : null,
     missing_asset: newer && !asset,
     github_repo: `${parsed.owner}/${parsed.name}`,
+    release_source: releaseSource || null,
+    manual_url: MANUAL_RELEASE,
     packaged: cfg.packaged,
     check_at: new Date().toISOString(),
   };

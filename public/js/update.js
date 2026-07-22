@@ -13,44 +13,85 @@
   let busy = false;
 
   function apiBase() {
-    // Always same origin as the desktop UI (127.0.0.1:port). Avoid broken relative fetch.
+    // Prefer live page origin; fall back to 127.0.0.1 (Electron desktop).
     try {
-      return String(window.location.origin || "").replace(/\/$/, "");
+      const o = String(window.location.origin || "").replace(/\/$/, "");
+      if (o && o !== "null" && o !== "file://" && !o.startsWith("file:")) {
+        // Normalize localhost → 127.0.0.1 (some Windows stacks treat them differently)
+        if (/^http:\/\/localhost(?::\d+)?$/i.test(o)) {
+          return o.replace(/localhost/i, "127.0.0.1");
+        }
+        return o;
+      }
     } catch {
-      return "";
+      /* fall through */
     }
+    return "http://127.0.0.1:3847";
   }
 
-  function networkHint(err) {
+  function networkHint(err, kind) {
     const msg = String(err?.message || err || "");
-    if (/failed to fetch|networkerror|load failed|network request failed|fetch/i.test(msg)) {
+    if (/failed to fetch|networkerror|load failed|network request failed|fetch|ECONNREFUSED|abort/i.test(msg)) {
+      if (kind === "github" || /GitHub|github\.com|mirror/i.test(msg)) {
+        return (
+          "Không kết nối được GitHub (mạng chặn/chậm).\n\n" +
+          "1) Tắt VPN lạ, thử 4G/mạng khác\n" +
+          "2) DNS: 8.8.8.8 hoặc 1.1.1.1\n" +
+          "3) Cài TAY (không cần nút Cập nhật):\n   " +
+          RELEASES_URL +
+          "\n   → FB-Page-Studio-Setup-v….exe"
+        );
+      }
       return (
-        "Failed to fetch — không gọi được server tool hoặc GitHub.\n\n" +
-        "1) Đóng hẳn app → mở lại bằng icon / EXE (không mở HTML lẻ)\n" +
-        "2) Địa chỉ phải là http://127.0.0.1:… (không domain/ngrok)\n" +
-        "3) Tắt VPN lạ / thử mạng khác\n" +
-        "4) Cài TAY: " +
-        RELEASES_URL +
-        "\n   → FB-Page-Studio-Setup-v….exe hoặc Desktop-v….exe"
+        "Không gọi được server tool (local).\n\n" +
+        "1) Đóng hẳn FB Page Studio → mở lại bằng icon/EXE\n" +
+        "2) Thanh địa chỉ phải http://127.0.0.1:3847/… (không file://, không domain lạ)\n" +
+        "3) Port 3847 đang bận? Tắt bản tool cũ trong Task Manager\n" +
+        "4) Vẫn lỗi → cài TAY: " +
+        RELEASES_URL
       );
     }
     return msg;
   }
 
-  async function api(path, opts) {
-    const url = path.startsWith("http") ? path : `${apiBase()}${path.startsWith("/") ? path : `/${path}`}`;
-    try {
-      const res = await fetch(url, {
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        ...opts,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || res.statusText || `HTTP ${res.status}`);
-      return data;
-    } catch (e) {
-      throw new Error(networkHint(e));
+  async function api(path, opts = {}, { retries = 3, kind = "local" } = {}) {
+    const url = path.startsWith("http")
+      ? path
+      : `${apiBase()}${path.startsWith("/") ? path : `/${path}`}`;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = ctrl
+        ? setTimeout(() => {
+            try {
+              ctrl.abort();
+            } catch {
+              /* ignore */
+            }
+          }, opts.timeoutMs || 45000)
+        : null;
+      try {
+        const res = await fetch(url, {
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          signal: ctrl ? ctrl.signal : undefined,
+          ...opts,
+        });
+        if (timer) clearTimeout(timer);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || res.statusText || `HTTP ${res.status}`);
+        return data;
+      } catch (e) {
+        if (timer) clearTimeout(timer);
+        lastErr = e;
+        // Don't hammer if clearly offline
+        if (attempt < retries) {
+          await new Promise((r) => setTimeout(r, 350 * attempt));
+        }
+      }
     }
+    // Classify github errors coming back from API body after success path separately
+    throw new Error(networkHint(lastErr, kind));
   }
 
   function ensureStyles() {
@@ -339,9 +380,20 @@
 
   async function runCheck(btn, info) {
     try {
-      const r = await api("/api/update/check");
+      // Local health first — separates "tool server down" vs "GitHub blocked"
+      try {
+        await api("/api/version", {}, { retries: 2, kind: "local" });
+      } catch (e) {
+        const err = { ok: false, error: networkHint(e, "local") };
+        applyCheckToPanel(err);
+        if (btn) btn.title = err.error;
+        return err;
+      }
+      const r = await api("/api/update/check", {}, { retries: 2, kind: "local" });
       lastCheck = r;
       if (!r.ok) {
+        // Server reached; GitHub failed
+        r.error = networkHint(r.error || "GitHub check fail", "github");
         if (btn && !btn.dataset.hasUpdate) {
           btn.title = (r.error || "Không check được") + " · " + (r.github_repo || info?.github_repo || "?");
         }
@@ -489,11 +541,16 @@
     if (bannerApply) bannerApply.disabled = true;
 
     try {
-      setUiProgress({ percent: 0, text: "Checking…", log: "Kiểm tra GitHub Releases…" });
-      const check = await api("/api/update/check");
+      setUiProgress({ percent: 0, text: "Checking…", log: "1) Server tool…\n2) GitHub Releases…" });
+      try {
+        await api("/api/version", {}, { retries: 2, kind: "local" });
+      } catch (e) {
+        throw new Error(networkHint(e, "local"));
+      }
+      const check = await api("/api/update/check", {}, { retries: 2, kind: "local" });
       lastCheck = check;
       applyCheckToPanel(check);
-      if (!check.ok) throw new Error(check.error || "Check fail");
+      if (!check.ok) throw new Error(networkHint(check.error || "Check fail", "github"));
       if (!check.has_update) {
         alert(`Đã là bản mới nhất: v${check.current_version}`);
         return;
