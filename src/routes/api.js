@@ -216,19 +216,22 @@ router.put("/setup/first-run", async (req, res) => {
       }
     })();
 
-    // Push secrets to relay when customer filled them (server stores; other PCs sync IDs)
+    // Push secrets to relay. Network fail → still save local (do not hard-fail setup).
     const pushNotes = [];
-    // Không ép key=app1/app2 khi đẩy: server gán slot theo App ID
-    // (máy A "App 1" và máy B "App 1" có thể là 2 Meta App khác nhau).
+    let app1Pushed = false;
+    let app2Pushed = false;
     if (relayMode && app1Secret) {
       const p1 = await pushMetaAppToRelay({
         appId: app1Id,
         appSecret: app1Secret,
         name: safeEnvLabel(req.body?.app1_name, process.env.FB_APP_NAME || "App 1"),
-        // omit key → server match by app_id or next free appN
       });
-      if (!p1.ok) throw new Error(`Đẩy App 1 lên server thất bại: ${p1.error}`);
-      pushNotes.push(`slot App1 (ID ${app1Id}) → server ${p1.key || "?"}`);
+      if (p1.ok) {
+        app1Pushed = true;
+        pushNotes.push(`App1 → server ${p1.key || "?"}`);
+      } else {
+        pushNotes.push(`App1 chưa đẩy server (${p1.error}) — giữ secret local`);
+      }
     }
     if (relayMode && app2Id && app2Secret) {
       const p2 = await pushMetaAppToRelay({
@@ -236,12 +239,17 @@ router.put("/setup/first-run", async (req, res) => {
         appSecret: app2Secret,
         name: safeEnvLabel(req.body?.app2_name, process.env.FB_APP_NAME_2 || "App 2"),
       });
-      if (!p2.ok) throw new Error(`Đẩy App 2 lên server thất bại: ${p2.error}`);
-      pushNotes.push(`slot App2 (ID ${app2Id}) → server ${p2.key || "?"}`);
+      if (p2.ok) {
+        app2Pushed = true;
+        pushNotes.push(`App2 → server ${p2.key || "?"}`);
+      } else {
+        pushNotes.push(`App2 chưa đẩy server (${p2.error}) — giữ secret local`);
+      }
     }
 
-    // Local .env: keep IDs; strip secrets after successful push (exchange on server)
     const keepSecretLocal = !relayMode;
+    const localSecret1 = keepSecretLocal || (app1Secret && !app1Pushed) ? app1Secret : "";
+    const localSecret2 = keepSecretLocal || (app2Secret && !app2Pushed) ? app2Secret : "";
     const updates = {
       PORT: String(config.port || 3847),
       APP_BASE_URL: "http://127.0.0.1:3847",
