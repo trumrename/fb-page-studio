@@ -424,7 +424,7 @@ function openInPreferredBrowser(url) {
     log("openInPreferredBrowser blocked invalid URL");
     return false;
   }
-  if (!["http:", "https:"].includes(parsed.protocol)) {
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
     log("openInPreferredBrowser blocked protocol", parsed.protocol);
     return false;
   }
