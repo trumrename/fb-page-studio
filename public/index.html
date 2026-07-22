@@ -28,7 +28,7 @@
       <a class="nav-item" href="/app.html#logs"><span class="ico">5</span> Kết quả & log</a>
       <div class="nav-label">System</div>
       <a class="nav-item" href="/license.html"><span class="ico">🔑</span> License</a>
-      <a class="nav-item" href="#" id="navUpdate" onclick="document.getElementById('btnUpdateApp')?.click();return false"><span class="ico">↑</span> Cập nhật phiên bản</a>
+      <a class="nav-item" href="#" id="navUpdate" onclick="event.preventDefault(); if(window.fbpsOpenUpdate) window.fbpsOpenUpdate(); else document.getElementById('btnUpdateApp')?.click(); return false"><span class="ico">↑</span> Cập nhật phiên bản</a>
       <div class="nav-foot">
         <div class="meta">
           Multi-account · Feed + hẹn giờ FB<br/>

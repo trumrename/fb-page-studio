@@ -128,7 +128,12 @@ function fetchJson(url, headers = {}) {
         res.on("data", (c) => (body += c));
         res.on("end", () => {
           if (res.statusCode && res.statusCode >= 400) {
-            reject(new Error(`GitHub HTTP ${res.statusCode}: ${body.slice(0, 200)}`));
+            reject(
+              new Error(
+                `GitHub HTTP ${res.statusCode}: ${body.slice(0, 200)}. ` +
+                  `Nếu mạng chặn GitHub: tải tay https://github.com/trumrename/fb-page-studio/releases/latest`
+              )
+            );
             return;
           }
           try {
@@ -139,10 +144,22 @@ function fetchJson(url, headers = {}) {
         });
       }
     );
-    req.on("error", reject);
+    req.on("error", (e) => {
+      reject(
+        new Error(
+          `Không kết nối GitHub (${e.message || e}). ` +
+            `Tắt VPN lạ / thử mạng khác, hoặc tải tay: https://github.com/trumrename/fb-page-studio/releases/latest`
+        )
+      );
+    });
     req.setTimeout(30000, () => {
       req.destroy();
-      reject(new Error("GitHub request timeout"));
+      reject(
+        new Error(
+          "GitHub request timeout (mạng chậm hoặc chặn api.github.com). " +
+            "Tải tay: https://github.com/trumrename/fb-page-studio/releases/latest"
+        )
+      );
     });
   });
 }
@@ -492,13 +509,32 @@ export async function applyUpdate() {
 
 /** Start exactly one background download. UI polls getUpdateProgress(). */
 export function startUpdate() {
-  if (activeUpdate) return { started: false, already_running: true, progress: getUpdateProgress(), promise: activeUpdate };
+  if (activeUpdate) {
+    return {
+      started: false,
+      already_running: true,
+      progress: getUpdateProgress(),
+      promise: activeUpdate,
+    };
+  }
+  // Set checking immediately so the first UI poll never sees idle/inactive
+  // (which previously made progress bar jump to "done" with 0%).
+  setUpdateProgress({
+    state: "checking",
+    bytes: 0,
+    total: 0,
+    percent: 0,
+    error: null,
+    message: "Đang kiểm tra bản phát hành…",
+  });
   activeUpdate = applyUpdate()
     .catch((e) => {
       setUpdateProgress({ state: "error", error: e.message, message: "Tải update thất bại" });
       return { ok: false, updated: false, error: e.message };
     })
-    .finally(() => { activeUpdate = null; });
+    .finally(() => {
+      activeUpdate = null;
+    });
   return { started: true, already_running: false, progress: getUpdateProgress(), promise: activeUpdate };
 }
 
