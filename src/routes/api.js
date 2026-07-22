@@ -144,15 +144,16 @@ router.get("/setup/first-run", (_req, res) => {
   res.json({ ok: true, ...firstRunStatus() });
 });
 
-router.put("/setup/first-run", (req, res) => {
+router.put("/setup/first-run", async (req, res) => {
   try {
+    const { pushMetaAppToRelay } = await import("../services/relayAppPush.js");
     const relayMode =
       String(process.env.OAUTH_RELAY || "").trim() === "1" ||
       String(process.env.OAUTH_RELAY || "").toLowerCase() === "true";
     const currentApp1Id = String(config.facebook.appId || process.env.FB_APP_ID || "").trim();
     const currentApp1Secret = String(config.facebook.appSecret || process.env.FB_APP_SECRET || "").trim();
     const app1Id = String(req.body?.app1_id || currentApp1Id).trim();
-    // Relay: secret only on oauth-relay server — allow empty App Secret on this machine.
+    // Relay: khách có thể nhập secret → đẩy lên server; local có thể xóa secret sau.
     const app1Secret = String(req.body?.app1_secret || currentApp1Secret).trim();
     if (!/^\d{5,30}$/.test(app1Id)) {
       throw new Error("App ID 1 phải là dãy số lấy từ Meta for Developers.");
@@ -161,7 +162,7 @@ router.put("/setup/first-run", (req, res) => {
       throw new Error("App Secret 1 chưa hợp lệ (máy không bật OAUTH_RELAY).");
     }
     if (relayMode && app1Secret && (app1Secret.length < 16 || /[\r\n]/.test(app1Secret))) {
-      throw new Error("App Secret 1 không hợp lệ (gói relay: để trống nếu secret chỉ trên server).");
+      throw new Error("App Secret 1 không hợp lệ.");
     }
 
     const removeApp2 = Boolean(req.body?.remove_app2);
@@ -170,7 +171,6 @@ router.put("/setup/first-run", (req, res) => {
     const app2Id = removeApp2
       ? ""
       : String(req.body?.app2_id || currentApp2Id).trim();
-    // Empty secret body keeps previous secret; relay mode may leave secret only on server.
     const app2SecretRaw = String(req.body?.app2_secret ?? "").trim();
     const app2Secret = removeApp2
       ? ""
@@ -181,11 +181,10 @@ router.put("/setup/first-run", (req, res) => {
     if (app2Id && app2Secret && (app2Secret.length < 16 || /[\r\n]/.test(app2Secret))) {
       throw new Error("App Secret 2 chưa hợp lệ (tối thiểu 16 ký tự).");
     }
-    // Portable/internal without relay still needs secret on this machine.
     if (app2Id && !app2Secret && !relayMode) {
       throw new Error(
         "Đã nhập App ID 2 nhưng thiếu App Secret 2. " +
-          "Gói OAuth relay: bật OAUTH_RELAY=1 (secret App 2 có thể chỉ trên máy server)."
+          "Gói OAuth relay: nhập secret để đẩy lên server, hoặc để trống nếu server đã có."
       );
     }
 
@@ -204,8 +203,6 @@ router.put("/setup/first-run", (req, res) => {
       encryptionKey = crypto.randomBytes(32).toString("hex");
     }
 
-    // Never write http://localhost as Facebook redirect on customer first-run.
-    // HTTPS relay domain is the only valid production redirect.
     const rawRedirect = String(config.facebook.redirectUri || process.env.FB_REDIRECT_URI || "").trim();
     const redirectUri =
       !rawRedirect || /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(rawRedirect) || /^http:\/\//i.test(rawRedirect)
@@ -219,17 +216,43 @@ router.put("/setup/first-run", (req, res) => {
       }
     })();
 
+    // Push secrets to relay when customer filled them (server stores; other PCs sync IDs)
+    const pushNotes = [];
+    // Không ép key=app1/app2 khi đẩy: server gán slot theo App ID
+    // (máy A "App 1" và máy B "App 1" có thể là 2 Meta App khác nhau).
+    if (relayMode && app1Secret) {
+      const p1 = await pushMetaAppToRelay({
+        appId: app1Id,
+        appSecret: app1Secret,
+        name: safeEnvLabel(req.body?.app1_name, process.env.FB_APP_NAME || "App 1"),
+        // omit key → server match by app_id or next free appN
+      });
+      if (!p1.ok) throw new Error(`Đẩy App 1 lên server thất bại: ${p1.error}`);
+      pushNotes.push(`slot App1 (ID ${app1Id}) → server ${p1.key || "?"}`);
+    }
+    if (relayMode && app2Id && app2Secret) {
+      const p2 = await pushMetaAppToRelay({
+        appId: app2Id,
+        appSecret: app2Secret,
+        name: safeEnvLabel(req.body?.app2_name, process.env.FB_APP_NAME_2 || "App 2"),
+      });
+      if (!p2.ok) throw new Error(`Đẩy App 2 lên server thất bại: ${p2.error}`);
+      pushNotes.push(`slot App2 (ID ${app2Id}) → server ${p2.key || "?"}`);
+    }
+
+    // Local .env: keep IDs; strip secrets after successful push (exchange on server)
+    const keepSecretLocal = !relayMode;
     const updates = {
       PORT: String(config.port || 3847),
       APP_BASE_URL: "http://127.0.0.1:3847",
       OAUTH_RELAY: "1",
       OAUTH_RELAY_URL: relayUrl,
       FB_APP_ID: app1Id,
-      FB_APP_SECRET: relayMode ? app1Secret : app1Secret,
+      FB_APP_SECRET: keepSecretLocal ? app1Secret : "",
       FB_APP_NAME: safeEnvLabel(req.body?.app1_name, process.env.FB_APP_NAME || "App 1"),
       FB_REDIRECT_URI: redirectUri,
       FB_APP_ID_2: app2Id,
-      FB_APP_SECRET_2: app2Secret,
+      FB_APP_SECRET_2: keepSecretLocal ? app2Secret : "",
       FB_APP_NAME_2: app2Id
         ? safeEnvLabel(req.body?.app2_name, process.env.FB_APP_NAME_2 || "App 2")
         : "",
@@ -240,20 +263,92 @@ router.put("/setup/first-run", (req, res) => {
       GITHUB_REPO: process.env.GITHUB_REPO || config.githubRepo || "trumrename/fb-page-studio",
       UPDATE_ASSET: process.env.UPDATE_ASSET || "FB-Page-Studio-Desktop.exe",
     };
+    // Preserve push token if UI sent it (once)
+    const pushTok = String(req.body?.relay_admin_token || "").trim();
+    if (pushTok && !/[\r\n]/.test(pushTok)) {
+      updates.RELAY_ADMIN_TOKEN = pushTok;
+      process.env.RELAY_ADMIN_TOKEN = pushTok;
+    }
+
     writeEnvValues(getEnvPath(), updates);
     for (const [key, value] of Object.entries(updates)) process.env[key] = value;
     config.facebook.appId = app1Id;
-    config.facebook.appSecret = app1Secret;
+    config.facebook.appSecret = keepSecretLocal ? app1Secret : "";
     config.facebook.redirectUri = redirectUri;
     config.tokenEncryptionKey = encryptionKey;
 
     res.json({
       ok: true,
-      message: "Đã lưu cấu hình máy mới. Có thể Connect Facebook ngay, không cần sửa .env hoặc khởi động lại.",
+      message:
+        "Đã lưu máy này." +
+        (pushNotes.length
+          ? ` Đã đẩy lên server: ${pushNotes.join("; ")}. Máy khác mở tool sẽ tự nhận App ID.`
+          : relayMode
+            ? " (Chưa đẩy secret — nhập App Secret + RELAY_ADMIN_TOKEN nếu muốn server tự nhận.)"
+            : "") +
+        " Có thể Connect Facebook.",
+      pushed: pushNotes,
       ...firstRunStatus(),
     });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/setup/register-meta-app
+ * Khách điền App ID + Secret → server relay lưu (secret chỉ trên server).
+ * Body: { app_id, app_secret, name?, key?, relay_admin_token? }
+ */
+router.post("/setup/register-meta-app", async (req, res) => {
+  try {
+    const { pushMetaAppToRelay } = await import("../services/relayAppPush.js");
+    const tok = String(req.body?.relay_admin_token || "").trim();
+    if (tok && !/[\r\n]/.test(tok)) {
+      process.env.RELAY_ADMIN_TOKEN = tok;
+      writeEnvValues(getEnvPath(), { RELAY_ADMIN_TOKEN: tok });
+    }
+    const appId = String(req.body?.app_id || req.body?.appId || "").trim();
+    const appSecret = String(req.body?.app_secret || req.body?.appSecret || "").trim();
+    const name = String(req.body?.name || "").trim();
+    const key = String(req.body?.key || "").trim();
+    const pushed = await pushMetaAppToRelay({ appId, appSecret, name, key: key || undefined });
+    if (!pushed.ok) throw new Error(pushed.error || "Push fail");
+
+    // Local: only public id (+ name). No secret on customer disk after push.
+    const m = /^app(\d+)$/i.exec(pushed.key || key || "app1");
+    const n = m ? Number(m[1]) : 1;
+    const idKey = n <= 1 ? "FB_APP_ID" : `FB_APP_ID_${n}`;
+    const nameKey = n <= 1 ? "FB_APP_NAME" : `FB_APP_NAME_${n}`;
+    const secretKey = n <= 1 ? "FB_APP_SECRET" : `FB_APP_SECRET_${n}`;
+    const redirKey = n <= 1 ? "FB_REDIRECT_URI" : `FB_REDIRECT_URI_${n}`;
+    const redirectUri = String(
+      process.env.FB_REDIRECT_URI || "https://modelswiki.top/auth/facebook/callback"
+    ).trim();
+    const local = {
+      [idKey]: appId,
+      [nameKey]: name || `App ${n}`,
+      [secretKey]: "",
+      [redirKey]: redirectUri,
+      OAUTH_RELAY: "1",
+    };
+    writeEnvValues(getEnvPath(), local);
+    for (const [k, v] of Object.entries(local)) process.env[k] = v;
+    if (n <= 1) {
+      config.facebook.appId = appId;
+      config.facebook.appSecret = "";
+    }
+
+    res.json({
+      ok: true,
+      key: pushed.key,
+      app_id: appId,
+      message:
+        "Server đã nhận App ID + Secret. Máy này chỉ giữ App ID. Máy khác mở lại tool sẽ tự đồng bộ.",
+      apps: pushed.apps,
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
   }
 });
 

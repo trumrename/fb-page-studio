@@ -86,7 +86,8 @@
           <h2 class="panel-hd">Bước 1 · Thiết lập Meta App <span class="badge" id="firstRunBadge">Đang kiểm tra</span></h2>
           <div class="panel-body">
             <p class="muted" style="margin-top:0">
-              Máy mới không cần tự tạo hoặc sửa file .env. Nhập thông tin Meta App một lần; tool tự tạo khóa mã hóa an toàn và lưu cạnh EXE.
+              Nhập <b>App ID + App Secret</b> → bấm Lưu: tool đẩy lên <b>server relay</b> (secret chỉ nằm server).
+              Máy này và máy khác mở lại tool sẽ <b>tự nhận App ID</b> (không cần sửa .env tay).
             </p>
             <div class="toolbar" style="align-items:end">
               <label style="flex:1;min-width:180px">Tên App 1
@@ -96,14 +97,13 @@
                 <input id="setupApp1Id" type="text" inputmode="numeric" placeholder="Dãy số App ID" autocomplete="off" />
               </label>
               <label style="flex:1;min-width:260px">App Secret 1
-                <input id="setupApp1Secret" type="password" placeholder="Nhập lần đầu; để trống = giữ secret đã lưu" autocomplete="new-password" />
+                <input id="setupApp1Secret" type="password" placeholder="Nhập để đẩy lên server; để trống = không đẩy" autocomplete="new-password" />
               </label>
             </div>
             <div class="first-run-app2" style="margin-top:.9rem;padding-top:.75rem;border-top:1px solid var(--border)">
               <div class="muted" style="font-size:.82rem;margin-bottom:.45rem;font-weight:650">App 2 · tùy chọn</div>
               <p class="muted" style="margin:0 0 .55rem;font-size:.78rem">
-                Điền App ID 2 (và Secret 2 nếu gói nội bộ). OAuth relay: Secret 2 có thể chỉ trên máy server.
-                Bấm <b>Lưu thiết lập máy mới</b> để ghi vào .env cạnh EXE.
+                App 2: nhập ID + Secret → cùng đẩy lên server khi Lưu.
               </p>
               <div class="toolbar" style="align-items:end">
                 <label style="flex:1;min-width:180px">Tên App 2
@@ -113,15 +113,35 @@
                   <input id="setupApp2Id" type="text" name="setupApp2Id" inputmode="numeric" placeholder="Dãy số App ID 2 (để trống = không dùng)" autocomplete="off" spellcheck="false" />
                 </label>
                 <label style="flex:1;min-width:260px">App Secret 2
-                  <input id="setupApp2Secret" type="password" name="setupApp2Secret" placeholder="Nội bộ: nhập secret · Relay khách: có thể để trống" autocomplete="new-password" spellcheck="false" />
+                  <input id="setupApp2Secret" type="password" name="setupApp2Secret" placeholder="Nhập để đẩy lên server" autocomplete="new-password" spellcheck="false" />
                 </label>
                 <label style="display:flex;align-items:center;gap:.45rem;margin-bottom:.75rem;white-space:nowrap">
                   <input id="setupRemoveApp2" type="checkbox" /> Xóa App 2
                 </label>
               </div>
             </div>
-            <div class="actions">
-              <button class="btn-ok" id="btnSaveFirstRun" type="button">Lưu thiết lập máy mới</button>
+            <div class="toolbar" style="align-items:end;margin-top:.75rem">
+              <label style="flex:1;min-width:280px">Token đẩy lên server <span class="muted">(cùng RELAY_ADMIN_TOKEN trên VPS)</span>
+                <input id="setupRelayAdminToken" type="password" placeholder="RELAY_ADMIN_TOKEN — lưu 1 lần trên máy này" autocomplete="new-password" />
+              </label>
+            </div>
+            <div class="actions" style="margin-top:.65rem">
+              <button class="btn-ok" id="btnSaveFirstRun" type="button">Lưu + đẩy App lên server</button>
+            </div>
+            <div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--border)">
+              <div class="muted" style="font-size:.82rem;margin-bottom:.45rem;font-weight:650">Thêm App 3 / App mới (đẩy server)</div>
+              <div class="toolbar" style="align-items:end">
+                <label style="flex:1;min-width:160px">Tên
+                  <input id="setupExtraName" type="text" placeholder="App 3" autocomplete="off" />
+                </label>
+                <label style="flex:1;min-width:200px">App ID
+                  <input id="setupExtraId" type="text" inputmode="numeric" placeholder="App ID mới" autocomplete="off" />
+                </label>
+                <label style="flex:1;min-width:240px">App Secret
+                  <input id="setupExtraSecret" type="password" placeholder="Secret App mới" autocomplete="new-password" />
+                </label>
+                <button class="btn-primary" id="btnRegisterExtraApp" type="button">Đẩy App mới lên server</button>
+              </div>
             </div>
             <div id="firstRunStatus" class="muted" style="margin-top:.75rem;font-size:.84rem"></div>
           </div>
@@ -351,16 +371,43 @@
             app2_id: $("setupApp2Id").value.trim(),
             app2_secret: $("setupApp2Secret").value.trim(),
             remove_app2: $("setupRemoveApp2").checked,
+            relay_admin_token: $("setupRelayAdminToken")?.value?.trim() || "",
           }),
         });
         $("setupRemoveApp2").checked = false;
+        if ($("setupRelayAdminToken")) $("setupRelayAdminToken").value = "";
         await Promise.all([loadFirstRunStatus(), loadMetaAppsHint()]);
         alert(r.message);
       } catch (error) {
         alert(error.message);
       } finally {
         button.disabled = false;
-        button.textContent = "Lưu thiết lập máy mới";
+        button.textContent = "Lưu + đẩy App lên server";
+      }
+    };
+
+    $("btnRegisterExtraApp").onclick = async () => {
+      const button = $("btnRegisterExtraApp");
+      button.disabled = true;
+      button.textContent = "Đang đẩy…";
+      try {
+        const r = await api("/api/setup/register-meta-app", {
+          method: "POST",
+          body: JSON.stringify({
+            name: $("setupExtraName").value.trim(),
+            app_id: $("setupExtraId").value.trim(),
+            app_secret: $("setupExtraSecret").value.trim(),
+            relay_admin_token: $("setupRelayAdminToken")?.value?.trim() || "",
+          }),
+        });
+        $("setupExtraSecret").value = "";
+        await Promise.all([loadFirstRunStatus(), loadMetaAppsHint()]);
+        alert(r.message + (r.key ? `\nKey: ${r.key}` : ""));
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Đẩy App mới lên server";
       }
     };
 

@@ -54,24 +54,27 @@ export function listMetaApps() {
     scopes: scopesFromEnv("FB_SCOPES", scopes),
   });
 
-  // App 2
-  const id2 = String(process.env.FB_APP_ID_2 || "").trim();
-  if (id2) {
+  // App 2 … App 20 via FB_APP_ID_N / FB_APP_SECRET_N / FB_APP_NAME_N / FB_REDIRECT_URI_N
+  // (same scheme as oauth-relay — never duplicate FB_APP_ID= for multiple apps)
+  for (let n = 2; n <= 20; n++) {
+    const idN = String(process.env[`FB_APP_ID_${n}`] || "").trim();
+    if (!idN) continue;
     apps.push({
-      key: "app2",
-      name: process.env.FB_APP_NAME_2 || "App 2",
-      appId: id2,
-      appSecret: String(process.env.FB_APP_SECRET_2 || "").trim(),
+      key: `app${n}`,
+      name: process.env[`FB_APP_NAME_${n}`] || `App ${n}`,
+      appId: idN,
+      appSecret: String(process.env[`FB_APP_SECRET_${n}`] || "").trim(),
       redirectUri: String(
-        process.env.FB_REDIRECT_URI_2 ||
+        process.env[`FB_REDIRECT_URI_${n}`] ||
+          process.env.FB_REDIRECT_URI ||
           config.facebook.redirectUri ||
           `http://localhost:${config.port}/auth/facebook/callback`
       ).trim(),
-      scopes: scopesFromEnv("FB_SCOPES_2", scopes),
+      scopes: scopesFromEnv(`FB_SCOPES_${n}`, scopes),
     });
   }
 
-  // Optional extra apps from JSON (no secrets preferred — secrets still env)
+  // Optional extra apps from JSON (labels / IDs; secrets better in env for relay)
   try {
     const f = path.join(config.dataDir, "meta_apps.json");
     if (fs.existsSync(f)) {
@@ -80,11 +83,16 @@ export function listMetaApps() {
       for (const e of list) {
         const key = String(e.key || "").trim();
         if (!key || apps.some((a) => a.key === key)) continue;
+        // Prefer env secret for appN when JSON only has public id
+        const num = /^app(\d+)$/i.exec(key);
+        const envSecret = num
+          ? String(process.env[`FB_APP_SECRET_${num[1]}`] || (num[1] === "1" ? process.env.FB_APP_SECRET : "") || "").trim()
+          : "";
         apps.push({
           key,
           name: e.name || key,
           appId: String(e.appId || e.app_id || "").trim(),
-          appSecret: String(e.appSecret || e.app_secret || "").trim(),
+          appSecret: String(e.appSecret || e.app_secret || envSecret || "").trim(),
           redirectUri: String(
             e.redirectUri || e.redirect_uri || config.facebook.redirectUri
           ).trim(),
@@ -138,16 +146,18 @@ export function assertMetaAppConfigured(key) {
   const want = key != null && String(key).trim() !== "" ? String(key) : "app1";
   const app = getMetaApp(want);
   if (!app) {
+    const n = (/^app(\d+)$/i.exec(want) || [])[1];
     throw new Error(
-      want === "app2" || want.includes("2")
-        ? `Meta App "${want}" chưa khai báo. Thêm FB_APP_ID_2 (+ secret nội bộ hoặc relay)`
+      n && Number(n) >= 2
+        ? `Meta App "${want}" chưa khai báo. Thêm FB_APP_ID_${n} (+ secret nội bộ hoặc relay)`
         : `Meta App "${want}" không tồn tại. Kiểm tra FB_APP_ID trong .env`
     );
   }
   if (!app.configured) {
+    const n = (/^app(\d+)$/i.exec(want) || [])[1];
     throw new Error(
-      want === "app2" || want.includes("2")
-        ? `Meta App "${want}" chưa cấu hình. Cần FB_APP_ID_2 (gói khách: + OAUTH_RELAY; nội bộ: + SECRET_2)`
+      n && Number(n) >= 2
+        ? `Meta App "${want}" chưa cấu hình. Cần FB_APP_ID_${n} (gói khách: + OAUTH_RELAY; nội bộ: + FB_APP_SECRET_${n})`
         : `Meta App "${want}" chưa cấu hình. Cần FB_APP_ID (gói khách: + OAUTH_RELAY; nội bộ: + FB_APP_SECRET)`
     );
   }

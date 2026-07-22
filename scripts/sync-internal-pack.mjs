@@ -82,6 +82,8 @@ const redirect = `${relayUrl}/auth/facebook/callback`;
 const lines = [
   "# GÓI NỘI BỘ — TIN CẬY — CÓ SECRET. Không gửi ra ngoài / không public repo.",
   `# version=${ver} built=${new Date().toISOString()}`,
+  "# OAuth: HTTPS relay — không http://localhost",
+  "# Slot local tối đa App1+App2; server có thể có nhiều Meta App (app3…)",
   "",
   "PORT=3847",
   "APP_BASE_URL=http://127.0.0.1:3847",
@@ -90,18 +92,43 @@ const lines = [
   "NGROK_AUTHTOKEN=",
   `OAUTH_RELAY_URL=${relayUrl.replace(/\/$/, "")}`,
   `FB_REDIRECT_URI=${redirect}`,
+  "",
+  "# ----- Slot App 1 (máy này) -----",
   `FB_APP_ID=${srcEnv.FB_APP_ID || ""}`,
   `FB_APP_SECRET=${srcEnv.FB_APP_SECRET || ""}`,
   `FB_APP_NAME=${srcEnv.FB_APP_NAME || "App 1"}`,
+  "",
+  "# ----- Slot App 2 (máy này, tuỳ chọn) -----",
   srcEnv.FB_APP_ID_2 ? `FB_APP_ID_2=${srcEnv.FB_APP_ID_2}` : "# FB_APP_ID_2=",
   srcEnv.FB_APP_SECRET_2 ? `FB_APP_SECRET_2=${srcEnv.FB_APP_SECRET_2}` : "# FB_APP_SECRET_2=",
+  srcEnv.FB_APP_NAME_2 ? `FB_APP_NAME_2=${srcEnv.FB_APP_NAME_2}` : "# FB_APP_NAME_2=App 2",
+  srcEnv.FB_APP_ID_2 ? `FB_REDIRECT_URI_2=${redirect}` : "# FB_REDIRECT_URI_2=",
+  "",
+  "# Token đẩy App ID+Secret lên relay (tuỳ chọn; server RELAY_ALLOW_OPEN_REGISTER=1 thì không cần)",
+  srcEnv.RELAY_ADMIN_TOKEN
+    ? `RELAY_ADMIN_TOKEN=${srcEnv.RELAY_ADMIN_TOKEN}`
+    : "# RELAY_ADMIN_TOKEN=",
+  "",
   `FB_GRAPH_VERSION=${srcEnv.FB_GRAPH_VERSION || "v21.0"}`,
   `FB_SCOPES=${srcEnv.FB_SCOPES || "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile"}`,
   `TOKEN_ENCRYPTION_KEY=${srcEnv.TOKEN_ENCRYPTION_KEY || crypto.randomBytes(32).toString("hex")}`,
   `GITHUB_REPO=${srcEnv.GITHUB_REPO || pkg.githubRepo || "trumrename/fb-page-studio"}`,
+  "UPDATE_ASSET=FB-Page-Studio-Desktop.exe",
   "",
 ];
 fs.writeFileSync(path.join(out, ".env"), lines.join("\n"), "utf8");
+// Mẫu không secret để tham chiếu
+fs.writeFileSync(
+  path.join(out, ".env.mau-noi-bo.txt"),
+  lines
+    .map((l) =>
+      /^(FB_APP_SECRET|FB_APP_SECRET_\d+|RELAY_ADMIN_TOKEN|TOKEN_ENCRYPTION_KEY)=/.test(l)
+        ? l.replace(/=.*/, "=***")
+        : l
+    )
+    .join("\n"),
+  "utf8"
+);
 
 // Copy EXE if present
 const exeSrc = [

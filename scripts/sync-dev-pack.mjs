@@ -80,7 +80,53 @@ fs.writeFileSync(
     `built_at=${new Date().toISOString()}`,
     `github=${pkg.githubRepo || ""}`,
     `root=${root}`,
+    `oauth=https://modelswiki.top`,
     ``,
+  ].join("\n"),
+  "utf8"
+);
+
+// Mẫu .env dev (không secret) — copy thành .env cạnh EXE khi test portable
+const devEnvMau = [
+  "# GÓI DEV — mẫu .env (điền secret từ Meta / project .env)",
+  `# version=${ver}`,
+  "PORT=3847",
+  "APP_BASE_URL=http://127.0.0.1:3847",
+  "OAUTH_RELAY=1",
+  "NGROK_AUTOSTART=0",
+  "NGROK_AUTHTOKEN=",
+  "OAUTH_RELAY_URL=https://modelswiki.top",
+  "FB_REDIRECT_URI=https://modelswiki.top/auth/facebook/callback",
+  "",
+  "FB_APP_ID=",
+  "FB_APP_SECRET=",
+  "FB_APP_NAME=App 1",
+  "FB_APP_ID_2=",
+  "FB_APP_SECRET_2=",
+  "FB_APP_NAME_2=App 2",
+  "FB_REDIRECT_URI_2=https://modelswiki.top/auth/facebook/callback",
+  "",
+  "# RELAY_ADMIN_TOKEN=",
+  "FB_GRAPH_VERSION=v21.0",
+  "TOKEN_ENCRYPTION_KEY=",
+  "GITHUB_REPO=trumrename/fb-page-studio",
+  "UPDATE_ASSET=FB-Page-Studio-Desktop.exe",
+  "",
+].join("\n");
+fs.writeFileSync(path.join(out, ".env.mau-dev.txt"), devEnvMau, "utf8");
+fs.writeFileSync(path.join(out, ".env.example"), devEnvMau, "utf8");
+
+fs.writeFileSync(
+  path.join(out, "README-DEV.md"),
+  [
+    `# FB Page Studio — pack-dev v${ver}`,
+    "",
+    "- EXE: `FB-Page-Studio-Desktop-v${ver}.exe` + alias `FB-Page-Studio-Desktop.exe`",
+    `- Setup: \`FB-Page-Studio-Setup-v${ver}.exe\``,
+    "- Mẫu env: `.env.mau-dev.txt` → copy thành `.env` cạnh EXE",
+    "- OAuth chuẩn: `https://modelswiki.top/auth/facebook/callback`",
+    "- Server relay: `oauth-relay/server.mjs` + `.env.server.mau`",
+    "",
   ].join("\n"),
   "utf8"
 );

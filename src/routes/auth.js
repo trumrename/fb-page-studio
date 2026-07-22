@@ -19,10 +19,11 @@ const router = Router();
 function createOAuthSession(metaAppKey = "app1", rerequest = false) {
   cleanupOldOauthStates();
   const app = assertMetaAppConfigured(metaAppKey);
-  // Append local port so OAuth relay can 302 back to this EXE (127.0.0.1:port)
-  // Format: <nanoid>.<port> — portable + relay; harmless if no relay.
-  // state = nanoid.port.metaAppKey — relay parses port + app; DB stores full state
-  const state = `${nanoid(32)}.${config.port}.${app.key}`;
+  // state = nanoid.port.metaAppKey.appId
+  // - port: relay 302 về 127.0.0.1:port
+  // - metaAppKey: slot local (app1/app2 trên máy khách)
+  // - appId: Meta App ID thật — server chọn đúng secret (nhiều khách cùng "App 1")
+  const state = `${nanoid(32)}.${config.port}.${app.key}.${app.appId || ""}`;
   getDb()
     .prepare(
       `INSERT INTO oauth_states (state, meta_app_key) VALUES (?, ?)`

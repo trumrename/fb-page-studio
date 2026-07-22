@@ -28,8 +28,9 @@ copyFile(
   path.join(out, "oauth-relay", "server.mjs")
 );
 
-const envExample = `# Máy SERVER — OAuth Relay (CÓ SECRET sau khi CAI)
+const envExample = `# Máy SERVER — OAuth Relay (CÓ SECRET)
 # Domain: modelswiki.top
+# Khách đẩy App ID+Secret từ tool → server TỰ ghi FB_APP_ID_N vào .env này
 
 PORT=8080
 LISTEN_HOST=127.0.0.1
@@ -38,13 +39,30 @@ RELAY_PUBLIC_URL=https://modelswiki.top
 FB_REDIRECT_URI=https://modelswiki.top/auth/facebook/callback
 
 RELAY_EXCHANGE=1
-FB_APP_ID=
-FB_APP_SECRET=
+# Server nhà: khách đẩy app không cần token
+RELAY_ALLOW_OPEN_REGISTER=1
 
 FB_GRAPH_VERSION=v21.0
 DEFAULT_LOCAL_PORT=3847
+
+# App 1 (hoặc để trống — khách đẩy từ tool sẽ tự ghi)
+FB_APP_ID=
+FB_APP_SECRET=
+FB_APP_NAME=App 1
+
+# App 2+
+# FB_APP_ID_2=
+# FB_APP_SECRET_2=
+# FB_APP_NAME_2=App 2
 `;
 fs.writeFileSync(path.join(out, "oauth-relay", ".env.example"), envExample, "utf8");
+// Copy full mau + guide if present
+for (const f of [".env.server.mau", "HUONG-DAN-2-MAU-ENV.txt"]) {
+  const src = path.join(root, "oauth-relay", f);
+  if (fs.existsSync(src)) {
+    fs.copyFileSync(src, path.join(out, "oauth-relay", f));
+  }
+}
 
 // PowerShell installer — file thật, không template JS
 copyFile(

@@ -56,6 +56,7 @@ function parseState(state) {
   const parts = s.split(".");
   let port = defaultLocalPort;
   let metaAppKey = "app1";
+  let appId = "";
   if (parts.length >= 2) {
     const maybePort = Number(parts[1]);
     if (Number.isFinite(maybePort) && maybePort >= 1024 && maybePort <= 65535) {
@@ -64,26 +65,263 @@ function parseState(state) {
   }
   if (parts.length >= 3) {
     const k = parts[2];
-    if (k === "app1" || k === "app2" || /^app\d+$/.test(k)) metaAppKey = k;
+    if (k === "app1" || k === "app2" || /^app\d+$/i.test(k)) metaAppKey = k;
   }
-  return { port, metaAppKey };
+  // state = nanoid.port.metaAppKey.appId  (appId = Meta App ID, unique per customer)
+  if (parts.length >= 4 && /^\d{5,30}$/.test(parts[3])) {
+    appId = parts[3];
+  } else {
+    for (const p of parts) {
+      if (/^\d{5,30}$/.test(p)) {
+        appId = p;
+        break;
+      }
+    }
+  }
+  return { port, metaAppKey, appId };
 }
 
 function graphVersion() {
   return process.env.FB_GRAPH_VERSION || "v21.0";
 }
 
-function appCreds(metaAppKey) {
-  if (metaAppKey === "app2") {
+/**
+ * Multi Meta App:
+ *   .env: FB_APP_ID / FB_APP_SECRET, FB_APP_ID_N / FB_APP_SECRET_N
+ *   data/apps.json: apps added via admin API (secrets stay on server only)
+ * Clients auto-sync PUBLIC app list (no secrets) from /client-config.
+ */
+const dataDir = path.join(__dirname, "data");
+const appsFile = path.join(dataDir, "apps.json");
+const adminToken = String(process.env.RELAY_ADMIN_TOKEN || "").trim();
+/** 1 = khách chỉ cần gửi ID+Secret (không cần token) — dùng server nhà / mạng tin cậy */
+const allowOpenRegister =
+  String(process.env.RELAY_ALLOW_OPEN_REGISTER || "").trim() === "1" ||
+  String(process.env.RELAY_ALLOW_OPEN_REGISTER || "").toLowerCase() === "true";
+
+function readAppsFile() {
+  try {
+    if (!fs.existsSync(appsFile)) return [];
+    const j = JSON.parse(fs.readFileSync(appsFile, "utf8"));
+    const list = Array.isArray(j) ? j : j.apps || [];
+    return list
+      .map((a) => ({
+        key: String(a.key || "").trim(),
+        name: String(a.name || a.key || "").trim(),
+        appId: String(a.appId || a.app_id || "").trim(),
+        appSecret: String(a.appSecret || a.app_secret || "").trim(),
+      }))
+      .filter((a) => a.key && a.appId);
+  } catch {
+    return [];
+  }
+}
+
+function writeAppsFile(list) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(
+    appsFile,
+    JSON.stringify({ apps: list, updated_at: new Date().toISOString() }, null, 2),
+    "utf8"
+  );
+}
+
+/** Resolve server .env path (same search order as startup load). */
+function serverEnvPath() {
+  for (const p of [
+    path.join(__dirname, ".env"),
+    path.join(__dirname, "..", ".env"),
+    path.join(__dirname, "..", "oauth-relay.env"),
+  ]) {
+    if (fs.existsSync(p)) return p;
+  }
+  return path.join(__dirname, ".env");
+}
+
+/**
+ * Upsert KEY=value in server .env and process.env so new apps work without restart.
+ * Used when client pushes App ID + Secret.
+ */
+function writeServerEnvValues(values) {
+  const envPath = serverEnvPath();
+  let text = "";
+  try {
+    if (fs.existsSync(envPath)) text = fs.readFileSync(envPath, "utf8");
+  } catch {
+    text = "";
+  }
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  for (const [key, value] of Object.entries(values)) {
+    const safe = String(value ?? "");
+    if (/[\r\n]/.test(safe)) continue;
+    process.env[key] = safe;
+    const pattern = new RegExp(`^(\\s*${key}\\s*=).*?$`, "m");
+    if (pattern.test(text)) {
+      text = text.replace(pattern, (_m, prefix) => `${prefix}${safe}`);
+    } else {
+      text += `${text && !text.endsWith("\n") && !text.endsWith("\r\n") ? newline : ""}${key}=${safe}${newline}`;
+    }
+  }
+  fs.mkdirSync(path.dirname(envPath), { recursive: true });
+  fs.writeFileSync(envPath, text, "utf8");
+  return envPath;
+}
+
+/** Map app1 → FB_APP_ID, app2 → FB_APP_ID_2, … */
+function envKeysForApp(metaAppKey) {
+  const m = /^app(\d+)$/i.exec(String(metaAppKey || "app1"));
+  const n = m ? Number(m[1]) : 1;
+  if (n <= 1) {
     return {
-      appId: String(process.env.FB_APP_ID_2 || process.env.FB_APP_ID || "").trim(),
-      appSecret: String(process.env.FB_APP_SECRET_2 || process.env.FB_APP_SECRET || "").trim(),
+      id: "FB_APP_ID",
+      secret: "FB_APP_SECRET",
+      name: "FB_APP_NAME",
     };
   }
   return {
-    appId: String(process.env.FB_APP_ID || "").trim(),
-    appSecret: String(process.env.FB_APP_SECRET || "").trim(),
+    id: `FB_APP_ID_${n}`,
+    secret: `FB_APP_SECRET_${n}`,
+    name: `FB_APP_NAME_${n}`,
   };
+}
+
+function envAppCreds(metaAppKey) {
+  const key = String(metaAppKey || "app1").trim() || "app1";
+  const m = /^app(\d+)$/i.exec(key);
+  const n = m ? Number(m[1]) : 1;
+  if (n <= 1) {
+    return {
+      appId: String(process.env.FB_APP_ID || process.env.FB_APP_ID_1 || "").trim(),
+      appSecret: String(process.env.FB_APP_SECRET || process.env.FB_APP_SECRET_1 || "").trim(),
+      name: process.env.FB_APP_NAME || process.env.FB_APP_NAME_1 || "App 1",
+    };
+  }
+  return {
+    appId: String(process.env[`FB_APP_ID_${n}`] || "").trim(),
+    appSecret: String(process.env[`FB_APP_SECRET_${n}`] || "").trim(),
+    name: process.env[`FB_APP_NAME_${n}`] || `App ${n}`,
+  };
+}
+
+/** All known apps on server (env + json) with secrets — for lookup by Meta App ID. */
+function allServerAppsWithSecrets() {
+  const byId = new Map();
+  const add = (key, appId, appSecret, name) => {
+    const id = String(appId || "").trim();
+    const secret = String(appSecret || "").trim();
+    if (!id) return;
+    byId.set(id, {
+      key: key || `app_id_${id}`,
+      appId: id,
+      appSecret: secret,
+      name: name || key || id,
+    });
+  };
+  const e1 = envAppCreds("app1");
+  if (e1.appId) add("app1", e1.appId, e1.appSecret, e1.name);
+  for (let n = 2; n <= 40; n++) {
+    const e = envAppCreds(`app${n}`);
+    if (e.appId) add(`app${n}`, e.appId, e.appSecret, e.name);
+  }
+  for (const a of readAppsFile()) {
+    // file can fill secret if env only has id, or full entry
+    const prev = byId.get(a.appId);
+    if (!prev) add(a.key, a.appId, a.appSecret, a.name);
+    else if (!prev.appSecret && a.appSecret) {
+      prev.appSecret = a.appSecret;
+      if (a.name) prev.name = a.name;
+    }
+  }
+  return byId;
+}
+
+function appCreds(metaAppKey, appIdHint = "") {
+  const hint = String(appIdHint || "").trim();
+  // Prefer lookup by Meta App ID — each customer machine has local "App 1/App 2"
+  // but server stores many real apps; must not use wrong secret via slot name alone.
+  if (hint) {
+    const hit = allServerAppsWithSecrets().get(hint);
+    if (hit?.appId && hit?.appSecret) return hit;
+  }
+  const key = String(metaAppKey || "app1").trim() || "app1";
+  const fromEnv = envAppCreds(key);
+  if (fromEnv.appId && fromEnv.appSecret) return fromEnv;
+  const fromFile = readAppsFile().find((a) => a.key === key);
+  if (fromFile?.appId && fromFile?.appSecret) {
+    return { appId: fromFile.appId, appSecret: fromFile.appSecret, name: fromFile.name, key };
+  }
+  if (fromEnv.appId && fromFile?.appSecret) {
+    return {
+      appId: fromEnv.appId,
+      appSecret: fromFile.appSecret,
+      name: fromFile.name || fromEnv.name,
+      key,
+    };
+  }
+  return { ...fromEnv, key };
+}
+
+/** Public list for EXE auto-sync — full app_id, no secrets. */
+function listRelayAppsPublic() {
+  const byKey = new Map();
+  const add = (key, appId, name) => {
+    const id = String(appId || "").trim();
+    const k = String(key || "").trim();
+    if (!k || !id) return;
+    byKey.set(k, {
+      key: k,
+      name: name || k,
+      app_id: id,
+      redirect_uri: redirectUri(),
+      configured: true,
+    });
+  };
+  const e1 = envAppCreds("app1");
+  if (e1.appId) add("app1", e1.appId, e1.name);
+  for (let n = 2; n <= 20; n++) {
+    const e = envAppCreds(`app${n}`);
+    if (e.appId) add(`app${n}`, e.appId, e.name);
+  }
+  for (const a of readAppsFile()) {
+    if (!byKey.has(a.key)) add(a.key, a.appId, a.name);
+  }
+  return [...byKey.values()].sort((a, b) =>
+    a.key.localeCompare(b.key, undefined, { numeric: true })
+  );
+}
+
+function nextAppKey() {
+  const used = new Set(listRelayAppsPublic().map((a) => a.key));
+  for (let n = 1; n <= 50; n++) {
+    const k = `app${n}`;
+    if (!used.has(k)) return k;
+  }
+  return `app${Date.now()}`;
+}
+
+function requireAdmin(req) {
+  // Server nhà: cho phép khách đẩy App ID+Secret không token (tự ghi .env)
+  if (allowOpenRegister) return { ok: true, open: true };
+  if (!adminToken) {
+    return {
+      ok: false,
+      error:
+        "Server chặn đăng ký app. Đặt RELAY_ALLOW_OPEN_REGISTER=1 (server nhà) " +
+        "hoặc RELAY_ADMIN_TOKEN=... và gửi token từ tool.",
+    };
+  }
+  const h = String(req.headers["x-relay-admin-token"] || req.headers["authorization"] || "").trim();
+  const token = h.replace(/^Bearer\s+/i, "");
+  if (token !== adminToken) return { ok: false, error: "Sai RELAY_ADMIN_TOKEN" };
+  return { ok: true };
+}
+
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (!raw) return {};
+  return JSON.parse(raw);
 }
 
 function redirectUri() {
@@ -93,10 +331,14 @@ function redirectUri() {
   return `${base}/auth/facebook/callback`;
 }
 
-async function exchangeCode(code, metaAppKey) {
-  const { appId, appSecret } = appCreds(metaAppKey);
+async function exchangeCode(code, metaAppKey, appIdHint = "") {
+  const { appId, appSecret } = appCreds(metaAppKey, appIdHint);
   if (!appId || !appSecret) {
-    throw new Error("Relay thiếu FB_APP_ID / FB_APP_SECRET (cần khi RELAY_EXCHANGE=1)");
+    throw new Error(
+      `Relay thiếu secret cho app ${metaAppKey}` +
+        (appIdHint ? ` (Meta ID ${appIdHint})` : "") +
+        " — khách cần đẩy App ID+Secret lên server trước."
+    );
   }
   const uri = redirectUri();
   const url = new URL(`https://graph.facebook.com/${graphVersion()}/oauth/access_token`);
@@ -176,6 +418,7 @@ const server = http.createServer(async (req, res) => {
         public_url: /^https?:\/\//i.test(publicUrl) ? publicUrl : `https://${publicUrl}`,
         redirect_uri: redir,
         oauth_relay: true,
+        apps: listRelayAppsPublic(),
       })
     );
     return;
@@ -203,6 +446,95 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // List apps (public ids) — same as health.apps
+  if (url.pathname === "/api/apps" && req.method === "GET") {
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(JSON.stringify({ ok: true, apps: listRelayAppsPublic(), redirect_uri: redirectUri() }));
+    return;
+  }
+
+  // Admin: add/update Meta App on server (secret stays on relay; clients auto-sync public ids)
+  // POST /api/admin/apps  Header: X-Relay-Admin-Token: <RELAY_ADMIN_TOKEN>
+  // Body: { app_id, app_secret, name?, key? }
+  if (url.pathname === "/api/admin/apps" && req.method === "POST") {
+    try {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        res.writeHead(401, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: auth.error }));
+        return;
+      }
+      const body = await readJsonBody(req);
+      const appId = String(body.app_id || body.appId || "").trim();
+      const appSecret = String(body.app_secret || body.appSecret || "").trim();
+      const name = String(body.name || "").trim() || `App ${appId.slice(-4)}`;
+      let key = String(body.key || "").trim();
+      if (!/^\d{5,30}$/.test(appId)) throw new Error("app_id phải là App ID Meta (số)");
+      if (appSecret.length < 16) throw new Error("app_secret bắt buộc (tối thiểu 16 ký tự) — chỉ lưu trên server");
+      // Theo Meta App ID: cùng ID = cập nhật secret; ID mới = slot server mới.
+      // Tên "App 1/App 2" trên máy khách chỉ là slot local — không đè app của máy khác.
+      const existingById = listRelayAppsPublic().find((a) => a.app_id === appId);
+      if (existingById) {
+        key = existingById.key;
+      } else {
+        key = nextAppKey();
+      }
+      if (!/^app\d+$/i.test(key)) throw new Error("key phải dạng app1, app2, app3…");
+
+      // 1) Backup JSON
+      const list = readAppsFile().filter((a) => a.key !== key && a.appId !== appId);
+      list.push({ key, name, appId, appSecret });
+      writeAppsFile(list);
+
+      // 2) Ghi thẳng vào .env server (đúng ý: ID + secret tự vào env sever)
+      const ek = envKeysForApp(key);
+      const envPath = writeServerEnvValues({
+        [ek.id]: appId,
+        [ek.secret]: appSecret,
+        [ek.name]: name,
+        // giữ redirect chuẩn nếu chưa có
+        FB_REDIRECT_URI:
+          String(process.env.FB_REDIRECT_URI || "").trim() ||
+          `${String(publicName).replace(/\/$/, "")}/auth/facebook/callback`,
+      });
+
+      console.log(`[relay-admin] upsert app ${key} id=${appId} → .env ${envPath}`);
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          key,
+          name,
+          app_id: appId,
+          env_path: envPath,
+          env_keys: [ek.id, ek.secret, ek.name],
+          message:
+            `Đã ghi ${ek.id} + ${ek.secret} vào .env server. ` +
+            "Máy khách mở lại tool sẽ tự đồng bộ App ID (không nhận secret).",
+          apps: listRelayAppsPublic(),
+        })
+      );
+    } catch (e) {
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: e.message || String(e) }));
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/admin/apps" && req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, X-Relay-Admin-Token, Authorization",
+    });
+    res.end();
+    return;
+  }
+
   if (url.pathname === "/" || url.pathname === "/index.html") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(
@@ -227,7 +559,7 @@ const server = http.createServer(async (req, res) => {
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state") || "";
       const err = url.searchParams.get("error");
-      const { port, metaAppKey } = parseState(state);
+      const { port, metaAppKey, appId: stateAppId } = parseState(state);
 
       if (err) {
         const target = new URL(`http://127.0.0.1:${port}/auth/facebook/callback`);
@@ -238,7 +570,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (exchangeMode && code) {
-        const tok = await exchangeCode(code, metaAppKey);
+        const tok = await exchangeCode(code, metaAppKey, stateAppId);
         const ticket = putTicket({
           access_token: tok.access_token,
           expires_in: tok.expires_in,
@@ -248,7 +580,9 @@ const server = http.createServer(async (req, res) => {
         const target = `http://127.0.0.1:${port}/auth/facebook/relay-complete?ticket=${encodeURIComponent(ticket)}`;
         res.writeHead(302, { Location: target, "Cache-Control": "no-store" });
         res.end();
-        console.log(`[relay-exchange] ticket → 127.0.0.1:${port} app=${metaAppKey}`);
+        console.log(
+          `[relay-exchange] ticket → 127.0.0.1:${port} slot=${metaAppKey} metaId=${stateAppId || tok.app_id}`
+        );
         return;
       }
 

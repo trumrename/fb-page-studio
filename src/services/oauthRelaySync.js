@@ -89,6 +89,7 @@ async function fetchClientConfig(base) {
             public_url: base,
             redirect_uri: `${base}/auth/facebook/callback`,
             exchange: Boolean(data.exchange),
+            apps: Array.isArray(data.apps) ? data.apps : [],
           };
         }
         continue;
@@ -102,6 +103,7 @@ async function fetchClientConfig(base) {
         public_url: publicUrl,
         redirect_uri: redirect,
         exchange: Boolean(data.exchange),
+        apps: Array.isArray(data.apps) ? data.apps : [],
       };
     } catch {
       /* try next path / host */
@@ -150,36 +152,89 @@ export async function syncOauthRelayConfig() {
   const prevRedirect = String(process.env.FB_REDIRECT_URI || config.facebook.redirectUri || "").trim();
   const prevRelay = String(process.env.OAUTH_RELAY_URL || "").trim().replace(/\/$/, "");
 
-  const changed =
-    prevRedirect !== redirectUri || prevRelay !== publicUrl;
+  // Public app catalog from server (full app_id, no secrets)
+  let remoteApps = Array.isArray(found.apps) ? found.apps : [];
+  if (!remoteApps.length) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4000);
+      const ar = await fetch(`${publicUrl}/api/apps`, {
+        signal: ctrl.signal,
+        headers: { Accept: "application/json", "Cache-Control": "no-cache" },
+      });
+      clearTimeout(t);
+      if (ar.ok) {
+        const aj = await ar.json();
+        if (Array.isArray(aj.apps)) remoteApps = aj.apps;
+      }
+    } catch {
+      /* optional */
+    }
+  }
+
+  const envUpdates = {
+    OAUTH_RELAY: "1",
+    OAUTH_RELAY_URL: publicUrl,
+    FB_REDIRECT_URI: redirectUri,
+    NGROK_AUTOSTART: "0",
+    APP_BASE_URL: String(
+      process.env.APP_BASE_URL || `http://127.0.0.1:${config.port || 3847}`
+    ),
+  };
+
+  // Auto-fill FB_APP_ID / _2 / _3… from server so every machine matches without hand-edit
+  let appsChanged = false;
+  for (const a of remoteApps) {
+    const key = String(a.key || "").trim();
+    const id = String(a.app_id || a.appId || "").trim();
+    const name = String(a.name || "").trim();
+    if (!key || !/^\d{5,30}$/.test(id)) continue;
+    const m = /^app(\d+)$/i.exec(key);
+    if (!m) continue;
+    const n = Number(m[1]);
+    const idKey = n <= 1 ? "FB_APP_ID" : `FB_APP_ID_${n}`;
+    const nameKey = n <= 1 ? "FB_APP_NAME" : `FB_APP_NAME_${n}`;
+    const redirKey = n <= 1 ? "FB_REDIRECT_URI" : `FB_REDIRECT_URI_${n}`;
+    const prevId = String(process.env[idKey] || "").trim();
+    if (prevId !== id) appsChanged = true;
+    envUpdates[idKey] = id;
+    if (name) envUpdates[nameKey] = name;
+    envUpdates[redirKey] = redirectUri;
+    process.env[idKey] = id;
+    if (name) process.env[nameKey] = name;
+    // Never pull secrets from server onto client
+  }
+
+  const changed = prevRedirect !== redirectUri || prevRelay !== publicUrl || appsChanged;
 
   process.env.OAUTH_RELAY_URL = publicUrl;
   process.env.FB_REDIRECT_URI = redirectUri;
   // Portable EXE must keep local bind for media/UI — never set APP_BASE_URL to public domain.
-  if (!String(process.env.APP_BASE_URL || "").includes("127.0.0.1") &&
-      !String(process.env.APP_BASE_URL || "").includes("localhost")) {
+  if (
+    !String(process.env.APP_BASE_URL || "").includes("127.0.0.1") &&
+    !String(process.env.APP_BASE_URL || "").includes("localhost")
+  ) {
     process.env.APP_BASE_URL = `http://127.0.0.1:${config.port || 3847}`;
     config.appBaseUrl = process.env.APP_BASE_URL;
+    envUpdates.APP_BASE_URL = process.env.APP_BASE_URL;
   }
   config.facebook.redirectUri = redirectUri;
+  if (envUpdates.FB_APP_ID) {
+    config.facebook.appId = envUpdates.FB_APP_ID;
+  }
 
   if (changed) {
     try {
-      writeEnvValues(getEnvPath(), {
-        OAUTH_RELAY: "1",
-        OAUTH_RELAY_URL: publicUrl,
-        FB_REDIRECT_URI: redirectUri,
-        NGROK_AUTOSTART: "0",
-        APP_BASE_URL: String(process.env.APP_BASE_URL || `http://127.0.0.1:${config.port || 3847}`),
-      });
+      writeEnvValues(getEnvPath(), envUpdates);
       console.log(
-        `[oauth-relay] Đã đồng bộ domain từ server ${from} → ${publicUrl} (redirect ${redirectUri})`
+        `[oauth-relay] Đồng bộ từ ${from}: domain=${publicUrl}` +
+          (remoteApps.length ? ` · ${remoteApps.length} Meta App` : "")
       );
     } catch (e) {
       console.warn("[oauth-relay] Ghi .env thất bại (vẫn dùng memory):", e.message);
     }
   } else {
-    console.log(`[oauth-relay] Domain đã khớp server: ${publicUrl}`);
+    console.log(`[oauth-relay] Domain + apps đã khớp server: ${publicUrl}`);
   }
 
   return {
@@ -188,5 +243,6 @@ export async function syncOauthRelayConfig() {
     redirect_uri: redirectUri,
     from,
     changed,
+    apps: remoteApps,
   };
 }

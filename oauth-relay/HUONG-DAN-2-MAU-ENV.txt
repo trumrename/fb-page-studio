@@ -1,0 +1,49 @@
+2 MẪU .env — Server vs Máy khách
+================================
+
+1) SERVER (có secret)
+   File mẫu:  oauth-relay/.env.server.mau
+   Copy thành: oauth-relay/.env   (trên VPS)
+   Restart relay sau khi sửa.
+
+2) MÁY KHÁCH / MÁY KHÁC (không secret)
+   File mẫu:  Tổng Hợp Tool/pack-customer/.env.may-khach.mau
+   Setup:     copy nội dung → %APPDATA%\fb-page-studio\.env
+   Portable:  copy thành .env cạnh EXE
+
+Quy tắc
+-------
+- Cùng domain: https://modelswiki.top/auth/facebook/callback
+- Cùng App ID: app1 = FB_APP_ID, app2 = FB_APP_ID_2, app3 = FB_APP_ID_3…
+- Secret CHỈ trên server khi RELAY_EXCHANGE=1
+- Không lặp 2 dòng FB_APP_ID=
+
+Thêm app mới (2 cách)
+---------------------
+A) Sửa .env server (cổ điển)
+   1. Meta: App + whitelist https://modelswiki.top/auth/facebook/callback
+   2. Server .env: FB_APP_ID_N + FB_APP_SECRET_N → restart relay
+   3. Máy khách: MỞ LẠI tool → tự đồng bộ ID từ server (không secret)
+
+B) Khách tạo App Meta mới → chỉ điền trên TOOL (server nhà tự nhận)
+   Server .env (máy sever thật):
+     RELAY_ALLOW_OPEN_REGISTER=1
+     (+ RELAY_EXCHANGE=1, domain modelswiki.top…)
+   Deploy server.mjs mới + restart 1 lần.
+
+   Máy khách:
+     1. Tạo App trên Meta + whitelist redirect
+     2. Tool → nhập App ID + App Secret → "Lưu + đẩy App lên server"
+     3. Server TỰ GHI .env: FB_APP_ID_N + FB_APP_SECRET_N
+     4. Bạn KHÔNG cần mở file .env sever viết tay
+     5. Máy khác mở tool → tự nhận App ID
+
+   Không có "tự biết" khách vừa tạo app trên Meta — khách phải dán ID+Secret vào tool 1 lần.
+
+C) API tay
+   POST https://modelswiki.top/api/admin/apps
+   Header: X-Relay-Admin-Token: chuoi_bi_mat
+   Body: {"app_id":"...","app_secret":"...","name":"App 3"}
+
+Lưu ý: secret không tự sinh — khách phải nhập secret Meta một lần;
+tool đẩy lên server, không giữ secret trên máy khách sau khi đẩy.
