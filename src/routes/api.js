@@ -48,6 +48,7 @@ import {
   ensureAntiSpamTables,
 } from "../services/antiSpam.js";
 import { pickFolder } from "../services/folderPicker.js";
+import { getAppSetting, saveAppSetting } from "../services/appSettings.js";
 import multer from "multer";
 import {
   saveUploadedFile,
@@ -234,6 +235,90 @@ router.put("/setup/first-run", (req, res) => {
     res.status(400).json({ ok: false, error: error.message });
   }
 });
+
+const CHROME_PROFILE_HISTORY_KEY = "chrome_profile_history_v1";
+const CHROME_HISTORY_MAX = 30;
+
+/**
+ * Lịch sử ổ/profile Chrome đã quét hoặc "Dùng profile này".
+ * Lưu app_settings — sống qua restart, không phải localStorage.
+ */
+function readChromeProfileHistory() {
+  const raw = getAppSetting(CHROME_PROFILE_HISTORY_KEY, { items: [] });
+  const items = Array.isArray(raw?.items) ? raw.items : [];
+  return items
+    .filter((it) => it && (it.user_data_dir || it.scan_roots))
+    .map((it) => ({
+      id: String(it.id || ""),
+      label: String(it.label || it.name || it.directory || "Chrome"),
+      name: String(it.name || it.label || ""),
+      directory: String(it.directory || ""),
+      user_data_dir: String(it.user_data_dir || ""),
+      browser_path: String(it.browser_path || ""),
+      scan_roots: String(it.scan_roots || it.user_data_dir || ""),
+      used_at: String(it.used_at || ""),
+    }))
+    .filter((it) => it.id);
+}
+
+function writeChromeProfileHistory(items) {
+  const list = (Array.isArray(items) ? items : []).slice(0, CHROME_HISTORY_MAX);
+  saveAppSetting(CHROME_PROFILE_HISTORY_KEY, { items: list });
+  return list;
+}
+
+function chromeHistoryId(userDataDir, directory) {
+  const key = `${String(userDataDir || "").toLowerCase()}\u0000${String(directory || "").toLowerCase()}`;
+  return crypto.createHash("sha1").update(key).digest("hex").slice(0, 16);
+}
+
+/** @returns {object[]} */
+function pushChromeProfileHistory(entry) {
+  const user_data_dir = String(entry.user_data_dir || "").trim();
+  const directory = String(entry.directory || "").trim();
+  const scan_roots = String(entry.scan_roots || user_data_dir || "").trim();
+  if (!user_data_dir && !scan_roots) return readChromeProfileHistory();
+  const id =
+    entry.id ||
+    chromeHistoryId(user_data_dir || scan_roots, directory || "_root_");
+  const next = {
+    id,
+    label:
+      entry.label ||
+      entry.name ||
+      (directory
+        ? `${entry.name || directory}`
+        : path.basename(user_data_dir || scan_roots) || "Chrome"),
+    name: String(entry.name || entry.label || directory || ""),
+    directory,
+    user_data_dir: user_data_dir || "",
+    browser_path: String(entry.browser_path || "").trim(),
+    scan_roots: scan_roots || user_data_dir,
+    used_at: new Date().toISOString(),
+  };
+  const prev = readChromeProfileHistory().filter((it) => it.id !== id);
+  return writeChromeProfileHistory([next, ...prev]);
+}
+
+function pushChromeScanRootsHistory(rootsValue) {
+  const roots = splitChromeScanRoots(rootsValue);
+  let list = readChromeProfileHistory();
+  for (const root of roots) {
+    const id = chromeHistoryId(root, "_scan_root_");
+    list = list.filter((it) => it.id !== id);
+    list.unshift({
+      id,
+      label: `Ổ/thư mục: ${root}`,
+      name: path.basename(root) || root,
+      directory: "",
+      user_data_dir: "",
+      browser_path: "",
+      scan_roots: root,
+      used_at: new Date().toISOString(),
+    });
+  }
+  return writeChromeProfileHistory(list);
+}
 
 function chromeUserDataDir(value = process.env.FB_CHROME_USER_DATA_DIR) {
   const custom = String(value || "").trim();
@@ -434,7 +519,24 @@ router.get("/setup/browser", (_req, res) => {
     selected_profile: String(process.env.FB_CHROME_PROFILE || "").trim(),
     custom_user_data_dir: String(process.env.FB_CHROME_USER_DATA_DIR || "").trim(),
     browser_path: selectedBrowserPath,
+    history: readChromeProfileHistory(),
   });
+});
+
+router.get("/setup/browser/history", (_req, res) => {
+  res.json({ ok: true, history: readChromeProfileHistory() });
+});
+
+router.delete("/setup/browser/history/:id", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  const next = readChromeProfileHistory().filter((it) => it.id !== id);
+  writeChromeProfileHistory(next);
+  res.json({ ok: true, history: next });
+});
+
+router.delete("/setup/browser/history", (_req, res) => {
+  writeChromeProfileHistory([]);
+  res.json({ ok: true, history: [] });
 });
 
 router.post("/setup/browser/scan", (req, res) => {
@@ -446,7 +548,13 @@ router.post("/setup/browser/scan", (req, res) => {
       error: "Không thấy Chrome profile. Hãy chọn một hoặc nhiều thư mục/ổ chứa ChromePortable, hoặc chọn trực tiếp Data\\profile.",
     });
   }
-  res.json({ ok: true, ...found });
+  // Ghi nhớ ổ/thư mục vừa quét để lần sau bấm lịch sử
+  try {
+    pushChromeScanRootsHistory(requested);
+  } catch {
+    /* non-fatal */
+  }
+  res.json({ ok: true, ...found, history: readChromeProfileHistory() });
 });
 
 router.put("/setup/browser", (req, res) => {
@@ -484,9 +592,29 @@ router.put("/setup/browser", (req, res) => {
     process.env.FB_CHROME_PROFILE = wanted;
     process.env.FB_CHROME_USER_DATA_DIR = requestedDataDir ? found.user_data_dir : "";
     process.env.FB_BROWSER_PATH = requestedBrowserPath;
+
+    const matched = found.profiles.find((p) => p.directory === wanted) || found.profiles[0];
+    const history = pushChromeProfileHistory({
+      name: matched?.name || wanted,
+      label: matched?.name
+        ? `${matched.name} — ${found.user_data_dir}\\${matched.directory || wanted}`
+        : `${wanted || "Default"} — ${found.user_data_dir}`,
+      directory: wanted || matched?.directory || "",
+      user_data_dir: found.user_data_dir,
+      browser_path: requestedBrowserPath,
+      scan_roots: found.user_data_dir,
+    });
+
     // Electron reads this .env file again at every OAuth launch, so the user
     // can test the chosen profile immediately without restarting the tool.
-    res.json({ ok: true, selected_profile: wanted, user_data_dir: found.user_data_dir, browser_path: requestedBrowserPath, restart_required: false });
+    res.json({
+      ok: true,
+      selected_profile: wanted,
+      user_data_dir: found.user_data_dir,
+      browser_path: requestedBrowserPath,
+      restart_required: false,
+      history,
+    });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }

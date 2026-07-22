@@ -225,6 +225,12 @@ check("UI Connect App 2", index.includes("app=app2"));
 check("UI domain setup and Chrome OAuth (no Ngrok token UI)", index.includes("oauthDomain") && index.includes("btnSaveOAuthDomain") && index.includes("oauthBrowserProfile") && !index.includes("btnSaveNgrokToken") && !index.includes("ngrokToken"));
 check("Ngrok integrated autostart and token recovery", fs.existsSync(path.join(root, "src/services/ngrokManager.js")) && server.includes("startNgrok") && apiRoutes.includes('"/setup/ngrok"') && apiRoutes.includes("NGROK_AUTHTOKEN"));
 check("UI Chrome profile selection", index.includes("oauthBrowserProfile") && index.includes("btnSaveBrowserProfile"));
+check(
+  "UI Chrome profile path history",
+  index.includes("oauthBrowserHistory") &&
+    index.includes("btnClearBrowserHistory") &&
+    apiRoutes.includes("/setup/browser/history")
+);
 check("UI first-run Meta App setup without manual .env", index.includes("firstRunSetup") && index.includes("setupApp1Id") && index.includes("setupApp1Secret") && index.includes("btnSaveFirstRun") && index.includes('"/api/setup/first-run"'));
 check("API first-run setup creates encryption key and updates live config", apiRoutes.includes('"/setup/first-run"') && apiRoutes.includes("crypto.randomBytes(32)") && apiRoutes.includes("config.facebook.appId = app1Id") && apiRoutes.includes("config.tokenEncryptionKey = encryptionKey"));
 check(".env writes reject line injection and preserve literal dollar signs", apiRoutes.includes("không được chứa xuống dòng") && apiRoutes.includes("(_match, prefix)") && apiRoutes.includes("Authtoken Ngrok không đúng định dạng"));

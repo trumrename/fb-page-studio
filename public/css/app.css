@@ -615,6 +615,49 @@ tr.clickable { cursor: pointer; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Lịch sử Chrome profile (Connect setup) */
+.browser-history-list .hist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.55rem;
+  margin-bottom: 0.3rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: 0.12s ease;
+}
+.browser-history-list .hist-item:hover {
+  background: var(--accent-soft);
+  border-color: rgba(24, 119, 242, 0.28);
+}
+.browser-history-list .hist-item .hist-main {
+  flex: 1;
+  min-width: 0;
+}
+.browser-history-list .hist-item .hist-title {
+  font-weight: 650;
+  font-size: 0.84rem;
+  color: #e8eefc;
+}
+.browser-history-list .hist-item .hist-path {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+  word-break: break-all;
+  line-height: 1.35;
+}
+.browser-history-list .hist-item .hist-del {
+  flex-shrink: 0;
+  opacity: 0.65;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.45rem;
+}
+.browser-history-list .hist-item .hist-del:hover {
+  opacity: 1;
+}
+
 /* Follow badge cạnh tên — cùng độ nổi bật dashboard */
 .page-item .page-follow-badge {
   font-variant-numeric: tabular-nums;

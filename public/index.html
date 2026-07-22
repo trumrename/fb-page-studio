@@ -169,6 +169,18 @@
               </label>
               <button class="btn-ghost" id="btnSaveBrowserProfile" type="button">Dùng profile này</button>
             </div>
+            <div style="margin-top:.85rem;padding:.75rem;border:1px dashed rgba(255,255,255,.12);border-radius:12px;background:rgba(0,0,0,.12)">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap">
+                <div>
+                  <b style="font-size:.88rem">Lịch sử ổ / profile đã dùng</b>
+                  <div class="muted" style="font-size:.78rem;margin-top:.15rem">Bấm một dòng để chọn lại — không cần tìm ổ lại khi sửa page.</div>
+                </div>
+                <button type="button" class="btn-ghost btn-sm" id="btnClearBrowserHistory" title="Xóa toàn bộ lịch sử">Xóa lịch sử</button>
+              </div>
+              <div id="oauthBrowserHistory" class="browser-history-list" style="margin-top:.55rem;max-height:180px;overflow:auto">
+                <div class="muted" style="font-size:.8rem;padding:.35rem 0">Chưa có lịch sử. Quét Chrome hoặc bấm «Dùng profile này» một lần để lưu.</div>
+              </div>
+            </div>
             <div id="oauthBrowserStatus" class="muted" style="margin-top:.75rem;font-size:.84rem">Chọn profile đang có tab Facebook đã login. Tool sẽ mở tab mới trong profile đó; Chrome không cho app chiếm tab bạn vừa click.</div>
           </div>
         </section>
@@ -478,6 +490,8 @@
     };
 
     let scannedBrowserProfiles = [];
+    let browserProfileHistory = [];
+
     function renderBrowserProfiles(r) {
       const select = $("oauthBrowserProfile");
       scannedBrowserProfiles = r.profiles || [];
@@ -492,12 +506,134 @@
       if (!(r.profiles || []).length) {
         $("oauthBrowserStatus").textContent = "Không tìm thấy Chrome Profile. Với ChromePortable, bấm Chọn thư mục rồi chọn ChromePortable hoặc ChromePortable\\Data\\profile.";
       }
+      if (Array.isArray(r.history)) renderBrowserHistory(r.history);
+    }
+
+    function renderBrowserHistory(items) {
+      browserProfileHistory = Array.isArray(items) ? items : [];
+      const box = $("oauthBrowserHistory");
+      if (!box) return;
+      if (!browserProfileHistory.length) {
+        box.innerHTML = `<div class="muted" style="font-size:.8rem;padding:.35rem 0">Chưa có lịch sử. Quét Chrome hoặc bấm «Dùng profile này» một lần để lưu.</div>`;
+        return;
+      }
+      box.innerHTML = browserProfileHistory
+        .map((h) => {
+          const pathLine = h.directory
+            ? `${h.user_data_dir || h.scan_roots || ""}\\${h.directory}`
+            : h.scan_roots || h.user_data_dir || "";
+          const when = h.used_at
+            ? new Date(h.used_at).toLocaleString("vi-VN", { hour12: false })
+            : "";
+          return `
+          <div class="hist-item" data-hist-id="${escapeHtml(h.id)}" title="Bấm để chọn lại profile này">
+            <div class="hist-main">
+              <div class="hist-title">${escapeHtml(h.label || h.name || h.directory || "Chrome")}</div>
+              <div class="hist-path">${escapeHtml(pathLine)}${when ? ` · ${escapeHtml(when)}` : ""}</div>
+            </div>
+            <button type="button" class="btn-ghost btn-sm hist-del" data-del-id="${escapeHtml(h.id)}" title="Xóa khỏi lịch sử">×</button>
+          </div>`;
+        })
+        .join("");
+      box.querySelectorAll(".hist-item").forEach((row) => {
+        row.addEventListener("click", async (e) => {
+          if (e.target.closest(".hist-del")) return;
+          const id = row.dataset.histId;
+          const item = browserProfileHistory.find((x) => x.id === id);
+          if (item) await applyBrowserHistoryItem(item);
+        });
+      });
+      box.querySelectorAll(".hist-del").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const id = btn.dataset.delId;
+          try {
+            const r = await api(`/api/setup/browser/history/${encodeURIComponent(id)}`, {
+              method: "DELETE",
+            });
+            renderBrowserHistory(r.history || []);
+          } catch (err) {
+            $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(err.message)}</span>`;
+          }
+        });
+      });
+    }
+
+    async function applyBrowserHistoryItem(item) {
+      const status = $("oauthBrowserStatus");
+      try {
+        status.textContent = "Đang mở lại profile từ lịch sử…";
+        // Ổ/thư mục scan (chưa chọn profile cụ thể)
+        if (!item.directory && item.scan_roots) {
+          $("oauthBrowserDataDir").value = item.scan_roots;
+          const r = await api("/api/setup/browser/scan", {
+            method: "POST",
+            body: JSON.stringify({ roots: item.scan_roots }),
+          });
+          renderBrowserProfiles(r);
+          status.textContent = `Đã mở lại ổ/thư mục lịch sử · ${(r.profiles || []).length} profile. Chọn profile rồi bấm «Dùng profile này».`;
+          return;
+        }
+        // Profile cụ thể đã login
+        $("oauthBrowserDataDir").value = item.user_data_dir || item.scan_roots || "";
+        const scanRoots = item.user_data_dir || item.scan_roots || "";
+        let profiles = [];
+        if (scanRoots) {
+          try {
+            const r = await api("/api/setup/browser/scan", {
+              method: "POST",
+              body: JSON.stringify({ roots: scanRoots }),
+            });
+            renderBrowserProfiles(r);
+            profiles = r.profiles || [];
+          } catch {
+            // fallback: chỉ list 1 root
+            profiles = [];
+          }
+        }
+        let idx = profiles.findIndex(
+          (p) =>
+            p.directory === item.directory &&
+            (!item.user_data_dir || p.user_data_dir === item.user_data_dir)
+        );
+        if (idx < 0) {
+          idx = profiles.findIndex((p) => p.directory === item.directory);
+        }
+        // Nếu scan không thấy (ổ tháo / path đổi), vẫn gửi lưu theo history
+        const chosen =
+          idx >= 0
+            ? profiles[idx]
+            : {
+                directory: item.directory,
+                user_data_dir: item.user_data_dir,
+                browser_path: item.browser_path,
+                name: item.name,
+              };
+        if (idx >= 0 && $("oauthBrowserProfile")) {
+          $("oauthBrowserProfile").value = String(idx);
+        }
+        const r = await api("/api/setup/browser", {
+          method: "PUT",
+          body: JSON.stringify({
+            profile: chosen.directory || item.directory || "",
+            user_data_dir: chosen.user_data_dir || item.user_data_dir || "",
+            browser_path: chosen.browser_path || item.browser_path || "",
+          }),
+        });
+        if (r.history) renderBrowserHistory(r.history);
+        status.innerHTML =
+          `<b style="color:#34d399">Đã chọn lại từ lịch sử: ${escapeHtml(r.selected_profile || item.directory || "profile")}.</b> ` +
+          `Bấm Connect App 1/2 ngay — không cần tìm ổ lại.`;
+      } catch (e) {
+        status.innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`;
+      }
     }
 
     async function loadBrowserProfiles() {
       const r = await api("/api/setup/browser");
       $("oauthBrowserDataDir").value = r.custom_user_data_dir || "";
       renderBrowserProfiles(r);
+      renderBrowserHistory(r.history || []);
     }
 
     $("btnChooseBrowserData").onclick = async () => {
@@ -514,6 +650,7 @@
         const roots = $("oauthBrowserDataDir").value.split(/[;\r\n|]+/).map(x => x.trim()).filter(Boolean);
         const r = await api("/api/setup/browser/scan", { method:"POST", body: JSON.stringify({ roots }) });
         renderBrowserProfiles(r);
+        if (r.history) renderBrowserHistory(r.history);
         $("oauthBrowserStatus").textContent = `Đã quét ${r.scanned_directories || 0} thư mục và tìm thấy ${(r.profiles || []).length} profile. Chọn đúng Chrome/Profile rồi bấm Dùng profile này.`;
       } catch (e) { $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`; }
     };
@@ -534,11 +671,23 @@
             browser_path: chosen?.browser_path || "",
           }),
         });
-        $("oauthBrowserStatus").innerHTML = `<b style="color:#34d399">Đã lưu Chrome Profile ${escapeHtml(r.selected_profile || "tự động")}.</b> Bấm Connect Facebook ngay — không cần khởi động lại tool.`;
+        if (r.history) renderBrowserHistory(r.history);
+        $("oauthBrowserStatus").innerHTML = `<b style="color:#34d399">Đã lưu Chrome Profile ${escapeHtml(r.selected_profile || "tự động")}.</b> Đã thêm vào lịch sử. Bấm Connect Facebook ngay — không cần khởi động lại tool.`;
       } catch (e) {
         $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`;
       } finally { btn.disabled = false; }
     };
+
+    $("btnClearBrowserHistory")?.addEventListener("click", async () => {
+      if (!confirm("Xóa toàn bộ lịch sử ổ/profile Chrome đã lưu?")) return;
+      try {
+        const r = await api("/api/setup/browser/history", { method: "DELETE" });
+        renderBrowserHistory(r.history || []);
+        $("oauthBrowserStatus").textContent = "Đã xóa lịch sử profile.";
+      } catch (e) {
+        $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`;
+      }
+    });
 
     async function loadAccounts() {
       const { accounts } = await api("/api/accounts");
