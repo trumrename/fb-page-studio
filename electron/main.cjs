@@ -200,6 +200,122 @@ function loadAppIcon() {
   return img.isEmpty() ? undefined : img;
 }
 
+/**
+ * First-run seed for Setup + portable: HTTPS OAuth relay (modelswiki.top).
+ * Never leave http://localhost as Facebook redirect on installed builds.
+ */
+function seedCustomerEnvInUserDir(userDir) {
+  if (!userDir) return;
+  const envPath = path.join(userDir, ".env");
+  const pubPath = path.join(userDir, ".env.public");
+  const candidates = [
+    process.resourcesPath && path.join(process.resourcesPath, "customer-default.env"),
+    path.join(appRoot(), "build", "customer-default.env"),
+    path.join(__dirname, "..", "build", "customer-default.env"),
+  ].filter(Boolean);
+
+  let template = null;
+  for (const p of candidates) {
+    try {
+      if (p && fs.existsSync(p)) {
+        template = fs.readFileSync(p, "utf8");
+        log("customer env template", p);
+        break;
+      }
+    } catch {
+      /* next */
+    }
+  }
+  if (!template) {
+    template = [
+      "PORT=3847",
+      "APP_BASE_URL=http://127.0.0.1:3847",
+      "OAUTH_RELAY=1",
+      "NGROK_AUTOSTART=0",
+      "NGROK_AUTHTOKEN=",
+      "OAUTH_RELAY_URL=https://modelswiki.top",
+      "FB_REDIRECT_URI=https://modelswiki.top/auth/facebook/callback",
+      "FB_APP_ID=1418846112578001",
+      "FB_APP_NAME=App 1",
+      "FB_GRAPH_VERSION=v21.0",
+      "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
+      "TOKEN_ENCRYPTION_KEY=",
+      "GITHUB_REPO=trumrename/fb-page-studio",
+      "UPDATE_ASSET=FB-Page-Studio-Desktop.exe",
+      "",
+    ].join("\n");
+  }
+
+  const crypto = require("crypto");
+  const withKey = (text) => {
+    let t = String(text || "");
+    if (!/^TOKEN_ENCRYPTION_KEY=\s*\S+/m.test(t)) {
+      const key = crypto.randomBytes(32).toString("hex");
+      if (/^TOKEN_ENCRYPTION_KEY=/m.test(t)) {
+        t = t.replace(/^TOKEN_ENCRYPTION_KEY=.*$/m, `TOKEN_ENCRYPTION_KEY=${key}`);
+      } else {
+        t += `\nTOKEN_ENCRYPTION_KEY=${key}\n`;
+      }
+    }
+    return t;
+  };
+
+  if (!fs.existsSync(pubPath)) {
+    try {
+      fs.writeFileSync(pubPath, template, "utf8");
+      log("wrote .env.public", pubPath);
+    } catch (e) {
+      log("write .env.public fail", e.message);
+    }
+  }
+
+  if (!fs.existsSync(envPath)) {
+    fs.writeFileSync(envPath, withKey(template), "utf8");
+    log("created .env from customer template", envPath);
+    return;
+  }
+
+  // Heal broken http://localhost redirect on existing installs (Setup customers).
+  try {
+    let cur = fs.readFileSync(envPath, "utf8");
+    const m = cur.match(/^FB_REDIRECT_URI=(.*)$/m);
+    const redirect = (m && m[1] ? m[1] : "").trim();
+    const bad =
+      !redirect ||
+      /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(redirect) ||
+      /^http:\/\//i.test(redirect);
+    if (!bad) return;
+
+    const keepKey = (cur.match(/^TOKEN_ENCRYPTION_KEY=(.*)$/m) || [])[1] || "";
+    const keepAppId = (cur.match(/^FB_APP_ID=(.*)$/m) || [])[1] || "1418846112578001";
+    let next = template;
+    next = next.replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${String(keepAppId).trim() || "1418846112578001"}`);
+    if (String(keepKey).trim()) {
+      next = next.replace(/^TOKEN_ENCRYPTION_KEY=.*$/m, `TOKEN_ENCRYPTION_KEY=${String(keepKey).trim()}`);
+    } else {
+      next = withKey(next);
+    }
+    for (const key of ["FB_CHROME_PROFILE", "FB_CHROME_USER_DATA_DIR", "FB_BROWSER_PATH"]) {
+      const hit = cur.match(new RegExp(`^${key}=(.*)$`, "m"));
+      if (hit) {
+        if (new RegExp(`^${key}=`, "m").test(next)) {
+          next = next.replace(new RegExp(`^${key}=.*$`, "m"), `${key}=${hit[1]}`);
+        } else next += `\n${key}=${hit[1]}\n`;
+      }
+    }
+    // Backup old broken env once
+    try {
+      fs.copyFileSync(envPath, `${envPath}.bak-localhost`);
+    } catch {
+      /* ignore */
+    }
+    fs.writeFileSync(envPath, next, "utf8");
+    log("healed .env localhost redirect → modelswiki.top HTTPS", envPath);
+  } catch (e) {
+    log("heal .env fail", e.message);
+  }
+}
+
 // Browser choice is read fresh before each OAuth launch. The setup page can
 // therefore change profile without restarting the desktop application.
 function readBrowserEnv() {
@@ -532,6 +648,14 @@ function startBackend() {
     }
   }
 
+  // Seed standard customer .env (HTTPS OAuth relay) before backend starts.
+  // Setup installs write to AppData; portable writes beside the outer EXE.
+  try {
+    seedCustomerEnvInUserDir(USER_DIR);
+  } catch (e) {
+    log("seedCustomerEnv fail", e.message);
+  }
+
   const envPath = path.join(USER_DIR, ".env");
   if (!fs.existsSync(envPath)) {
     log("WARN missing .env at", envPath);
@@ -540,6 +664,8 @@ function startBackend() {
     dotenv.config({ path: envPath, override: true, quiet: true });
     PORT = Number(process.env.PORT || 3847);
     log("Loaded .env PORT", String(PORT));
+    log("FB_REDIRECT_URI", process.env.FB_REDIRECT_URI || "");
+    log("OAUTH_RELAY", process.env.OAUTH_RELAY || "");
   }
 
   const serverJs = path.join(appRoot(), "src", "server.js");
@@ -808,15 +934,28 @@ if (!gotLock) {
       await startBackend();
       createWindow();
       createTray();
-      if (!fs.existsSync(path.join(USER_DIR, ".env"))) {
-        dialog.showMessageBox({
-          type: "info",
-          title: "Thiết lập máy mới",
-          message:
-            "Đây là lần chạy đầu tiên. Không cần tự tạo file .env.\n\n" +
-            "Vào Kết nối Meta → Bước 1, nhập App ID và App Secret. Tool sẽ tự tạo cấu hình, khóa mã hóa và thư mục data cạnh EXE.",
-          detail: `Thư mục lưu dữ liệu:\n${USER_DIR}`,
-        });
+      {
+        const envPath = path.join(USER_DIR || "", ".env");
+        let redirect = "";
+        try {
+          const t = fs.readFileSync(envPath, "utf8");
+          redirect = (t.match(/^FB_REDIRECT_URI=(.*)$/m) || [])[1] || "";
+        } catch {
+          /* ignore */
+        }
+        if (!fs.existsSync(envPath) || /localhost|127\.0\.0\.1|^http:\/\//i.test(redirect)) {
+          dialog.showMessageBox({
+            type: "info",
+            title: "Cấu hình OAuth (HTTPS)",
+            message:
+              "Không cần tự tạo file .env.\n\n" +
+              "Tool dùng domain HTTPS để login Facebook (không dùng http://localhost).\n\n" +
+              "Chuẩn: OAUTH_RELAY + https://modelswiki.top/auth/facebook/callback\n" +
+              "App Secret nằm trên server relay — máy này không cần nhập secret.\n\n" +
+              "File .env đã được tạo/sửa trong thư mục dữ liệu. Chỉ cần Connect Facebook.",
+            detail: `Thư mục .env / data:\n${USER_DIR}\n\nRedirect:\nhttps://modelswiki.top/auth/facebook/callback`,
+          });
+        }
       }
     } catch (e) {
       log("FATAL", e.message);

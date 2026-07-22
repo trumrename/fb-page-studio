@@ -8,33 +8,21 @@ import {
   getBundleRoot,
   getPackageJson,
 } from "./paths.js";
+import {
+  ensureCustomerEnvFile,
+  healLocalhostRedirectEnv,
+} from "./services/customerEnv.js";
 
-// Customer pack ships .env.public (no secrets). Promote to .env on first run.
-function ensureEnvFromPublic() {
-  try {
-    const envPath = getEnvPath();
-    if (fs.existsSync(envPath)) return;
-    const dir = path.dirname(envPath);
-    const pub = path.join(dir, ".env.public");
-    if (!fs.existsSync(pub)) return;
-    let text = fs.readFileSync(pub, "utf8");
-    if (!/^TOKEN_ENCRYPTION_KEY=\s*\S+/m.test(text)) {
-      const key = crypto.randomBytes(32).toString("hex");
-      if (/^TOKEN_ENCRYPTION_KEY=/m.test(text)) {
-        text = text.replace(/^TOKEN_ENCRYPTION_KEY=.*$/m, `TOKEN_ENCRYPTION_KEY=${key}`);
-      } else {
-        text += `\nTOKEN_ENCRYPTION_KEY=${key}\n`;
-      }
-    }
-    fs.writeFileSync(envPath, text, "utf8");
-    console.log("[config] Created .env from .env.public (auto encryption key if empty)");
-  } catch (e) {
-    console.warn("[config] ensureEnvFromPublic:", e.message);
-  }
+// Setup / portable first run: seed .env from bundled HTTPS-relay template
+// (never leave http://localhost as Facebook redirect on customer installs).
+try {
+  ensureCustomerEnvFile();
+  healLocalhostRedirectEnv();
+} catch (e) {
+  console.warn("[config] ensureCustomerEnv:", e.message);
 }
 
-ensureEnvFromPublic();
-// Load .env from beside .exe (portable) or project root
+// Load .env from beside .exe (portable) or AppData (NSIS Setup)
 dotenv.config({ path: getEnvPath() });
 
 function required(name, fallback) {

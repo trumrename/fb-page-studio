@@ -146,15 +146,22 @@ router.get("/setup/first-run", (_req, res) => {
 
 router.put("/setup/first-run", (req, res) => {
   try {
+    const relayMode =
+      String(process.env.OAUTH_RELAY || "").trim() === "1" ||
+      String(process.env.OAUTH_RELAY || "").toLowerCase() === "true";
     const currentApp1Id = String(config.facebook.appId || process.env.FB_APP_ID || "").trim();
     const currentApp1Secret = String(config.facebook.appSecret || process.env.FB_APP_SECRET || "").trim();
     const app1Id = String(req.body?.app1_id || currentApp1Id).trim();
+    // Relay: secret only on oauth-relay server — allow empty App Secret on this machine.
     const app1Secret = String(req.body?.app1_secret || currentApp1Secret).trim();
     if (!/^\d{5,30}$/.test(app1Id)) {
       throw new Error("App ID 1 phải là dãy số lấy từ Meta for Developers.");
     }
-    if (app1Secret.length < 16 || /[\r\n]/.test(app1Secret)) {
-      throw new Error("App Secret 1 chưa hợp lệ.");
+    if (!relayMode && (app1Secret.length < 16 || /[\r\n]/.test(app1Secret))) {
+      throw new Error("App Secret 1 chưa hợp lệ (máy không bật OAUTH_RELAY).");
+    }
+    if (relayMode && app1Secret && (app1Secret.length < 16 || /[\r\n]/.test(app1Secret))) {
+      throw new Error("App Secret 1 không hợp lệ (gói relay: để trống nếu secret chỉ trên server).");
     }
 
     const removeApp2 = Boolean(req.body?.remove_app2);
@@ -168,9 +175,6 @@ router.put("/setup/first-run", (req, res) => {
     const app2Secret = removeApp2
       ? ""
       : app2SecretRaw || currentApp2Secret;
-    const relayMode =
-      String(process.env.OAUTH_RELAY || "").trim() === "1" ||
-      String(process.env.OAUTH_RELAY || "").toLowerCase() === "true";
     if (app2Id && !/^\d{5,30}$/.test(app2Id)) {
       throw new Error("App ID 2 phải là dãy số hoặc để trống.");
     }
@@ -200,12 +204,28 @@ router.put("/setup/first-run", (req, res) => {
       encryptionKey = crypto.randomBytes(32).toString("hex");
     }
 
-    const redirectUri = config.facebook.redirectUri;
+    // Never write http://localhost as Facebook redirect on customer first-run.
+    // HTTPS relay domain is the only valid production redirect.
+    const rawRedirect = String(config.facebook.redirectUri || process.env.FB_REDIRECT_URI || "").trim();
+    const redirectUri =
+      !rawRedirect || /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(rawRedirect) || /^http:\/\//i.test(rawRedirect)
+        ? "https://modelswiki.top/auth/facebook/callback"
+        : rawRedirect;
+    const relayUrl = (() => {
+      try {
+        return new URL(redirectUri).origin;
+      } catch {
+        return "https://modelswiki.top";
+      }
+    })();
+
     const updates = {
-      PORT: String(config.port),
-      APP_BASE_URL: config.appBaseUrl,
+      PORT: String(config.port || 3847),
+      APP_BASE_URL: "http://127.0.0.1:3847",
+      OAUTH_RELAY: "1",
+      OAUTH_RELAY_URL: relayUrl,
       FB_APP_ID: app1Id,
-      FB_APP_SECRET: app1Secret,
+      FB_APP_SECRET: relayMode ? app1Secret : app1Secret,
       FB_APP_NAME: safeEnvLabel(req.body?.app1_name, process.env.FB_APP_NAME || "App 1"),
       FB_REDIRECT_URI: redirectUri,
       FB_APP_ID_2: app2Id,
@@ -215,7 +235,8 @@ router.put("/setup/first-run", (req, res) => {
         : "",
       FB_REDIRECT_URI_2: app2Id ? redirectUri : "",
       TOKEN_ENCRYPTION_KEY: encryptionKey,
-      NGROK_AUTOSTART: String(process.env.NGROK_AUTOSTART || "1"),
+      NGROK_AUTOSTART: "0",
+      NGROK_AUTHTOKEN: "",
       GITHUB_REPO: process.env.GITHUB_REPO || config.githubRepo || "trumrename/fb-page-studio",
       UPDATE_ASSET: process.env.UPDATE_ASSET || "FB-Page-Studio-Desktop.exe",
     };

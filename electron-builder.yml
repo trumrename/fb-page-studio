@@ -10,12 +10,17 @@ files:
   - public/**/*
   - assets/**/*
   - build/icon.ico
+  - build/customer-default.env
   - package.json
   - "!data/**/*"
   - "!dist/**/*"
   - "!dist-desktop/**/*"
   - "!build-staging/**/*"
   - "!.git/**/*"
+# Extra copy next to resources for easy first-run seed (Setup + portable)
+extraResources:
+  - from: build/customer-default.env
+    to: customer-default.env
 asar: true
 asarUnpack:
   - "**/*.node"

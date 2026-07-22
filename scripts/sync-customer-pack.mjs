@@ -114,28 +114,43 @@ const redirect = `${String(relayUrl).replace(/\/$/, "")}/auth/facebook/callback`
 const appId = srcEnv.FB_APP_ID || "";
 
 // Public-only .env for first run (NO SECRET)
-const publicEnv = [
-  "# GÓI KHÁCH — PUBLIC. Không chứa App Secret / Ngrok token.",
-  "# Connect FB qua OAuth relay (secret chỉ trên server relay).",
-  `# version=${pkg.version}`,
-  "",
-  "PORT=3847",
-  "APP_BASE_URL=http://127.0.0.1:3847",
-  "OAUTH_RELAY=1",
-  "NGROK_AUTOSTART=0",
-  "NGROK_AUTHTOKEN=",
-  `OAUTH_RELAY_URL=${String(relayUrl).replace(/\/$/, "")}`,
-  `FB_REDIRECT_URI=${redirect}`,
-  `FB_APP_ID=${appId}`,
-  "# FB_APP_SECRET=   ← KHÔNG ship. Relay RELAY_EXCHANGE=1 giữ secret.",
-  "FB_APP_NAME=App 1",
-  "FB_GRAPH_VERSION=v21.0",
-  "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
-  "# TOKEN_ENCRYPTION_KEY tự sinh lần đầu nếu trống (app first-run)",
-  "TOKEN_ENCRYPTION_KEY=",
-  `GITHUB_REPO=${pkg.githubRepo || "trumrename/fb-page-studio"}`,
-  "",
-].join("\n");
+// Prefer baked template (build/customer-default.env) so Setup + pack always match.
+const bakedPath = path.join(root, "build", "customer-default.env");
+let publicEnv;
+if (fs.existsSync(bakedPath)) {
+  publicEnv = fs
+    .readFileSync(bakedPath, "utf8")
+    .replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${appId || "1418846112578001"}`)
+    .replace(/^OAUTH_RELAY_URL=.*$/m, `OAUTH_RELAY_URL=${String(relayUrl).replace(/\/$/, "")}`)
+    .replace(/^FB_REDIRECT_URI=.*$/m, `FB_REDIRECT_URI=${redirect}`)
+    .replace(/^# version=.*$/m, `# version=${pkg.version}`);
+  if (!publicEnv.includes(`version=${pkg.version}`)) {
+    publicEnv = `# version=${pkg.version}\n` + publicEnv;
+  }
+} else {
+  publicEnv = [
+    "# GÓI KHÁCH — PUBLIC. Không chứa App Secret / Ngrok token.",
+    "# Connect FB qua OAuth relay (secret chỉ trên server relay).",
+    `# version=${pkg.version}`,
+    "",
+    "PORT=3847",
+    "APP_BASE_URL=http://127.0.0.1:3847",
+    "OAUTH_RELAY=1",
+    "NGROK_AUTOSTART=0",
+    "NGROK_AUTHTOKEN=",
+    `OAUTH_RELAY_URL=${String(relayUrl).replace(/\/$/, "")}`,
+    `FB_REDIRECT_URI=${redirect}`,
+    `FB_APP_ID=${appId}`,
+    "# FB_APP_SECRET=   ← KHÔNG ship. Relay RELAY_EXCHANGE=1 giữ secret.",
+    "FB_APP_NAME=App 1",
+    "FB_GRAPH_VERSION=v21.0",
+    "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
+    "# TOKEN_ENCRYPTION_KEY tự sinh lần đầu nếu trống (app first-run)",
+    "TOKEN_ENCRYPTION_KEY=",
+    `GITHUB_REPO=${pkg.githubRepo || "trumrename/fb-page-studio"}`,
+    "",
+  ].join("\n");
+}
 
 fs.writeFileSync(path.join(out, ".env.public"), publicEnv, "utf8");
 fs.writeFileSync(path.join(out, ".env.example"), publicEnv, "utf8");
@@ -168,17 +183,23 @@ fs.writeFileSync(
     "  2) Cài xong → Start Menu / Desktop: FB Page Studio",
     "  3) Chuột phải icon thanh taskbar → Ghim vào thanh tác vụ",
     "",
-    "CÁCH 2 — Portable (không cài):",
-    "  1) Copy EXE + .env.public",
-    "  2) Đổi tên .env.public → .env (cạnh EXE)",
-    "  3) Mở EXE → Connect Facebook",
+    "  .env tự tạo (HTTPS OAuth relay) tại:",
+    "    %APPDATA%\\fb-page-studio\\.env",
+    `  Redirect chuẩn: ${redirect}`,
     "",
+    "CÁCH 2 — Portable (không cài):",
+    "  1) Copy EXE (+ .env.public nếu có)",
+    "  2) Mở EXE — tự tạo .env cạnh EXE (OAUTH_RELAY + HTTPS domain)",
+    "  3) Connect Facebook",
+    "",
+    "KHÔNG dùng http://localhost làm FB_REDIRECT_URI (Facebook chặn).",
     "KHÔNG cần Ngrok. KHÔNG cần App Secret trên máy bạn.",
-    "Login Facebook qua domain relay của nhà cung cấp.",
+    "Login Facebook qua domain relay HTTPS của nhà cung cấp.",
     "",
     "Gói này KHÔNG chứa: FB_APP_SECRET, Ngrok token, license-private.pem",
     "",
     `version ${pkg.version}`,
+    `oauth_relay_url=${String(relayUrl).replace(/\/$/, "")}`,
     "",
   ].join("\n"),
   "utf8"
@@ -285,27 +306,23 @@ fs.writeFileSync(
 );
 
 // Scan public files for accidental secrets
-const secretPatterns = [
-  /FB_APP_SECRET\s*=\s*[^\s#]+/,
-  /NGROK_AUTHTOKEN\s*=\s*[^\s#]+/,
-  /BEGIN PRIVATE KEY/,
-];
+// Only flag real assigned secrets (non-empty value length > 8).
 for (const f of files) {
   const fp = path.join(out, f);
   if (!fs.statSync(fp).isFile()) continue;
   if (/\.(exe|png|jpg|zip)$/i.test(f)) continue;
   const text = fs.readFileSync(fp, "utf8");
-  for (const re of secretPatterns) {
-    if (re.test(text) && !text.includes("KHÔNG ship") && !text.includes("← KHÔNG")) {
-      // allow commented empty
-      const m = text.match(re);
-      if (m && !/=\s*$/.test(m[0]) && !/=\s*#/.test(m[0])) {
-        const val = m[0].split("=")[1]?.trim();
-        if (val && val.length > 8 && !val.startsWith("←")) {
-          throw new Error(`Phát hiện secret nghi ngờ trong pack-customer/${f}: ${m[0].slice(0, 40)}`);
-        }
-      }
-    }
+  if (/BEGIN PRIVATE KEY/.test(text)) {
+    throw new Error(`Phát hiện private key trong pack-customer/${f}`);
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const m = trimmed.match(/^(FB_APP_SECRET(?:_2)?|NGROK_AUTHTOKEN)\s*=\s*(.*)$/i);
+    if (!m) continue;
+    const val = String(m[2] || "").trim().replace(/^["']|["']$/g, "");
+    if (!val || val.length <= 8) continue;
+    throw new Error(`Phát hiện secret nghi ngờ trong pack-customer/${f}: ${m[1]}=…`);
   }
 }
 
