@@ -53,6 +53,24 @@ if (exeSrc) {
   console.warn("⚠ Chưa có dist-desktop-oauth EXE — chạy npm run build:desktop trước");
 }
 
+const setupName = `FB-Page-Studio-Setup-v${ver}.exe`;
+const setupSrc = path.join(root, "dist-desktop-oauth", setupName);
+if (fs.existsSync(setupSrc)) {
+  for (const entry of fs.readdirSync(out)) {
+    if (/^FB-Page-Studio-Setup/i.test(entry)) {
+      try {
+        fs.unlinkSync(path.join(out, entry));
+      } catch {
+        /* */
+      }
+    }
+  }
+  fs.copyFileSync(setupSrc, path.join(out, setupName));
+  const sh = crypto.createHash("sha256").update(fs.readFileSync(setupSrc)).digest("hex");
+  fs.writeFileSync(path.join(out, `${setupName}.sha256.txt`), `${sh}  ${setupName}\n`, "utf8");
+  console.log("Copied DEV Setup:", setupName);
+}
+
 // Shortcut docs (re-write so pack-dev stays current)
 fs.writeFileSync(
   path.join(out, "VERSION.txt"),

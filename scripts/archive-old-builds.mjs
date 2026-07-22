@@ -22,6 +22,8 @@ const CURRENT = String(pkg.version || "").replace(/^v/i, "");
 
 const EXE_RE =
   /^FB-Page-Studio-Desktop(?:-v(\d+\.\d+\.\d+))?\.exe(?:\.sha256\.txt)?$/i;
+const SETUP_RE =
+  /^FB-Page-Studio-Setup-v(\d+\.\d+\.\d+)\.exe(?:\.sha256\.txt)?$/i;
 const ZIP_RE = /^FB-Page-Studio-v(\d+\.\d+\.\d+)-Windows\.zip(?:\.sha256\.txt)?$/i;
 const INTERNAL_ZIP_RE =
   /^FB-Page-Studio-INTERNAL-v(\d+\.\d+\.\d+)(?:-.+)?\.zip(?:\.sha256\.txt)?$/i;
@@ -30,6 +32,8 @@ const PACK_INTERNAL_DIR_RE = /^pack-internal-v(\d+\.\d+\.\d+)$/i;
 function versionFromName(name) {
   let m = name.match(EXE_RE);
   if (m) return m[1] || null; // unversioned Desktop.exe → null (keep runner)
+  m = name.match(SETUP_RE);
+  if (m) return m[1];
   m = name.match(ZIP_RE);
   if (m) return m[1];
   m = name.match(INTERNAL_ZIP_RE);

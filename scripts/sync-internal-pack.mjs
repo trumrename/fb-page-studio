@@ -145,6 +145,26 @@ if (exeSrc) {
   console.warn("⚠ Chưa có EXE — chạy npm run build:desktop rồi sync lại");
 }
 
+// Setup NSIS — ghim taskbar / Start Menu
+const setupName = `FB-Page-Studio-Setup-v${ver}.exe`;
+const setupSrc = path.join(root, "dist-desktop-oauth", setupName);
+if (fs.existsSync(setupSrc)) {
+  for (const entry of fs.readdirSync(out)) {
+    if (/^FB-Page-Studio-Setup/i.test(entry)) {
+      try {
+        fs.unlinkSync(path.join(out, entry));
+      } catch {
+        /* */
+      }
+    }
+  }
+  const setupDest = path.join(out, setupName);
+  fs.copyFileSync(setupSrc, setupDest);
+  const sh = crypto.createHash("sha256").update(fs.readFileSync(setupDest)).digest("hex");
+  fs.writeFileSync(path.join(out, `${setupName}.sha256.txt`), `${sh}  ${setupName}\n`, "utf8");
+  console.log("Setup →", setupDest);
+}
+
 fs.writeFileSync(
   path.join(out, "README-NOI-BO.txt"),
   [
@@ -152,15 +172,12 @@ fs.writeFileSync(
     "====================",
     "- Da nhung .env (CO App Secret) - chi may tin cay.",
     "- OAUTH_RELAY=1 - Connect FB khong Ngrok (can may server pack-server).",
-    `- Mo DUNG 1 file: ${exeName}`,
+    `- Portable: ${exeName}`,
+    `- Cài đặt (icon + ghim taskbar): FB-Page-Studio-Setup-v${ver}.exe`,
+    "  → Start Menu / Desktop → chuột phải taskbar → Ghim",
     "- KHONG public, KHONG dua khach ngoai, KHONG commit git.",
     "",
     "CHI GIU 1 EXE ban moi nhat trong folder nay.",
-    "Ban cu (v1.2.25, v1.2.27, ...) tu dong vao:",
-    "  Tong Hop Tool\\Luu-Tru-Ban-Cu\\",
-    "Neu con 2 EXE: dong app dang chay roi chay lai:",
-    "  node scripts/archive-old-builds.mjs --dir \"Tong Hop Tool/pack-internal\"",
-    "  (hoac npm run pack:internal)",
     "",
     "Can co may server (pack-server) dang chay khi Connect:",
     "  CHAY-SERVER-TAT-CA.bat",

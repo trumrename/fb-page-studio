@@ -9,6 +9,7 @@ files:
   - src/**/*
   - public/**/*
   - assets/**/*
+  - build/icon.ico
   - package.json
   - "!data/**/*"
   - "!dist/**/*"
@@ -21,25 +22,34 @@ asarUnpack:
   - "**/better-sqlite3/**/*"
 win:
   icon: build/icon.ico
+  # Taskbar pin / Start Menu identity
+  executableName: FB Page Studio
   target:
-    - target: portable
-      arch:
-        - x64
     - target: nsis
       arch:
         - x64
-  artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+    - target: portable
+      arch:
+        - x64
 portable:
   artifactName: FB-Page-Studio-Desktop.exe
 nsis:
+  # Bản cài đặt: icon + shortcut Start Menu + Desktop → ghim taskbar
   oneClick: false
+  perMachine: false
   allowToChangeInstallationDirectory: true
-  createDesktopShortcut: true
+  allowElevation: true
+  createDesktopShortcut: always
   createStartMenuShortcut: true
+  runAfterFinish: true
   shortcutName: FB Page Studio
+  uninstallDisplayName: FB Page Studio
+  artifactName: FB-Page-Studio-Setup-v${version}.exe
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
+  deleteAppDataOnUninstall: false
+  include: build/installer.nsh
 extraMetadata:
   main: electron/main.cjs
 

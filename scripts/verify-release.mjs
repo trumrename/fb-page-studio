@@ -48,8 +48,11 @@ const lock = json(path.join(root, "package-lock.json"));
 const exe = path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe");
 const versionedExe = path.join(root, "dist-desktop-oauth", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
 const checksumFile = `${versionedExe}.sha256.txt`;
+const setupExe = path.join(root, "dist-desktop-oauth", `FB-Page-Studio-Setup-v${pkg.version}.exe`);
+const setupChecksum = `${setupExe}.sha256.txt`;
 const deliverRoot = path.join(root, "Tổng Hợp Tool");
 const customerExe = path.join(deliverRoot, "pack-customer", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
+const customerSetup = path.join(deliverRoot, "pack-customer", `FB-Page-Studio-Setup-v${pkg.version}.exe`);
 const appAsar = path.join(root, "dist-desktop-oauth", "win-unpacked", "resources", "app.asar");
 const customerVersionFile = path.join(deliverRoot, "pack-customer", "VERSION.txt");
 
@@ -58,7 +61,10 @@ assert(lock.version === pkg.version && lock.packages?.[""]?.version === pkg.vers
 assert(fs.existsSync(exe), "desktop EXE exists");
 assert(fs.existsSync(versionedExe), "versioned release EXE exists");
 assert(fs.existsSync(checksumFile), "versioned release SHA-256 file exists");
+assert(fs.existsSync(setupExe), "NSIS Setup installer exists", setupExe);
+assert(fs.existsSync(setupChecksum), "Setup SHA-256 sidecar exists");
 assert(fs.existsSync(customerExe), "customer EXE exists");
+assert(fs.existsSync(customerSetup), "customer Setup installer exists");
 assert(fs.existsSync(appAsar), "packaged app.asar exists");
 assert(fs.existsSync(customerVersionFile), "customer VERSION.txt exists");
 
@@ -80,6 +86,13 @@ if (fs.existsSync(appAsar)) {
   assert(embeddedServer.includes("isFacebookCallback") && embeddedServer.includes("cameThroughProxy"), "EXE blocks public Ngrok access outside OAuth callback");
   assert(embeddedPosting.indexOf('router.put("/preferred-hours/bulk"') < embeddedPosting.indexOf('router.put("/preferred-hours/:pageRowId"'), "EXE keeps preferred-hours bulk route reachable");
   assert(embeddedMain.includes("Never let an external origin replace the trusted local dashboard"), "EXE blocks external navigation inside Electron");
+  assert(embeddedMain.includes("setAppUserModelId") && embeddedMain.includes("com.fbpagestudio.app"), "EXE sets Windows AppUserModelId for taskbar pin");
+}
+
+if (fs.existsSync(setupExe) && fs.existsSync(setupChecksum)) {
+  const setupText = fs.readFileSync(setupChecksum, "utf8");
+  assert(setupText.startsWith(sha256(setupExe)), "Setup SHA-256 sidecar matches installer");
+  assert(fs.statSync(setupExe).size > 10_000_000, "Setup installer is non-trivial size");
 }
 
 if (fs.existsSync(customerVersionFile)) {

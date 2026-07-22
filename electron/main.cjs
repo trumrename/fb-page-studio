@@ -18,6 +18,13 @@ const fs = require("fs");
 const { spawn } = require("child_process");
 const dotenv = require("dotenv");
 
+// Windows: ghim taskbar / jump list nhận đúng app (NSIS install + portable)
+try {
+  app.setAppUserModelId("com.fbpagestudio.app");
+} catch {
+  /* ignore */
+}
+
 let PORT = Number(process.env.PORT || 3847);
 
 let mainWindow = null;
@@ -92,6 +99,16 @@ function findUserDirWithEnv() {
   if (process.env.FB_USER_DIR) return path.resolve(process.env.FB_USER_DIR);
   if (process.env.PORTABLE_EXECUTABLE_DIR) {
     return path.resolve(process.env.PORTABLE_EXECUTABLE_DIR);
+  }
+  // NSIS / installed app (Program Files): write data to AppData, not install dir
+  if (app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR) {
+    try {
+      const installed = app.getPath("userData");
+      fs.mkdirSync(installed, { recursive: true });
+      return installed;
+    } catch {
+      /* fall through */
+    }
   }
   return path.dirname(process.execPath);
 }
