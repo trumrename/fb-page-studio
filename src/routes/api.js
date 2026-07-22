@@ -324,10 +324,16 @@ function chromeUserDataDir(value = process.env.FB_CHROME_USER_DATA_DIR) {
   const custom = String(value || "").trim();
   if (!custom) return path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data");
   const raw = path.resolve(custom);
-  // ChromePortable normally keeps the Chrome user-data root in Data\profile.
-  // Accept its root folder too so the user does not need to hunt for the
-  // technical subfolder by hand.
-  for (const candidate of [raw, path.join(raw, "Data", "profile"), path.join(raw, "profile")]) {
+  // ChromePortable normally keeps the Chrome user-data root in Data\profile
+  // (sometimes Data\User Data). Accept Portable root so users need not dig.
+  const candidates = [
+    raw,
+    path.join(raw, "Data", "profile"),
+    path.join(raw, "Data", "User Data"),
+    path.join(raw, "Data", "Profiles"),
+    path.join(raw, "profile"),
+  ];
+  for (const candidate of candidates) {
     try {
       if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) continue;
       const names = fs.readdirSync(candidate);
@@ -339,6 +345,45 @@ function chromeUserDataDir(value = process.env.FB_CHROME_USER_DATA_DIR) {
     } catch { /* try the next portable-layout candidate */ }
   }
   return raw;
+}
+
+/** If browser is Chrome Portable, resolve its Data\profile (or User Data) root. */
+function detectPortableUserDataFromBrowser(browserPath) {
+  const exe = String(browserPath || "").trim();
+  if (!exe) return "";
+  let dir = path.resolve(path.dirname(exe));
+  const systemUd = path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data");
+  for (let i = 0; i < 6; i++) {
+    for (const candidate of [
+      path.join(dir, "Data", "profile"),
+      path.join(dir, "Data", "User Data"),
+      path.join(dir, "Data", "Profiles"),
+    ]) {
+      try {
+        if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) continue;
+        const names = fs.readdirSync(candidate);
+        if (
+          names.includes("Local State") ||
+          names.includes("Default") ||
+          names.some((n) => /^Profile \d+$/i.test(n))
+        ) {
+          return path.resolve(candidate);
+        }
+      } catch {
+        /* continue */
+      }
+    }
+    if (fs.existsSync(path.join(dir, "ChromePortable.exe"))) {
+      const fromRoot = chromeUserDataDir(dir);
+      if (fromRoot && path.resolve(fromRoot).toLowerCase() !== systemUd.toLowerCase()) {
+        return path.resolve(fromRoot);
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return "";
 }
 
 function listChromeProfiles(userDataOverride) {
@@ -577,6 +622,19 @@ router.put("/setup/browser", (req, res) => {
       ].find((candidate) => fs.existsSync(candidate));
       if (realChrome) requestedBrowserPath = realChrome;
     }
+    // Portable: if UI only sent browser path (or wrong system User Data), bind Data\profile of THAT portable.
+    const portableData = detectPortableUserDataFromBrowser(requestedBrowserPath);
+    const systemUd = path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data");
+    if (portableData) {
+      const reqResolved = requestedDataDir ? path.resolve(requestedDataDir) : "";
+      const isSystemUd =
+        !reqResolved ||
+        reqResolved.toLowerCase() === systemUd.toLowerCase() ||
+        /[\\/]google[\\/]chrome[\\/]user data$/i.test(reqResolved);
+      if (isSystemUd) {
+        requestedDataDir = portableData;
+      }
+    }
     const found = listChromeProfiles(requestedDataDir);
     if (wanted && !found.profiles.some((p) => p.directory === wanted)) {
       throw new Error("Chrome Profile không tồn tại trên máy này");
@@ -586,11 +644,11 @@ router.put("/setup/browser", (req, res) => {
     }
     writeEnvValues(getEnvPath(), {
       FB_CHROME_PROFILE: wanted,
-      FB_CHROME_USER_DATA_DIR: requestedDataDir ? found.user_data_dir : "",
+      FB_CHROME_USER_DATA_DIR: found.user_data_dir || "",
       FB_BROWSER_PATH: requestedBrowserPath,
     });
     process.env.FB_CHROME_PROFILE = wanted;
-    process.env.FB_CHROME_USER_DATA_DIR = requestedDataDir ? found.user_data_dir : "";
+    process.env.FB_CHROME_USER_DATA_DIR = found.user_data_dir || "";
     process.env.FB_BROWSER_PATH = requestedBrowserPath;
 
     const matched = found.profiles.find((p) => p.directory === wanted) || found.profiles[0];

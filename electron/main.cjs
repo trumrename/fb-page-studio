@@ -211,10 +211,210 @@ function readBrowserEnv() {
   }
 }
 
+/** True if any chrome.exe is still running (singleton owner). */
+function isChromeProcessRunning() {
+  try {
+    const { execSync } = require("child_process");
+    const out = execSync('tasklist /FI "IMAGENAME eq chrome.exe" /NH', {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 4000,
+    });
+    return /chrome\.exe/i.test(out) && !/No tasks/i.test(out);
+  } catch {
+    return false;
+  }
+}
+
+/** Chrome profile root markers (system or Portable Data\profile). */
+function looksLikeChromeUserDataRoot(dir) {
+  try {
+    if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return false;
+    const names = fs.readdirSync(dir);
+    if (names.includes("Local State")) return true;
+    if (names.includes("Default")) return true;
+    return names.some((n) => /^Profile \d+$/i.test(n));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve Chrome Portable root from ChromePortable.exe or App\Chrome-bin\chrome.exe.
+ * Returns null for normal system Chrome installs.
+ */
+function findChromePortableRoot(exePath) {
+  if (!exePath) return null;
+  let dir = path.resolve(path.dirname(exePath));
+  for (let i = 0; i < 6; i++) {
+    const launcher = path.join(dir, "ChromePortable.exe");
+    const dataProfile = path.join(dir, "Data", "profile");
+    const dataUser = path.join(dir, "Data", "User Data");
+    if (
+      fs.existsSync(launcher) ||
+      looksLikeChromeUserDataRoot(dataProfile) ||
+      looksLikeChromeUserDataRoot(dataUser)
+    ) {
+      return dir;
+    }
+    // PortableApps layout: ...\ChromePortable\App\Chrome-bin\chrome.exe
+    if (/[\\/]App$/i.test(dir)) {
+      const parent = path.dirname(dir);
+      if (fs.existsSync(path.join(parent, "ChromePortable.exe")) || fs.existsSync(path.join(parent, "Data"))) {
+        return parent;
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/** Prefer Portable Data folders; never invent system User Data for portable builds. */
+function findPortableUserDataDir(portableRoot) {
+  if (!portableRoot) return "";
+  const candidates = [
+    path.join(portableRoot, "Data", "profile"),
+    path.join(portableRoot, "Data", "User Data"),
+    path.join(portableRoot, "Data", "Profiles"),
+    path.join(portableRoot, "App", "DefaultData"),
+    path.join(portableRoot, "profile"),
+  ];
+  for (const c of candidates) {
+    if (looksLikeChromeUserDataRoot(c)) return c;
+  }
+  // Create-ready default used by PortableApps Chrome
+  const fallback = path.join(portableRoot, "Data", "profile");
+  try {
+    fs.mkdirSync(fallback, { recursive: true });
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+/**
+ * Stale Singleton* after crash makes ChromePortable "flash then exit".
+ * Only delete when no chrome.exe is running (never steal a live lock).
+ */
+function clearStaleChromeSingletonLocks(userDataDir) {
+  if (!userDataDir || !fs.existsSync(userDataDir)) return [];
+  if (isChromeProcessRunning()) {
+    log("chrome lock: skip clear (chrome.exe still running)", userDataDir);
+    return [];
+  }
+  const cleared = [];
+  for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    const p = path.join(userDataDir, name);
+    try {
+      if (fs.existsSync(p)) {
+        fs.unlinkSync(p);
+        cleared.push(name);
+      }
+    } catch (e) {
+      log("chrome lock: cannot remove", name, e.message);
+    }
+  }
+  if (cleared.length) log("chrome lock: cleared stale", userDataDir, cleared.join(","));
+  return cleared;
+}
+
+/**
+ * Build launch plan so Portable and system Chrome never cross user-data roots.
+ * Root cause of "tool login OK, hand-open Portable flashes": tool used to spawn
+ * App\Chrome-bin\chrome.exe with --user-data-dir=%LocalAppData%\...\User Data
+ * (system), locking the wrong tree / leaving Singleton* that Portable launcher
+ * then cannot open.
+ */
+function resolveChromeLaunchPlan(rawExe, browserEnv) {
+  const local = process.env.LOCALAPPDATA || "";
+  const systemUserData = path.join(local, "Google", "Chrome", "User Data");
+  const profile = String(browserEnv.FB_CHROME_PROFILE || process.env.FB_CHROME_PROFILE || "").trim();
+  let configuredData = String(
+    browserEnv.FB_CHROME_USER_DATA_DIR || process.env.FB_CHROME_USER_DATA_DIR || ""
+  ).trim();
+
+  let exe = rawExe;
+  const portableRoot =
+    findChromePortableRoot(rawExe) ||
+    (/chromeportable\.exe$/i.test(rawExe) ? path.dirname(path.resolve(rawExe)) : null);
+
+  // Prefer real chrome.exe under Portable for reliable --profile-directory.
+  if (/chromeportable\.exe$/i.test(rawExe) || portableRoot) {
+    const root = portableRoot || path.dirname(path.resolve(rawExe));
+    const realChrome = [
+      path.join(root, "App", "Chrome-bin", "chrome.exe"),
+      path.join(root, "App", "Chrome", "chrome.exe"),
+      path.join(root, "chrome.exe"),
+    ].find((candidate) => fs.existsSync(candidate));
+    if (realChrome) exe = realChrome;
+  }
+
+  const base = path.basename(exe).toLowerCase();
+  const isChrome = base === "chrome.exe" || base === "chromeportable.exe";
+  if (!isChrome) {
+    return { exe, args: [], isChrome: false, userData: "", profile: "", portable: false };
+  }
+
+  let userData = "";
+  const isPortable = Boolean(portableRoot || /chromeportable/i.test(rawExe) || /chromeportable/i.test(exe));
+
+  if (isPortable) {
+    const portableData = findPortableUserDataDir(portableRoot || path.dirname(path.resolve(rawExe)));
+    // Explicit config only when it is still a real profile root and NOT system Chrome.
+    // Mis-saved system User Data + portable chrome.exe is the main "flash then exit" root cause.
+    if (configuredData && looksLikeChromeUserDataRoot(configuredData)) {
+      const resolved = path.resolve(configuredData);
+      const root = portableRoot ? path.resolve(portableRoot) : "";
+      const underPortable =
+        root &&
+        (resolved.toLowerCase() === root.toLowerCase() ||
+          resolved.toLowerCase().startsWith(root.toLowerCase() + path.sep));
+      const isSystem =
+        resolved.toLowerCase() === systemUserData.toLowerCase() ||
+        /[\\/]google[\\/]chrome[\\/]user data$/i.test(resolved);
+      if (isSystem) {
+        log("chrome portable: ignore system FB_CHROME_USER_DATA_DIR, use", portableData);
+        userData = portableData;
+      } else if (underPortable || looksLikeChromeUserDataRoot(resolved)) {
+        userData = resolved;
+      } else {
+        log("chrome portable: configured data invalid, use", portableData);
+        userData = portableData;
+      }
+    } else {
+      userData = portableData;
+    }
+  } else {
+    userData = configuredData
+      ? path.resolve(configuredData)
+      : systemUserData;
+  }
+
+  // Stale locks only when Chrome is fully stopped (safe).
+  if (userData) clearStaleChromeSingletonLocks(userData);
+
+  const args = [
+    ...(userData ? [`--user-data-dir=${userData}`] : []),
+    ...(profile ? [`--profile-directory=${profile}`] : []),
+  ];
+
+  return {
+    exe,
+    args,
+    isChrome: true,
+    userData,
+    profile,
+    portable: isPortable,
+  };
+}
+
 /**
  * Open OAuth / external URL in a real browser that keeps Facebook login cookies.
  * Prefer Chrome (user usually has tabs logged in) → Edge → Firefox → system default.
- * Opening chrome.exe with a URL reuses the running Chrome instance + profile.
+ *
+ * Portable-safe: bind --user-data-dir to ChromePortable\Data\… never system User Data.
  */
 function openInPreferredBrowser(url) {
   let parsed;
@@ -224,30 +424,31 @@ function openInPreferredBrowser(url) {
     log("openInPreferredBrowser blocked invalid URL");
     return false;
   }
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
+  if (!["http:", "https:"].includes(parsed.protocol)) {
     log("openInPreferredBrowser blocked protocol", parsed.protocol);
     return false;
   }
   url = parsed.toString();
   const browserEnv = readBrowserEnv();
   const candidates = [];
-  if (browserEnv.BROWSER_PATH || process.env.BROWSER_PATH) candidates.push(browserEnv.BROWSER_PATH || process.env.BROWSER_PATH);
-  if (browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH) candidates.push(browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH);
+  if (browserEnv.BROWSER_PATH || process.env.BROWSER_PATH) {
+    candidates.push(browserEnv.BROWSER_PATH || process.env.BROWSER_PATH);
+  }
+  if (browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH) {
+    candidates.push(browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH);
+  }
 
   const local = process.env.LOCALAPPDATA || "";
   const pf = process.env.ProgramFiles || "C:\\Program Files";
   const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
 
-  // Prefer Chrome first (Facebook sessions often live here)
   candidates.push(
     path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
     path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
     path.join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
     path.join(local, "Google", "Chrome Beta", "Application", "chrome.exe"),
-    // Edge
     path.join(pf86, "Microsoft", "Edge", "Application", "msedge.exe"),
     path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
-    // Firefox
     path.join(pf, "Mozilla Firefox", "firefox.exe"),
     path.join(pf86, "Mozilla Firefox", "firefox.exe")
   );
@@ -255,54 +456,27 @@ function openInPreferredBrowser(url) {
   for (const rawExe of candidates) {
     if (!rawExe || !fs.existsSync(rawExe)) continue;
     try {
-      // ChromePortable.exe is a launcher; profile flags are reliable on the real
-      // chrome.exe under App\Chrome-bin. Resolve when possible.
-      let exe = rawExe;
-      if (/chromeportable\.exe$/i.test(rawExe)) {
-        const portableChrome = [
-          path.join(path.dirname(rawExe), "App", "Chrome-bin", "chrome.exe"),
-          path.join(path.dirname(rawExe), "App", "Chrome", "chrome.exe"),
-          path.join(path.dirname(rawExe), "chrome.exe"),
-        ].find((candidate) => fs.existsSync(candidate));
-        if (portableChrome) exe = portableChrome;
-      }
-      const base = path.basename(exe).toLowerCase();
-      const isChrome = base === "chrome.exe" || base === "chromeportable.exe";
-      const profile = String(browserEnv.FB_CHROME_PROFILE || process.env.FB_CHROME_PROFILE || "").trim();
-      // Supplying only --profile-directory is unreliable when Chrome is already
-      // running: Windows can forward the URL to a different active Chrome
-      // instance.  Always bind the launch to the real Chrome User Data root,
-      // then select its exact profile folder.  This preserves that profile's
-      // Facebook cookies (unless the user deliberately configured another root).
-      const userData = String(
-        browserEnv.FB_CHROME_USER_DATA_DIR ||
-        process.env.FB_CHROME_USER_DATA_DIR ||
-        path.join(local, "Google", "Chrome", "User Data")
-      ).trim();
-      // Chrome does not allow an external app to take over the active tab.
-      // Passing the profile opens a new tab with that profile's FB cookies.
-      // Keep --user-data-dir even when profile is empty so ChromePortable roots
-      // still isolate from the system Chrome User Data.
-      const args = isChrome
-        ? [
-            ...(userData ? [`--user-data-dir=${userData}`] : []),
-            ...(profile ? [`--profile-directory=${profile}`] : []),
-            url,
-          ]
-        : [url];
-      spawn(exe, args, {
+      const plan = resolveChromeLaunchPlan(rawExe, browserEnv);
+      const args = plan.isChrome ? [...plan.args, url] : [url];
+      spawn(plan.exe, args, {
         detached: true,
         stdio: "ignore",
         windowsHide: false,
       }).unref();
-      log("openInPreferredBrowser", exe, profile ? `profile=${profile}` : "profile=auto", url.slice(0, 80));
+      log(
+        "openInPreferredBrowser",
+        plan.exe,
+        plan.portable ? "portable" : "system",
+        plan.userData ? `userData=${plan.userData}` : "userData=default",
+        plan.profile ? `profile=${plan.profile}` : "profile=auto",
+        url.slice(0, 80)
+      );
       return true;
     } catch (e) {
       log("openInPreferredBrowser fail", rawExe, e.message);
     }
   }
 
-  // Fallback: Windows default association
   shell.openExternal(url).catch((e) => log("openExternal fail", e.message));
   log("openInPreferredBrowser fallback shell.openExternal");
   return false;
