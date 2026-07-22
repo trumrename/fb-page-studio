@@ -2,7 +2,7 @@ FB Page Studio — GÓI KHÁCH (an toàn)
 ====================================
 
 CÁCH 1 — BẢN CÀI (khuyến nghị, ghim taskbar):
-  1) Chạy FB-Page-Studio-Setup-v1.2.38.exe
+  1) Chạy FB-Page-Studio-Setup-v1.2.39.exe
   2) Cài xong → Start Menu / Desktop: FB Page Studio
   3) Chuột phải icon thanh taskbar → Ghim vào thanh tác vụ
 
@@ -21,5 +21,5 @@ Login Facebook qua domain relay HTTPS của nhà cung cấp.
 
 Gói này KHÔNG chứa: FB_APP_SECRET, Ngrok token, license-private.pem
 
-version 1.2.38
+version 1.2.39
 oauth_relay_url=https://modelswiki.top

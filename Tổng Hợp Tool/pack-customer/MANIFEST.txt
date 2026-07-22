@@ -1,10 +1,10 @@
 Gói khách — không secret:
  - .env.example
  - .env.public
- - FB-Page-Studio-Desktop-v1.2.38.exe
- - FB-Page-Studio-Desktop-v1.2.38.exe.sha256.txt
- - FB-Page-Studio-Setup-v1.2.38.exe
- - FB-Page-Studio-Setup-v1.2.38.exe.sha256.txt
+ - FB-Page-Studio-Desktop-v1.2.39.exe
+ - FB-Page-Studio-Desktop-v1.2.39.exe.sha256.txt
+ - FB-Page-Studio-Setup-v1.2.39.exe
+ - FB-Page-Studio-Setup-v1.2.39.exe.sha256.txt
  - HUONG-DAN-MAY-MOI.md
  - HUONG-DAN-OAUTH-RELAY.md
  - MANIFEST.txt
