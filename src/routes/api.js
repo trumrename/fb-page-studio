@@ -248,11 +248,11 @@ router.put("/setup/first-run", async (req, res) => {
       OAUTH_RELAY: "1",
       OAUTH_RELAY_URL: relayUrl,
       FB_APP_ID: app1Id,
-      FB_APP_SECRET: keepSecretLocal ? app1Secret : "",
+      FB_APP_SECRET: localSecret1,
       FB_APP_NAME: safeEnvLabel(req.body?.app1_name, process.env.FB_APP_NAME || "App 1"),
       FB_REDIRECT_URI: redirectUri,
       FB_APP_ID_2: app2Id,
-      FB_APP_SECRET_2: keepSecretLocal ? app2Secret : "",
+      FB_APP_SECRET_2: localSecret2,
       FB_APP_NAME_2: app2Id
         ? safeEnvLabel(req.body?.app2_name, process.env.FB_APP_NAME_2 || "App 2")
         : "",
@@ -273,7 +273,7 @@ router.put("/setup/first-run", async (req, res) => {
     writeEnvValues(getEnvPath(), updates);
     for (const [key, value] of Object.entries(updates)) process.env[key] = value;
     config.facebook.appId = app1Id;
-    config.facebook.appSecret = keepSecretLocal ? app1Secret : "";
+    config.facebook.appSecret = localSecret1;
     config.facebook.redirectUri = redirectUri;
     config.tokenEncryptionKey = encryptionKey;
 
@@ -281,11 +281,7 @@ router.put("/setup/first-run", async (req, res) => {
       ok: true,
       message:
         "Đã lưu máy này." +
-        (pushNotes.length
-          ? ` Đã đẩy lên server: ${pushNotes.join("; ")}. Máy khác mở tool sẽ tự nhận App ID.`
-          : relayMode
-            ? " (Chưa đẩy secret — nhập App Secret + RELAY_ADMIN_TOKEN nếu muốn server tự nhận.)"
-            : "") +
+        (pushNotes.length ? ` ${pushNotes.join("; ")}.` : "") +
         " Có thể Connect Facebook.",
       pushed: pushNotes,
       ...firstRunStatus(),
