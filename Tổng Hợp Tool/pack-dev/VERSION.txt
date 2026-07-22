@@ -1,5 +1,5 @@
 FB Page Studio — gói DEV
-version=1.2.34
-built_at=2026-07-22T04:13:34.204Z
+version=1.2.35
+built_at=2026-07-22T04:35:21.385Z
 github=trumrename/fb-page-studio
 root=D:\fb-page-poster

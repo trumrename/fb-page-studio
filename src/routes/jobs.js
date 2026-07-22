@@ -212,6 +212,7 @@ router.post("/rotation/run-now", (req, res) => {
       return res.status(400).json({ ok: false, error: "Kế hoạch còn lỗi chặn; chưa thể chạy.", plan });
     }
     if (!plan.slots.length) return res.status(400).json({ ok: false, error: "Không có Page để chạy", plan });
+    const continuous = !!(body.continuous ?? plan.settings?.run_now_continuous);
     const tasks = plan.slots.map((s) => ({
       kind: "post",
       page_row_id: s.page_row_id,
@@ -230,11 +231,37 @@ router.post("/rotation/run-now", (req, res) => {
     }));
     const job = startJob({
       type: "rotation_run_now",
-      title: `Đăng trực tiếp local · ${plan.summary.posts_per_page_per_day} bài/page · ${plan.summary.accounts} admin`,
+      title:
+        `Đăng trực tiếp local · ${plan.summary.posts_per_page_per_day} bài/page · ${plan.summary.accounts} admin` +
+        (continuous ? " · CHẠY LIÊN TỤC" : "") +
+        (plan.summary?.plan_day ? ` · ngày ${plan.summary.plan_day}` : ""),
       tasks,
+      continuous,
+      continuous_settings: continuous
+        ? {
+            ...plan.settings,
+            page_row_ids: body.page_row_ids || plan.settings?.page_row_ids || [],
+            page_target_mode: body.page_target_mode || plan.settings?.page_target_mode,
+            run_now_time_mode: body.run_now_time_mode || plan.settings?.run_now_time_mode,
+            windows: body.windows || plan.settings?.windows,
+            posts_per_page_per_day: body.posts_per_page_per_day || plan.settings?.posts_per_page_per_day,
+            media_pattern_mode: body.media_pattern_mode || plan.settings?.media_pattern_mode,
+            media_pattern: body.media_pattern || plan.settings?.media_pattern,
+            post_type: body.post_type || plan.settings?.post_type,
+            app_rotation_mode: body.app_rotation_mode || plan.settings?.app_rotation_mode,
+            same_page_gap_hours_min: body.same_page_gap_hours_min ?? plan.settings?.same_page_gap_hours_min,
+            same_page_gap_hours_max: body.same_page_gap_hours_max ?? plan.settings?.same_page_gap_hours_max,
+            between_tasks_gap_minutes_min:
+              body.between_tasks_gap_minutes_min ?? plan.settings?.between_tasks_gap_minutes_min,
+            between_tasks_gap_minutes_max:
+              body.between_tasks_gap_minutes_max ?? plan.settings?.between_tasks_gap_minutes_max,
+            run_now_continuous: true,
+          }
+        : null,
+      next_plan_day: continuous ? plan.summary?.next_plan_day || null : null,
     });
     runNowPlans.delete(planId);
-    res.json({ ok: true, job, ...plan });
+    res.json({ ok: true, job, continuous, ...plan });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }

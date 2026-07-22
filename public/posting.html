@@ -435,29 +435,39 @@
               <p class="muted" style="margin:.35rem 0 0;font-size:.78rem" id="rotNowMediaHelp">
                 Pattern lặp theo vòng bài # trong ngày (bài 1 = phần tử 1, bài 2 = phần tử 2…).
               </p>
-              <div class="row3" style="margin-top:.55rem" id="rotNowGapBox">
-                <div>
-                  <label>Gap cùng Page — giờ min</label>
-                  <input type="number" id="rotNowGapMin" min="0.25" max="24" step="0.25" value="1.75" />
+              <div style="margin-top:.65rem;padding:.65rem;border:1px solid var(--border);border-radius:10px;background:rgba(0,0,0,.12)">
+                <b>Khoảng cách thời gian (rõ ràng)</b>
+                <div class="row3" style="margin-top:.45rem" id="rotNowGapBox">
+                  <div>
+                    <label>Cùng 1 Page · giờ min<br/><span class="muted" style="font-weight:400">giữa 2 vòng bài</span></label>
+                    <input type="number" id="rotNowGapMin" min="0.25" max="24" step="0.25" value="1.75" />
+                  </div>
+                  <div>
+                    <label>Cùng 1 Page · giờ max<br/><span class="muted" style="font-weight:400">giữa 2 vòng bài</span></label>
+                    <input type="number" id="rotNowGapMax" min="0.25" max="48" step="0.25" value="2.5" />
+                  </div>
+                  <div class="muted" style="align-self:end;padding-bottom:.5rem;font-size:.78rem">
+                    Mode «Sáng/Tối»: gap cùng Page áp giữa các vòng; giờ cụ thể lấy từ khung.
+                  </div>
                 </div>
-                <div>
-                  <label>Gap cùng Page — giờ max</label>
-                  <input type="number" id="rotNowGapMax" min="0.25" max="48" step="0.25" value="2.5" />
-                </div>
-                <div class="muted" style="align-self:end;padding-bottom:.5rem;font-size:.78rem">
-                  Chỉ dùng khi mode «Liên tục». Mode Sáng/Tối lấy giờ từ khung.
+                <div class="row2" style="margin-top:.35rem">
+                  <div>
+                    <label>Page / Admin khác nhau · phút min<br/><span class="muted" style="font-weight:400">so le trong cùng vòng</span></label>
+                    <input type="number" id="rotTaskGapMin" min="12" value="15" />
+                  </div>
+                  <div>
+                    <label>Page / Admin khác nhau · phút max</label>
+                    <input type="number" id="rotTaskGapMax" min="12" value="25" />
+                  </div>
                 </div>
               </div>
-              <div class="row2" style="margin-top:.35rem">
-                <div>
-                  <label>Chờ giữa Page/Admin — phút min</label>
-                  <input type="number" id="rotTaskGapMin" min="12" value="15" />
-                </div>
-                <div>
-                  <label>Chờ giữa Page/Admin — phút max</label>
-                  <input type="number" id="rotTaskGapMax" min="12" value="25" />
-                </div>
-              </div>
+              <label class="checks" style="display:block;margin-top:.75rem;padding:.55rem .65rem;border:1px solid rgba(61,214,140,.35);border-radius:10px">
+                <input type="checkbox" id="rotNowContinuous" checked />
+                <b>Chạy liên tục ngày qua ngày</b>
+                <span class="muted" style="display:block;margin-top:.25rem;font-size:.8rem">
+                  Xong 1 ngày → tự lập ngày mai và treo tiếp. Bấm <b>⏹ Dừng</b> để kết thúc. PC/tool phải bật.
+                </span>
+              </label>
               <div style="margin-top:.75rem;padding:.75rem;border:1px solid var(--border);border-radius:10px">
                 <b>Kho dùng cho các Page đã tick</b>
                 <div class="row2" style="align-items:end;margin-top:.45rem">
@@ -480,6 +490,7 @@
               <div class="actions">
                 <button type="button" class="btn-ghost" id="btnRotNowPreview">Xem lịch đăng trực tiếp</button>
                 <button type="button" class="btn-ok btn-lg" id="btnRotNowRun">▶ Bắt đầu treo tool</button>
+                <button type="button" class="btn-danger btn-lg" id="btnRotNowStop" style="display:none">⏹ Dừng treo</button>
               </div>
             </div>
             <div id="rotResult" class="muted" style="margin-top:.85rem"></div>
@@ -580,6 +591,7 @@
     const rotationWorkspaceControlIds = [
       "rotMode", "rotDays", "rotPostType", "rotAppStrategy", "rotNowPerDay",
       "rotNowPostType", "rotNowMediaMode", "rotNowMediaPattern", "rotNowGapMin", "rotNowGapMax",
+      "rotNowContinuous", "rotTaskGapMin", "rotTaskGapMax",
       "rotTaskGapMin", "rotTaskGapMax", "rotWindows", "rotPerDay",
       "rotFirstStart", "rotFirstEnd", "rotGapMin", "rotGapMax", "rotJitMin",
       "rotJitMax", "rotAutoMeta", "rotG1", "rotG2", "rotOnlyEnabled",
@@ -1859,6 +1871,7 @@
         auto_groups_by_meta_app: true,
         groups: [],
         only_enabled_pages: target === "all" ? !!$("rotOnlyEnabled")?.checked : false,
+        run_now_continuous: !!$("rotNowContinuous")?.checked,
       };
     }
 
@@ -1949,14 +1962,29 @@
     function renderRunNowResult(r, isRun) {
       const sum = r.summary || {};
       let html = `<b>${isRun ? "ĐÃ BẮT ĐẦU JOB DIRECT LOCAL" : "LỊCH ĐĂNG TRỰC TIẾP · GIỜ VIỆT NAM"}</b><br/>`;
-      html += `Admin ${sum.accounts || 0} · ${sum.posts_per_page_per_day || 0} bài/Page/ngày · tổng ${sum.total_final || 0} tác vụ<br/>`;
+      html += `Admin ${sum.accounts || 0} · cấu hình <b>${sum.configured_posts_per_page || sum.posts_per_page_per_day || 0}</b> bài/Page/ngày · tổng task <b>${sum.total_final || 0}</b>`;
+      if (sum.plan_day) html += ` · ngày plan <b>${esc(sum.plan_day)}</b>`;
+      if (sum.continuous || r.continuous) html += ` · <span class="ok">CHẠY LIÊN TỤC</span>`;
+      html += `<br/>`;
+      if (sum.gap_same_page || sum.gap_other_page) {
+        html += `<span class="muted">Gap cùng Page: ${esc(sum.gap_same_page || "—")} · Gap Page/Admin khác: ${esc(sum.gap_other_page || "—")}</span><br/>`;
+      }
       html += `<span class="muted">${esc(sum.order_logic || "")}</span><br/><span class="muted">${esc(sum.wait_logic || "")}</span>`;
       if (r.round_times?.length) {
         html += `<div style="margin:.65rem 0;padding:.65rem;border:1px solid var(--border);border-radius:8px">` +
-          r.round_times.map((x) => `<b>Vòng đăng ${x.post_round}:</b> ${x.immediate ? "ĐĂNG TRỰC TIẾP NGAY" : "tool chờ đến " + esc(x.local_label) + " rồi đăng trực tiếp"}`).join("<br/>") +
+          r.round_times.map((x) => {
+            const soon = x.immediate;
+            return `<b>Vòng đăng ${x.post_round}:</b> ` +
+              (soon
+                ? `ĐĂNG TRỰC TIẾP NGAY · ${esc(x.local_label)} VN`
+                : `tool chờ đến <b>${esc(x.local_label)}</b> rồi đăng trực tiếp`);
+          }).join("<br/>") +
           `</div>`;
       }
-      if (r.job?.id) html += `<div class="ok">Job <b>${esc(r.job.id)}</b> đang chạy · xem tiến độ tại App console</div>`;
+      if (r.job?.id) {
+        html += `<div class="ok">Job <b>${esc(r.job.id)}</b> đang chạy · bấm <b>⏹ Dừng treo</b> để dừng</div>`;
+        if ($("btnRotNowStop")) $("btnRotNowStop").style.display = "inline-block";
+      }
       if (r.media_requirements?.length) {
         html += `<div style="margin:.55rem 0"><b>Media cần dùng:</b><br/>` +
           r.media_requirements.map((m) => `· ${esc(m.kind)}: cần <b>${m.required}</b> · đang có <b>${m.available}</b> · ${esc(m.folder || "chưa chọn folder")}`).join("<br/>") +
@@ -2337,20 +2365,44 @@
       const mediaLbl = settingsBody.media_pattern_mode === "pattern"
         ? `pattern ${settingsBody.media_pattern}`
         : settingsBody.media_pattern_mode;
-      if (!confirm(`Bắt đầu job đăng TRỰC TIẾP local?\nPhạm vi: ${scope}\nGiờ: ${timeLbl}\nMedia: ${mediaLbl}\n\nKHÔNG tạo lịch hẹn Facebook. Giữ tool/PC bật.`)) return;
+      const cont = settingsBody.run_now_continuous ? "CÓ — ngày qua ngày đến khi Dừng" : "Không — chỉ 1 đợt";
+      if (!confirm(`Bắt đầu job đăng TRỰC TIẾP local?\nPhạm vi: ${scope}\nGiờ: ${timeLbl}\nMedia: ${mediaLbl}\nChạy liên tục: ${cont}\n\nKHÔNG tạo lịch hẹn Facebook. Giữ tool/PC bật.`)) return;
       try {
-        const body = { plan_id: runNowPlanId };
+        const body = {
+          plan_id: runNowPlanId,
+          continuous: !!settingsBody.run_now_continuous,
+          ...settingsBody,
+        };
         const r = await api("/api/jobs/rotation/run-now", { method: "POST", body: JSON.stringify(body) });
         runNowPlanId = null;
         runNowPlanSignature = null;
         renderRunNowResult(r, true);
-        flash(`Đã bắt đầu · ${r.job?.progress?.total || 0} tác vụ`, true);
-        if (r.job?.id) watchLiveJob(r.job.id);
+        flash(
+          `Đã bắt đầu · ${r.job?.progress?.total || 0} tác vụ` +
+            (r.continuous ? " · chạy liên tục" : ""),
+          true
+        );
+        if (r.job?.id) {
+          watchLiveJob(r.job.id);
+          if ($("btnRotNowStop")) $("btnRotNowStop").style.display = "inline-block";
+        }
       } catch (e) {
         flash(e.message, false);
         $("rotResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
       }
     };
+    $("btnRotNowStop")?.addEventListener("click", async () => {
+      if (!liveJobId) return flash("Không có job Direct Local đang chạy", false);
+      if (!confirm("Dừng treo tool? Các task còn lại sẽ bỏ qua.")) return;
+      try {
+        const r = await api(`/api/jobs/${liveJobId}/stop`, { method: "POST", body: "{}" });
+        renderLiveJob(r.job);
+        if ($("btnRotNowStop")) $("btnRotNowStop").style.display = "none";
+        flash("Đã gửi lệnh dừng", true);
+      } catch (e) {
+        flash(e.message, false);
+      }
+    });
     $("btnLivePause").onclick = async () => {
       if (!liveJobId) return;
       const r = await api(`/api/jobs/${liveJobId}/pause`, { method: "POST", body: "{}" });

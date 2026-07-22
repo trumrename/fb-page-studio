@@ -275,7 +275,14 @@ restoreJobs();
  * Create job from task defs then run async.
  * task: { kind, page_row_id, page_name?, page_id?, label?, opts? }
  */
-export function startJob({ type, title, tasks }) {
+export function startJob({
+  type,
+  title,
+  tasks,
+  continuous = false,
+  continuous_settings = null,
+  next_plan_day = null,
+} = {}) {
   trimJobs();
   const id = nanoid(10);
   const job = {
@@ -291,6 +298,11 @@ export function startJob({ type, title, tasks }) {
     stop_requested: false,
     /** pause between tasks until resume */
     paused: false,
+    /** Direct Local: replan next day after finishing */
+    continuous: !!continuous,
+    continuous_settings: continuous_settings || null,
+    next_plan_day: next_plan_day || null,
+    day_cycle: 0,
     tasks: (tasks || []).map((t, i) => ({
       id: `${id}-t${i + 1}`,
       index: i + 1,
@@ -647,6 +659,175 @@ async function runJob(jobId) {
     return;
   }
 
+  // Continuous Direct Local: lập ngày kế tiếp và chạy tiếp (đến khi bấm Dừng)
+  while (
+    job.continuous &&
+    job.continuous_settings &&
+    job.type === "rotation_run_now" &&
+    !job.stop_requested
+  ) {
+    try {
+      const { buildRunNowPlan } = await import("./rotationPlan.js");
+      job.day_cycle = (job.day_cycle || 0) + 1;
+      const forceDay = job.next_plan_day || null;
+      notify(
+        job,
+        "info",
+        `Chu kỳ ${job.day_cycle} xong · lập ngày tiếp`,
+        forceDay
+          ? `Đang lập lịch ngày ${forceDay} (chạy liên tục)…`
+          : "Đang lập lịch ngày kế tiếp (chạy liên tục)…"
+      );
+      recompute(job);
+      emit(job);
+
+      const plan = buildRunNowPlan({
+        ...job.continuous_settings,
+        force_plan_day: forceDay || undefined,
+      });
+      if (plan.blockers?.length || !plan.slots?.length) {
+        notify(
+          job,
+          "warn",
+          "Tạm dừng lập ngày tiếp",
+          plan.blockers?.[0] || "Không có slot — thử lại sau 30 phút"
+        );
+        // chờ rồi thử lại (có thể folder media trống tạm thời)
+        for (let w = 0; w < 60 && !job.stop_requested; w++) {
+          await sleep(30_000);
+          await waitWhilePaused(job);
+        }
+        continue;
+      }
+
+      const firstMs = plan.slots[0].unix * 1000;
+      while (!job.stop_requested && firstMs - Date.now() > 60_000) {
+        const remain = firstMs - Date.now();
+        job.message = `Chạy liên tục · chờ ngày ${plan.summary?.plan_day || "mới"} · còn ${Math.ceil(remain / 60000)} phút`;
+        emit(job);
+        await sleep(Math.min(30_000, Math.max(1000, remain - 30_000)));
+        await waitWhilePaused(job);
+      }
+      if (job.stop_requested) break;
+
+      const base = job.tasks.length;
+      for (const s of plan.slots) {
+        job.tasks.push({
+          id: `${job.id}-t${job.tasks.length + 1}`,
+          index: job.tasks.length + 1,
+          kind: "post",
+          label: s.immediate
+            ? `Ngày ${plan.summary?.plan_day || "?"} · Vòng ${s.post_round} · đăng ngay · ${s.account_name}`
+            : `Ngày ${plan.summary?.plan_day || "?"} · Vòng ${s.post_round} · chờ ${s.local_label} · ${s.account_name}`,
+          page_row_id: s.page_row_id,
+          page_name: s.page_name,
+          page_id: s.page_id,
+          status: "pending",
+          percent: 0,
+          message: "Chờ…",
+          error: null,
+          result: null,
+          started_at: null,
+          finished_at: null,
+          run_at: s.iso,
+          opts: {
+            ignore_quota: false,
+            ignore_interval: false,
+            post_type: s.planned_post_type,
+            run_at: s.iso,
+          },
+        });
+      }
+      job.next_plan_day = plan.summary?.next_plan_day || null;
+      const baseTitle = String(job.title || "Direct Local").split(" · ngày")[0];
+      job.title = `${baseTitle} · ngày ${plan.summary?.plan_day || "?"} · chu kỳ ${job.day_cycle + 1}`;
+      recompute(job);
+      refreshResources(job);
+      notify(
+        job,
+        "info",
+        `Đã thêm ${plan.slots.length} task ngày ${plan.summary?.plan_day}`,
+        "Tiếp tục treo tool — bấm Dừng để kết thúc."
+      );
+      emit(job);
+
+      for (let i = base; i < job.tasks.length; i++) {
+        if (job.stop_requested) break;
+        const task = job.tasks[i];
+        await waitWhilePaused(job);
+        if (job.stop_requested) {
+          if (task.status === "pending") {
+            task.status = "skipped";
+            task.percent = 100;
+            task.message = "Đã dừng — bỏ qua";
+            task.finished_at = nowIso();
+          }
+          continue;
+        }
+        task.status = "running";
+        task.percent = 10;
+        task.message = "Đang chạy…";
+        task.started_at = nowIso();
+        recompute(job);
+        emit(job);
+        try {
+          const due = await waitUntilTaskDue(job, task);
+          if (!due) {
+            task.status = "skipped";
+            task.percent = 100;
+            task.message = "Đã dừng trong lúc chờ giờ đăng trực tiếp";
+            task.finished_at = nowIso();
+            recompute(job);
+            emit(job);
+            continue;
+          }
+          task.percent = 40;
+          task.message = "Đã đến giờ · đang đăng trực tiếp qua Facebook API…";
+          recompute(job);
+          emit(job);
+          const result = await executeTask(task);
+          task.result = summarizeResult(result);
+          task.percent = 100;
+          if (result?.ok === false || result?.scheduled === false) {
+            task.status = "fail";
+            task.error = result.error || "Thất bại";
+            task.message = `Thất bại: ${task.error}`;
+            notify(job, "error", `FAIL · ${task.page_name}`, `${task.label}: ${task.error}`);
+          } else {
+            task.status = "ok";
+            task.message = "Xong";
+            notify(job, "success", `OK · ${task.page_name}`, task.label);
+          }
+        } catch (e) {
+          task.status = "fail";
+          task.error = e.message;
+          task.percent = 100;
+          task.message = `Thất bại: ${e.message}`;
+          notify(job, "error", `FAIL · ${task.page_name}`, e.message);
+        }
+        task.finished_at = nowIso();
+        refreshResources(job);
+        recompute(job);
+        emit(job);
+        await sleep(350);
+      }
+    } catch (e) {
+      console.error("[job continuous]", e);
+      notify(job, "error", "Lỗi lập ngày liên tục", e.message);
+      break;
+    }
+  }
+
+  if (job.stop_requested) {
+    job.status = "stopped";
+    job.finished_at = nowIso();
+    recompute(job);
+    refreshResources(job);
+    notify(job, "warn", `Job dừng · ${job.title}`, `OK ${job.progress.ok} · FAIL ${job.progress.fail}`);
+    emit(job);
+    return;
+  }
+
   job.status =
     job.progress.fail && !job.progress.ok
       ? "fail"
@@ -665,7 +846,7 @@ async function runJob(jobId) {
   notify(
     job,
     job.status === "ok" ? "success" : job.status === "partial" ? "warn" : "error",
-    `Job xong · ${job.title}`,
+    job.continuous ? `Kết thúc chu kỳ · ${job.title}` : `Job xong · ${job.title}`,
     `OK ${job.progress.ok} · FAIL ${job.progress.fail} · ${job.progress.percent}%`
   );
   emit(job);

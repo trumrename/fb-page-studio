@@ -89,11 +89,18 @@ export const DEFAULT_ROTATION = {
   media_pattern_mode: "page_sequence",
   /** e.g. "photo,video" or "photo,video,video,photo" */
   media_pattern: "photo,video",
+  /**
+   * Direct Local: sau khi xong 1 ngày, tự lập ngày kế tiếp (treo tool mãi
+   * đến khi bấm Dừng). false = chỉ chạy 1 đợt plan.
+   */
+  run_now_continuous: false,
   /** only include enabled page configs if true */
   only_enabled_pages: false,
   /** account_ids filter (empty = all) when groups empty */
   account_ids: [],
   page_row_ids: [], // empty = all pages when page_target_mode=all
+  /** Optional YMD (VN calendar) to force plan day — continuous replan */
+  force_plan_day: null,
 };
 
 /** @param {string} raw */
@@ -245,6 +252,11 @@ export function normalizeSettings(s) {
   out.post_type = out.post_type || "auto";
   out.page_target_mode = out.page_target_mode === "all" ? "all" : "selected";
   out.run_now_time_mode = out.run_now_time_mode === "windows" ? "windows" : "gap_chain";
+  out.run_now_continuous = !!out.run_now_continuous;
+  out.force_plan_day =
+    out.force_plan_day && /^\d{4}-\d{2}-\d{2}$/.test(String(out.force_plan_day))
+      ? String(out.force_plan_day)
+      : null;
   const mpm = String(out.media_pattern_mode || "").toLowerCase();
   if (mpm === "fixed" || mpm === "pattern" || mpm === "page_sequence") {
     out.media_pattern_mode = mpm;
@@ -787,6 +799,12 @@ export function buildRunNowPlan(inputSettings = {}) {
   let dayWindowTimes = null;
   const tz = settings.tz_offset_minutes;
   const todayVn = todayYmd(tz);
+  let planDay = settings.force_plan_day || todayVn;
+  let overdueToday = false;
+  let planDayShifted = false;
+  const warnings = [];
+  const blockers = [];
+
   if (useWindows) {
     const winSettings = normalizeSettings({
       ...settings,
@@ -799,9 +817,31 @@ export function buildRunNowPlan(inputSettings = {}) {
       );
     }
     rounds = clamp(sum, 1, 12);
-    dayWindowTimes = planTimesForPageDay(winSettings, todayVn);
+    // Nếu BẤT KỲ khung đã quá giờ → chuyển CẢ NGÀY sang ngày mai.
+    let candidateDay = planDay;
+    dayWindowTimes = planTimesForPageDay(winSettings, candidateDay);
     if (!dayWindowTimes.length) {
       throw new Error("Không lập được giờ trong khung Sáng/Tối — kiểm tra HH:mm start < end.");
+    }
+    const nowMs = Date.now();
+    const anyPast = dayWindowTimes.some((t) => t.getTime() < nowMs - 60 * 1000);
+    if (anyPast && !settings.force_plan_day) {
+      overdueToday = true;
+      planDayShifted = true;
+      candidateDay = addDaysYmd(candidateDay, 1);
+      dayWindowTimes = planTimesForPageDay(winSettings, candidateDay);
+      planDay = candidateDay;
+      const first = dayWindowTimes[0];
+      warnings.push(
+        `Đã quá giờ hẹn trong ngày ${todayVn} (VN). Toàn bộ lịch chuyển sang ${planDay}, bắt đầu khoảng ${formatLocal(first, tz)}.`
+      );
+    } else if (settings.force_plan_day) {
+      planDay = candidateDay;
+      if (dayWindowTimes.every((t) => t.getTime() < nowMs - 60 * 1000)) {
+        planDay = addDaysYmd(planDay, 1);
+        dayWindowTimes = planTimesForPageDay(winSettings, planDay);
+        planDayShifted = true;
+      }
     }
   } else {
     rounds = clamp(
@@ -821,11 +861,11 @@ export function buildRunNowPlan(inputSettings = {}) {
     0,
     ...[...pageConfigs.values()].map((c) => (Number(c.interval_minutes) || 0) / 60)
   );
-  const antiCooldownHours = anti.enabled ? (Number(anti.page_cooldown_minutes) || 0) / 60 : 0;
+  const antiCoolHours = anti.enabled ? (Number(anti.page_cooldown_minutes) || 0) / 60 : 0;
   const effectiveGapMinHours = Math.max(
     settings.same_page_gap_hours_min,
     maxPageIntervalHours,
-    antiCooldownHours,
+    antiCoolHours,
     0.25
   );
   const effectiveGapMaxHours = Math.max(settings.same_page_gap_hours_max, effectiveGapMinHours);
@@ -835,84 +875,77 @@ export function buildRunNowPlan(inputSettings = {}) {
   const maxPages = Math.max(0, ...groups.map((g) => g.max_pages), 0);
   const taskGapMinMs = settings.between_tasks_gap_minutes_min * 60 * 1000;
   const taskGapMaxMs = settings.between_tasks_gap_minutes_max * 60 * 1000;
-  const roundTimes = [];
 
   const slots = [];
   let order = 0;
   let previousRoundStartMs = null;
   let previousRoundEndMs = null;
+  const quotaDay = useWindows ? planDay : todayVn;
   for (let round = 0; round < rounds; round++) {
     let cursorMs;
     if (round === 0) {
-      cursorMs = Date.now();
+      cursorMs = Date.now() + 2000;
     } else {
       const bySamePageGap = previousRoundStartMs + randBetween(gapMinMs, gapMaxMs);
       const afterPreviousRound = previousRoundEndMs + randBetween(taskGapMinMs, taskGapMaxMs);
       cursorMs = Math.max(bySamePageGap, afterPreviousRound);
     }
-    roundTimes.push(new Date(cursorMs));
     previousRoundStartMs = cursorMs;
     let lastSlotMs = cursorMs;
     const enqueue = (g, adminIdx, pageIdx) => {
-        const admin = g.admins[adminIdx];
-        if (!admin) return;
-          const page = admin.pages[pageIdx];
-          if (!page) return;
-          const cfg = pageConfigs.get(page.page_row_id);
-          const postedToday = cfg?.posts_today_date === todayVn
-            ? Math.max(0, Number(cfg?.posts_today) || 0)
-            : 0;
-          const remainingToday = Math.max(
-            0,
-            (Number(cfg?.max_posts_per_day) || rounds) - postedToday
-          );
-          const pageRounds = Math.min(rounds, remainingToday);
-          if (round >= pageRounds) return;
-          const plannedPostType = resolvePlannedPostType(settings, cfg, round);
-          let when;
-          if (useWindows && dayWindowTimes[round]) {
-            // Base = planned window time (Sáng/Tối). Tool waits until due then Graph publish.
-            // If window already passed today, bump +1 day once (same idea as FB schedule).
-            let baseMs = dayWindowTimes[round].getTime();
-            if (baseMs < Date.now() - 60 * 1000) {
-              baseMs += 24 * 60 * 60 * 1000;
-            }
-            const stagger = (order + 1) * 1500;
-            when = new Date(Math.max(Date.now() + 2000, baseMs + stagger));
-            cursorMs = when.getTime();
-          } else {
-            when = new Date(cursorMs);
-          }
-          order += 1;
-          slots.push({
-            order,
-            // Only "immediate" if due within ~5s — windows mode may plan evening later today.
-            immediate: when.getTime() <= Date.now() + 5000,
-            post_round: round + 1,
-            page_index: pageIdx + 1,
-            group_id: g.id,
-            group_name: g.name,
-            account_id: admin.account_id,
-            account_name: admin.account_name,
-            page_row_id: page.page_row_id,
-            page_id: page.page_id,
-            page_name: page.page_name,
-            planned_post_type: plannedPostType,
-            unix: Math.floor(when.getTime() / 1000),
-            iso: when.toISOString(),
-            local_label: formatLocal(when, tz),
-            time_mode: useWindows ? "windows" : "gap_chain",
-          });
-          lastSlotMs = when.getTime();
-          if (!useWindows) {
-            cursorMs += randBetween(taskGapMinMs, taskGapMaxMs);
-          } else {
-            cursorMs = when.getTime() + randBetween(taskGapMinMs * 0.15, taskGapMinMs * 0.35);
-          }
+      const admin = g.admins[adminIdx];
+      if (!admin) return;
+      const page = admin.pages[pageIdx];
+      if (!page) return;
+      const cfg = pageConfigs.get(page.page_row_id);
+      const postedOnPlanDay =
+        cfg?.posts_today_date === quotaDay ? Math.max(0, Number(cfg?.posts_today) || 0) : 0;
+      const maxPerDay = Number(cfg?.max_posts_per_day) || rounds;
+      const remainingToday = Math.max(0, maxPerDay - postedOnPlanDay);
+      const pageRounds = Math.min(rounds, remainingToday);
+      if (round >= pageRounds) return;
+      const plannedPostType = resolvePlannedPostType(settings, cfg, round);
+      let when;
+      if (useWindows && dayWindowTimes[round]) {
+        const baseMs = dayWindowTimes[round].getTime();
+        const stagger = (order + 1) * 1500;
+        when = new Date(baseMs + stagger);
+        if (when.getTime() < Date.now() + 1500) {
+          when = new Date(Date.now() + 2000 + stagger);
+        }
+        cursorMs = when.getTime();
+      } else {
+        when = new Date(cursorMs);
+      }
+      order += 1;
+      slots.push({
+        order,
+        immediate: when.getTime() <= Date.now() + 5000,
+        post_round: round + 1,
+        page_index: pageIdx + 1,
+        group_id: g.id,
+        group_name: g.name,
+        account_id: admin.account_id,
+        account_name: admin.account_name,
+        page_row_id: page.page_row_id,
+        page_id: page.page_id,
+        page_name: page.page_name,
+        planned_post_type: plannedPostType,
+        unix: Math.floor(when.getTime() / 1000),
+        iso: when.toISOString(),
+        local_label: formatLocal(when, tz),
+        plan_day: planDay,
+        time_mode: useWindows ? "windows" : "gap_chain",
+      });
+      lastSlotMs = when.getTime();
+      if (!useWindows) {
+        cursorMs += randBetween(taskGapMinMs, taskGapMaxMs);
+      } else {
+        cursorMs = when.getTime() + randBetween(taskGapMinMs * 0.15, taskGapMinMs * 0.35);
+      }
     };
 
     if (settings.app_rotation_mode === "per_app") {
-      // App 1: Page 1 across every admin, then Page 2...; then next App.
       for (const g of groups) {
         for (let pageIdx = 0; pageIdx < g.max_pages; pageIdx++) {
           for (let adminIdx = 0; adminIdx < g.admin_count; adminIdx++) {
@@ -921,7 +954,6 @@ export function buildRunNowPlan(inputSettings = {}) {
         }
       }
     } else {
-      // Page 1: App1 Admin1, App2 Admin1, App1 Admin2, App2 Admin2... then Page 2.
       for (let pageIdx = 0; pageIdx < maxPages; pageIdx++) {
         for (let adminIdx = 0; adminIdx < maxAdmins; adminIdx++) {
           for (const g of groups) enqueue(g, adminIdx, pageIdx);
@@ -931,31 +963,50 @@ export function buildRunNowPlan(inputSettings = {}) {
     previousRoundEndMs = lastSlotMs;
   }
 
+  slots.sort((a, b) => a.unix - b.unix || a.order - b.order);
   const finalSlots = slots.map((s, i) => ({ ...s, order: i + 1 }));
-  const warnings = [];
-  const blockers = [];
+
+  const roundTimesMap = new Map();
+  for (const s of finalSlots) {
+    const prev = roundTimesMap.get(s.post_round);
+    if (!prev || s.unix < prev.unix) roundTimesMap.set(s.post_round, s);
+  }
+  const roundTimes = [...roundTimesMap.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, s]) => new Date(s.unix * 1000));
 
   if (effectiveGapMinHours > settings.same_page_gap_hours_min) {
     warnings.push(
-      `Gap min đã tự nâng từ ${settings.same_page_gap_hours_min}h lên ${effectiveGapMinHours}h để khớp interval/cooldown Page.`
+      `Gap cùng Page min đã tự nâng từ ${settings.same_page_gap_hours_min}h lên ${effectiveGapMinHours}h để khớp interval/cooldown Page.`
     );
   }
   const limitedPages = [...pageConfigs.entries()]
     .map(([id, c]) => {
-      const postedToday = c.posts_today_date === todayVn ? Math.max(0, Number(c.posts_today) || 0) : 0;
-      const remaining = Math.max(0, (Number(c.max_posts_per_day) || rounds) - postedToday);
-      return { id, postedToday, remaining, max: Number(c.max_posts_per_day) || rounds };
+      const postedToday =
+        c.posts_today_date === quotaDay ? Math.max(0, Number(c.posts_today) || 0) : 0;
+      const max = Number(c.max_posts_per_day) || rounds;
+      const remaining = Math.max(0, max - postedToday);
+      return { id, postedToday, remaining, max };
     })
-    .filter((x) => x.remaining < rounds)
-    .map((x) => `Page#${x.id}: còn ${x.remaining}/${x.max} (đã ${x.postedToday})`);
+    .filter((x) => x.remaining < rounds);
   if (limitedPages.length) {
-    warnings.push(`Một số Page bị giới hạn theo max bài/ngày: ${limitedPages.slice(0, 8).join(", ")}`);
+    warnings.push(
+      `Cấu hình ${rounds} bài/Page/ngày nhưng max Page cắt bớt: ` +
+        limitedPages
+          .slice(0, 8)
+          .map((x) => `Page#${x.id} chỉ còn ${x.remaining}/${x.max} (đã đăng ${x.postedToday})`)
+          .join("; ") +
+        `. Muốn đủ ${rounds} bài: tăng max_posts_per_day trên config Page.`
+    );
   }
-
-  const startLocalDay = todayYmd(tz);
-  const overflowSlots = finalSlots.filter((s) => s.local_label.slice(0, 10) !== startLocalDay);
-  if (overflowSlots.length) {
-    warnings.push(`Lịch vượt sang ngày kế tiếp từ vòng ${overflowSlots[0].post_round} (${overflowSlots[0].page_name}); ngày/giờ đã hiển thị đầy đủ trong preview.`);
+  const byPageCount = new Map();
+  for (const s of finalSlots) {
+    byPageCount.set(s.page_row_id, (byPageCount.get(s.page_row_id) || 0) + 1);
+  }
+  if ([...byPageCount.values()].some((n) => n < rounds) && limitedPages.length) {
+    warnings.push(
+      `Tổng task thực tế ${finalSlots.length} (kỳ vọng ~${rounds}×số page). Một số page không đủ ${rounds} vòng vì max bài/ngày.`
+    );
   }
 
   // Media/caption requirements are aggregated by shared pool. Multiple Pages
@@ -1035,6 +1086,10 @@ export function buildRunNowPlan(inputSettings = {}) {
       }
     }
   }
+  const nextPlanDay = finalSlots.length
+    ? addDaysYmd(String(finalSlots[finalSlots.length - 1].local_label).slice(0, 10) || planDay, 1)
+    : addDaysYmd(planDay || todayVn, 1);
+
   return {
     settings: {
       posts_per_page_per_day: rounds,
@@ -1046,6 +1101,7 @@ export function buildRunNowPlan(inputSettings = {}) {
       post_type: settings.post_type,
       page_target_mode: settings.page_target_mode,
       run_now_time_mode: settings.run_now_time_mode,
+      run_now_continuous: !!settings.run_now_continuous,
       media_pattern_mode: settings.media_pattern_mode,
       media_pattern: settings.media_pattern,
       windows: settings.windows,
@@ -1057,9 +1113,16 @@ export function buildRunNowPlan(inputSettings = {}) {
       accounts: matrix.length,
       groups: groups.length,
       posts_per_page_per_day: rounds,
+      configured_posts_per_page: rounds,
       total_planned: slots.length,
       total_final: finalSlots.length,
       anti_spam_trimmed: false,
+      plan_day: planDay,
+      today_vn: todayVn,
+      overdue_today: overdueToday,
+      plan_day_shifted: planDayShifted,
+      continuous: !!settings.run_now_continuous,
+      next_plan_day: nextPlanDay,
       page_scope: settings.page_target_mode === "all" ? "tất cả page active" : "chỉ page đã tick",
       media_logic:
         settings.media_pattern_mode === "pattern"
@@ -1071,26 +1134,40 @@ export function buildRunNowPlan(inputSettings = {}) {
         ? "vòng bài# → từng App → pageIndex → toàn bộ admin của App"
         : "vòng bài# → pageIndex → adminIndex → App 1/App 2 so le",
       wait_logic: useWindows
-        ? `Khung giờ Sáng/Tối trong ngày (VN); task trong cùng khung so le Page/Admin ~${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút`
-        : `Task đầu đăng ngay; mỗi Page/Admin kế tiếp cách ${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút; vòng sau gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours} giờ`,
+        ? `Khung Sáng/Tối ngày ${planDay} (VN) · so le Page/Admin khác nhau ~${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút · gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours}h giữa các vòng`
+        : `Bài 1 gần ngay · gap giữa Page/Admin khác ${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút · gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours}h giữa các vòng`,
+      gap_same_page: `${effectiveGapMinHours}–${effectiveGapMaxHours} giờ (cùng 1 Page giữa 2 vòng bài)`,
+      gap_other_page: `${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút (Page/Admin khác nhau trong cùng vòng)`,
       timezone: "Asia/Ho_Chi_Minh (UTC+7)",
       can_run: blockers.length === 0,
     },
-    round_times: roundTimes.map((d, i) => ({
-      post_round: i + 1,
-      immediate: i === 0,
-      local_label: formatLocal(d, tz),
-      iso: d.toISOString(),
-    })),
+    round_times: [...roundTimesMap.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([postRound, s]) => {
+        const d = new Date(s.unix * 1000);
+        return {
+          post_round: postRound,
+          immediate: s.immediate || d.getTime() <= Date.now() + 5000,
+          local_label: formatLocal(d, tz),
+          iso: d.toISOString(),
+        };
+      }),
     slots: finalSlots,
     warnings,
     blockers,
     media_requirements: [...mediaNeeds.values()],
     caption_requirements: [...captionNeeds.values()],
-    preview_order: finalSlots.map((s) => ({
-      order: s.order,
-      label: `Vòng ${s.post_round} · ${s.planned_post_type} · ${s.group_name} · ${s.account_name} · ${s.page_name} · ${s.immediate ? "ĐĂNG TRỰC TIẾP NGAY" : "TOOL CHỜ → ĐĂNG TRỰC TIẾP " + s.local_label + " VN"}`,
-    })),
+    preview_order: finalSlots.map((s) => {
+      const dueSoon = s.immediate || s.unix * 1000 <= Date.now() + 5000;
+      return {
+        order: s.order,
+        label:
+          `Vòng ${s.post_round} · ${s.planned_post_type} · ${s.group_name} · ${s.account_name} → ${s.page_name} · ` +
+          (dueSoon
+            ? `ĐĂNG TRỰC TIẾP NGAY (${s.local_label} VN)`
+            : `TOOL CHỜ → ĐĂNG TRỰC TIẾP · ${s.local_label} VN`),
+      };
+    }),
   };
 }
 

@@ -294,7 +294,24 @@ check("overdue schedules are rechecked instead of becoming permanent", schedule.
 check("Vietnam day key does not depend on Windows timezone", poster.includes('timeZone: "Asia/Ho_Chi_Minh"'));
 check("stored UTC last_post_at is parsed as UTC", poster.includes('`${raw.replace(" ", "T")}Z`') && poster.includes("storedUtcMs(cfg.last_post_at)"));
 check("stored UTC follower enrichment timestamp is parsed as UTC", read("src/services/enrich.js").includes('row.enriched_at.replace(" ", "T") + "Z"'));
-check("Direct preview subtracts posts already made today", rot.includes("remainingToday") && rot.includes("posts_today_date === todayVn"));
+check(
+  "Direct preview subtracts posts already made today",
+  rot.includes("remainingToday") &&
+    (rot.includes("posts_today_date === todayVn") || rot.includes("posts_today_date === quotaDay"))
+);
+check(
+  "Direct Local continuous + overdue day shift",
+  rot.includes("run_now_continuous") &&
+    rot.includes("overdueToday") &&
+    rot.includes("planDayShifted") &&
+    jr.includes("continuous_settings")
+);
+check(
+  "Direct Local stop + continuous UI",
+  posting.includes("rotNowContinuous") &&
+    posting.includes("btnRotNowStop") &&
+    posting.includes("Cùng 1 Page")
+);
 
 // Import runtime modules
 const { getDb } = await import("../src/db/index.js");
