@@ -29,6 +29,13 @@ import {
   ensureAntiSpamTables,
   getAntiSpamSettings,
 } from "./antiSpam.js";
+import {
+  resolvePagePostingPolicy,
+  resolveMinGapMinutes,
+  resolveMaxPostsPerDay,
+  capSlotsByDailyQuota,
+  todayYmd,
+} from "./schedulePolicy.js";
 import { assertCanPublish as assertLicenseActive } from "./license.js";
 import { withPageOperationLock } from "./pageOperationLock.js";
 import { reserveCaptionSlot } from "./captionPoolState.js";
@@ -237,12 +244,15 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       });
     }
 
+    // Do NOT write future scheduled time into last_post_at (would block Direct Local forever).
+    // Quota/interval for Direct Local read post_logs (scheduled + direct) via schedulePolicy.
     savePagePostConfig(pageRowId, {
       ...cfg,
       next_slot_index: slot + 1,
       caption_slot_index: usedPoolCaption && caption ? selectedCaptionSlot + 1 : captionSlot,
     });
 
+    const scheduledIso = new Date(unix * 1000).toISOString();
     const log = logScheduled({
       page_row_id: pageRowId,
       page_id: page.page_id,
@@ -257,7 +267,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       error: null,
       comment_text: null,
       comment_id: null,
-      scheduled_publish_time: new Date(unix * 1000).toISOString(),
+      scheduled_publish_time: scheduledIso,
     });
 
     return {
@@ -265,7 +275,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       scheduled: true,
       post_type: postType,
       scheduled_publish_time: unix,
-      scheduled_at_iso: new Date(unix * 1000).toISOString(),
+      scheduled_at_iso: scheduledIso,
       post: result,
       log,
       media_moved_to: movedPath,
@@ -344,6 +354,16 @@ export async function scheduleBulk(body = {}) {
   const dryRun = !!body.dry_run;
 
   const plan = []; // { page_row_id, page_name, slots: Date[], active?, error? }
+  const antiGlobal = getAntiSpamSettings();
+  const antiOn = !!antiGlobal.enabled;
+  // Stagger multi-page so many pages don't schedule the exact same second
+  const staggerStep = antiOn
+    ? Math.min(12, Math.max(3, Number(antiGlobal.jitter_minutes_min) || 3))
+    : 5;
+  let pageIndex = 0;
+  const ignorePageCap = !!body.ignore_page_quota;
+  const daysAhead = Math.min(30, Math.max(1, Number(body.days_ahead) || 3));
+  const requestedPerDay = body.posts_per_day != null ? Number(body.posts_per_day) : null;
 
   for (const pageRowId of pageIds) {
     const db = getDb();
@@ -362,24 +382,56 @@ export async function scheduleBulk(body = {}) {
 
     let slots = [];
     let activeMeta = null;
+    let policyMeta = null;
+    const pageStagger = pageIndex * staggerStep;
+    pageIndex += 1;
+
+    // Shared policy: interval / max/day / preferred / remaining today
+    const policy = resolvePagePostingPolicy(pageRowId, {
+      tzOffsetMinutes: tz,
+      postsPerDay: requestedPerDay,
+      ignorePageCap,
+    });
+    policyMeta = {
+      max_posts_per_day: policy.max_posts_per_day,
+      max_posts_per_day_effective: policy.max_posts_per_day_effective,
+      interval_minutes: policy.interval_minutes,
+      min_gap_minutes: policy.min_gap_minutes,
+      used_today: policy.used_today,
+      remaining_today: policy.remaining_today,
+      preferred_hours: policy.preferred_hours,
+      notes: policy.notes,
+    };
 
     if (mode === "fixed") {
+      const cfg = getPagePostConfig(pageRowId);
+      const minGap = resolveMinGapMinutes(cfg, antiGlobal);
       if (Array.isArray(body.times) && body.times.length) {
-        slots = parseFixedTimes(body.times, tz);
+        slots = parseFixedTimes(body.times, tz).map(
+          (d) => new Date(d.getTime() + pageStagger * 60 * 1000)
+        );
       } else if (body.start_at) {
-        const count = Math.min(50, Math.max(1, Number(body.count_per_page) || 1));
-        const interval = Math.max(10, Number(body.interval_minutes) || 120);
+        // count_per_page capped by page max/day unless ignore
+        const rawCount = Math.min(50, Math.max(1, Number(body.count_per_page) || 1));
+        const count = ignorePageCap
+          ? rawCount
+          : Math.min(rawCount, policy.max_posts_per_day_effective);
+        const interval = Math.max(
+          minGap,
+          Math.max(10, Number(body.interval_minutes) || policy.interval_minutes || 120)
+        );
         const startList = parseFixedTimes([body.start_at], tz);
         if (!startList.length) {
           plan.push({
             page_row_id: pageRowId,
             page_name: page.name,
             slots: [],
+            policy: policyMeta,
             error: "start_at không parse được",
           });
           continue;
         }
-        let t = startList[0].getTime();
+        let t = startList[0].getTime() + pageStagger * 60 * 1000;
         for (let i = 0; i < count; i++) {
           slots.push(new Date(t));
           t += interval * 60 * 1000;
@@ -389,12 +441,32 @@ export async function scheduleBulk(body = {}) {
           page_row_id: pageRowId,
           page_name: page.name,
           slots: [],
+          policy: policyMeta,
           error: "mode fixed cần times[] hoặc start_at",
         });
         continue;
       }
+      // Enforce min gap between fixed slots
+      if (minGap > 0 && slots.length > 1) {
+        slots.sort((a, b) => a.getTime() - b.getTime());
+        const gapMs = minGap * 60 * 1000;
+        const out = [slots[0]];
+        for (let i = 1; i < slots.length; i++) {
+          let t = slots[i].getTime();
+          const prev = out[out.length - 1].getTime();
+          if (t < prev + gapMs) t = prev + gapMs;
+          out.push(new Date(t));
+        }
+        slots = out;
+      }
+      activeMeta = {
+        source: "fixed",
+        min_gap_minutes: minGap,
+        page_stagger_minutes: pageStagger,
+        anti_spam_enabled: antiOn,
+      };
     } else {
-      // active_times
+      // active_times — giờ ưa thích / preset từng page (same hours as Direct Local preferred)
       const active = await getActiveTimesForPageRow(pageRowId, {
         force: !!body.force_active,
       });
@@ -414,31 +486,56 @@ export async function scheduleBulk(body = {}) {
           page_name: page.name,
           slots: [],
           active: activeMeta,
+          policy: policyMeta,
           error:
             active.error ||
             "Không có giờ đăng — lưu giờ ưa thích (vd 9,12,19,21) hoặc dùng mode cố định",
         });
         continue;
       }
+
+      const minGap = policy.min_gap_minutes;
+      // posts/day: bulk form request capped by page max_posts_per_day (+ anti cap)
+      const postsPerDay = resolveMaxPostsPerDay(
+        { max_posts_per_day: policy.max_posts_per_day },
+        antiGlobal,
+        requestedPerDay != null ? requestedPerDay : policy.max_posts_per_day,
+        { ignorePageCap }
+      );
+
       slots = buildSlotsFromActiveHours(active.top_hours, {
-        daysAhead: body.days_ahead || 3,
-        postsPerDay: body.posts_per_day || 2,
+        daysAhead,
+        postsPerDay,
         tzOffsetMinutes: tz,
+        minGapMinutes: minGap,
+        jitterMinutes: antiOn
+          ? Math.max(5, Number(antiGlobal.jitter_minutes_min) || 5)
+          : 10,
+        pageStaggerMinutes: pageStagger,
       });
+      activeMeta = {
+        ...activeMeta,
+        preferred_hours: active.preferred_hours || active.top_hours,
+        min_gap_minutes: minGap,
+        posts_per_day_effective: postsPerDay,
+        page_stagger_minutes: pageStagger,
+        anti_spam_enabled: antiOn,
+      };
       if (!slots.length) {
         plan.push({
           page_row_id: pageRowId,
           page_name: page.name,
           slots: [],
           active: activeMeta,
+          policy: policyMeta,
           error:
-            "Slot trống (giờ peak đã qua hôm nay hoặc ngoài cửa sổ 10p–30 ngày)",
+            "Slot trống (giờ peak đã qua hôm nay hoặc ngoài cửa sổ 10p–30 ngày). Thử tăng số ngày / đổi giờ ưa thích.",
         });
         continue;
       }
     }
 
-    // filter valid window again
+    // filter valid Graph window: 10 min .. 30 days
     const now = Date.now();
     slots = slots.filter(
       (d) =>
@@ -446,16 +543,36 @@ export async function scheduleBulk(body = {}) {
         d.getTime() <= now + 30 * 24 * 60 * 60 * 1000
     );
 
+    // Cap by page daily quota (today = remaining after direct + already-scheduled)
+    const capped = capSlotsByDailyQuota(slots, {
+      maxPerDay: policy.max_posts_per_day_effective,
+      remainingToday: policy.remaining_today,
+      todayYmd: policy.today_ymd || todayYmd(tz),
+      tzOffsetMinutes: tz,
+    });
+    slots = capped.slots;
+    policyMeta = {
+      ...policyMeta,
+      quota_trimmed_slots: capped.trimmed,
+      used_per_day_plan: capped.used_per_day,
+    };
+
     plan.push({
       page_row_id: pageRowId,
       page_name: page.name,
       slots,
       active: activeMeta,
-      error: slots.length ? null : "Không còn slot hợp lệ",
+      policy: policyMeta,
+      page_stagger_minutes: pageStagger,
+      error: slots.length
+        ? null
+        : capped.trimmed
+          ? `Hết quota ngày (max ${policy.max_posts_per_day_effective}/ngày, hôm nay còn ${policy.remaining_today}). Tăng max bài/ngày page hoặc bỏ tick hẹn trùng.`
+          : "Không còn slot hợp lệ",
     });
   }
 
-  // Anti-spam: hard bulk caps + jitter
+  // Anti-spam: hard bulk caps + jitter (skipped entirely when anti-spam OFF)
   const limited = enforceBulkLimits(plan, body);
   const finalPlan = limited.plan;
 
@@ -464,8 +581,13 @@ export async function scheduleBulk(body = {}) {
       dry_run: true,
       mode,
       tz_offset_minutes: tz,
+      anti_spam_enabled: antiOn,
       anti_spam_trimmed: limited.trimmed,
-      anti_spam_caps: limited.caps,
+      anti_spam_caps: limited.caps || null,
+      page_stagger_step_minutes: staggerStep,
+      policy_note:
+        "Giờ / gap / max bài/ngày lấy từ cấu hình Page + anti-spam (khớp đăng trực tiếp). " +
+        "Hôm nay trừ slot đã đăng + đã hẹn FB. Bật ignore_page_quota để bỏ cap page (không khuyến nghị).",
       plan: finalPlan.map((p) => ({
         ...p,
         slots: (p.slots || []).map((d) => ({
@@ -506,8 +628,8 @@ export async function scheduleBulk(body = {}) {
         error: r.error || null,
         caption: r.log?.caption || null,
       });
-      // small delay to be gentle on Graph
-      await sleep(400);
+      // Gentle on Graph; slightly longer when anti ON
+      await sleep(antiOn ? 450 : 300);
     }
     results.push({
       page_row_id: p.page_row_id,
@@ -524,8 +646,10 @@ export async function scheduleBulk(body = {}) {
     dry_run: false,
     mode,
     tz_offset_minutes: tz,
+    anti_spam_enabled: antiOn,
     anti_spam_trimmed: limited.trimmed,
-    anti_spam_caps: limited.caps,
+    anti_spam_caps: limited.caps || null,
+    page_stagger_step_minutes: staggerStep,
     results,
     total_ok: results.reduce((n, r) => n + (r.scheduled_ok || 0), 0),
     total_fail: results.reduce((n, r) => n + (r.scheduled_fail || 0), 0),

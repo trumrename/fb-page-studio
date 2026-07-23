@@ -46,6 +46,8 @@
           </div>
         </div>
         <div class="topbar-actions">
+          <button type="button" class="btn-ghost btn-sm" id="btnAntiChip" title="Bật/tắt anti-spam nhanh">Anti: …</button>
+          <a class="btn btn-ghost" href="/antispam.html">Chi tiết anti</a>
           <a class="btn btn-ghost" href="/">← Pages</a>
           <a class="btn btn-ghost" href="/app.html">← Vận hành</a>
           <button type="button" class="btn-ghost" data-dl="/api/posting/logs/csv" data-name="post_logs.csv">↓ Logs CSV</button>
@@ -151,9 +153,15 @@
           <div class="panel-body">
             <p class="muted" style="margin-top:.65rem">
               Meta <b>đã gỡ</b> metric <code>page_fans_online</code> — không còn lấy “fan online” từ Graph.
-              Mode <b>Giờ tích cực</b> = giờ ưa thích từng page (hoặc preset VN 9,12,19,21 nếu chưa lưu).
-              Mode <b>cố định</b> = 1 lịch cho mọi page đã tick.
+              Mode <b>Giờ tích cực</b> = giờ ưa thích <b>từng page</b> (hoặc preset VN 9,12,19,21 nếu chưa lưu) · jitter phút + min-gap anti-spam · stagger giữa các page.
+              Mode <b>cố định</b> = 1 lịch cho mọi page đã tick (vẫn stagger nhẹ).
             </p>
+            <div id="bulkAntiBar" class="muted" style="margin:.5rem 0 .65rem;padding:.55rem .75rem;border-radius:8px;border:1px solid rgba(255,255,255,.08);font-size:.82rem">
+              Anti-spam: <b id="bulkAntiLabel">…</b>
+              <span id="bulkAntiHint" class="muted"> — đang tải…</span>
+              <button type="button" class="btn-ghost btn-sm" id="btnBulkAntiToggle" style="margin-left:.5rem">Bật/Tắt</button>
+              <a href="/antispam.html" class="muted" style="margin-left:.35rem;font-size:.78rem">Cấu hình chi tiết →</a>
+            </div>
             <div class="row3">
               <div>
                 <label>Mode</label>
@@ -184,8 +192,8 @@
                   <input type="number" id="bulkDays" min="1" max="30" value="3" />
                 </div>
                 <div>
-                  <label>Bài / ngày (top giờ)</label>
-                  <input type="number" id="bulkPerDay" min="1" max="10" value="2" />
+                  <label>Bài / ngày (≤ max page)</label>
+                  <input type="number" id="bulkPerDay" min="1" max="10" value="2" title="Tự cắt theo max_posts_per_day của từng page" />
                 </div>
                 <div>
                   <label>Preset gán hàng loạt</label>
@@ -197,7 +205,9 @@
                 <label class="checks" style="margin:0"><input type="checkbox" id="bulkForceActive" /> Force (bỏ cache insights cũ)</label>
               </div>
               <p class="muted" style="margin:.35rem 0 0;font-size:.78rem">
-                Dry-run lần đầu sẽ tự gán preset VN nếu page chưa có giờ. Sửa preset rồi bấm “Gán giờ…” nếu muốn giờ khác.
+                Mỗi page: giờ ưa thích + <b>max bài/ngày</b> + <b>interval</b> (config Bước 2) + anti-spam.
+                Bài/ngày bulk bị cap theo max page; hôm nay trừ slot đã đăng/hẹn.
+                Trải giờ: 9,12,19,21 + 2 bài → 9h &amp; 21h.
               </p>
             </div>
 
@@ -368,14 +378,18 @@
                   <label style="font-weight:700">Giờ đăng TRỰC TIẾP (tool chờ → đăng API)</label>
                   <label class="checks" style="display:block;margin-top:.35rem">
                     <input type="radio" name="rotNowTimeMode" id="rotNowTimeGap" value="gap_chain" checked />
-                    Liên tục: bài 1 ngay · các bài sau + gap
+                    Liên tục: bài 1 ngay · các bài sau + gap (interval page)
                   </label>
                   <label class="checks" style="display:block">
                     <input type="radio" name="rotNowTimeMode" id="rotNowTimeWindows" value="windows" />
-                    Hẹn giờ local Sáng/Tối: <b>tool chờ đến giờ rồi đăng trực tiếp</b>
+                    Khung Sáng/Tối (tool chờ → đăng API)
+                  </label>
+                  <label class="checks" style="display:block">
+                    <input type="radio" name="rotNowTimeMode" id="rotNowTimePreferred" value="preferred" />
+                    <b>Giờ ưa thích từng page</b> (cùng hẹn FB active_times)
                   </label>
                   <p class="muted" style="margin:.35rem 0 0;font-size:.78rem" id="rotNowTimeHelp">
-                    Không tạo “scheduled post” trên Facebook — PC/tool phải bật; đến giờ tự gọi Graph đăng ngay.
+                    Không tạo scheduled FB — PC/tool bật. Gap/max/ngày = config Page + anti (khớp hẹn giờ).
                   </p>
                 </div>
               </div>
@@ -596,7 +610,7 @@
       "rotFirstStart", "rotFirstEnd", "rotGapMin", "rotGapMax", "rotJitMin",
       "rotJitMax", "rotAutoMeta", "rotG1", "rotG2", "rotOnlyEnabled",
       "rotPageTargetSelected", "rotPageTargetAll", "rotNowTimeGap", "rotNowTimeWindows",
-      "rotNowWindows",
+      "rotNowTimePreferred", "rotNowWindows",
       "rotMediaFolder", "rotPostedFolder", "rotCaptionsFolder",
     ];
     const workspaceHashes = {
@@ -1191,17 +1205,22 @@
       const alb = (c.link_lists?.full_album || []).join("\n");
       $("cfgBody").innerHTML = `
         <div class="checks">
-          <label><input type="checkbox" id="enabled" ${c.enabled ? "checked" : ""}/> Auto scheduler (local)</label>
+          <label><input type="checkbox" id="enabled" ${c.enabled ? "checked" : ""}/> Auto scheduler (local · chỉ trong giờ ưa thích)</label>
           <label><input type="checkbox" id="comment_enabled" ${c.comment_enabled ? "checked" : ""}/> Auto comment</label>
           <label title="Meta Graph API Story chưa được triển khai trong phiên bản này"><input type="checkbox" id="story_enabled" disabled /> Story (chưa hỗ trợ)</label>
         </div>
+        <p class="muted" style="margin:.35rem 0 .55rem;font-size:.78rem;line-height:1.45">
+          <b>Policy chung</b> (hẹn FB + đăng trực tiếp + auto scheduler):
+          <b>max bài/ngày</b>, <b>interval</b>, <b>giờ ưa thích</b> + anti-spam (floor/cooldown/cap).
+          Quota đếm cả bài đã đăng và đã hẹn FB trong ngày.
+        </p>
         <div class="row2">
           <div>
-            <label>Số lần / ngày</label>
+            <label>Max bài / ngày (page)</label>
             <input type="number" id="max_posts_per_day" min="1" value="${esc(c.max_posts_per_day)}" />
           </div>
           <div>
-            <label>Interval (phút)</label>
+            <label>Interval / gap min (phút)</label>
             <input type="number" id="interval_minutes" min="1" value="${esc(c.interval_minutes)}" />
           </div>
         </div>
@@ -1491,24 +1510,66 @@
 
     function renderBulkResult(r) {
       const box = $("bulkResult");
+      const antiOn = r.anti_spam_enabled !== false && r.anti_spam_enabled !== 0;
+      const antiLine =
+        `<div style="margin:.2rem 0 .5rem;font-size:.8rem">` +
+        `Anti-spam: <b class="${antiOn ? "ok" : "fail"}">${antiOn ? "ON" : "OFF"}</b>` +
+        (r.anti_spam_trimmed
+          ? ` · <span class="fail">đã cắt bulk theo cap</span>`
+          : "") +
+        (r.anti_spam_caps
+          ? ` · cap pages=${r.anti_spam_caps.bulk_max_pages}/slots-page=${r.anti_spam_caps.bulk_max_slots_per_page}/total=${r.anti_spam_caps.bulk_max_total}`
+          : "") +
+        (r.page_stagger_step_minutes != null
+          ? ` · stagger +${r.page_stagger_step_minutes}p/page`
+          : "") +
+        `</div>`;
+
       if (r.dry_run) {
+        const totalSlots = (r.plan || []).reduce((n, p) => n + (p.slots?.length || 0), 0);
+        const errN = (r.plan || []).filter((p) => p.error).length;
         box.innerHTML =
-          `<b>Dry-run · ${esc(r.mode)}</b>` +
+          `<b>Dry-run · ${esc(r.mode)}</b> · ${(r.plan || []).length} page · ${totalSlots} slot` +
+          (errN ? ` · <span class="fail">${errN} lỗi</span>` : "") +
+          antiLine +
           (r.mode === "active_times"
-            ? `<div class="muted" style="margin:.25rem 0 .4rem;font-size:.78rem">Nguồn giờ: preferred / preset VN (Meta không còn page_fans_online)</div>`
-            : "<br/>") +
+            ? `<div class="muted" style="margin:0 0 .45rem;font-size:.78rem">Nguồn giờ: preferred từng page / preset VN (Meta không còn page_fans_online). Jitter phút + min-gap theo anti.</div>`
+            : "") +
           (r.plan || []).map((p) => {
-            if (p.error) return `<div class="fail">· ${esc(p.page_name)}: ${esc(p.error)}</div>`;
-            const src = p.active?.source ? ` · ${p.active.source}` : "";
-            const tops = p.active?.top_hours ? ` giờ=[${p.active.top_hours.join(",")}]${src}` : "";
-            return `<div class="ok">· ${esc(p.page_name)}${tops}: ${p.slots.length} slot<br/>` +
-              p.slots.slice(0, 12).map((s) => `&nbsp;&nbsp;${esc(s.local_label)}`).join("<br/>") +
-              (p.slots.length > 12 ? "<br/>…" : "") + `</div>`;
+            if (p.error) {
+              return `<div class="fail" style="margin:.35rem 0">· <b>${esc(p.page_name)}</b>: ${esc(p.error)}</div>`;
+            }
+            const src = p.active?.source || "";
+            const srcLabel =
+              src === "preferred" ? "preferred" :
+              src === "default" ? "preset VN" :
+              src === "insights" ? "insights" : src;
+            const tops = p.active?.top_hours?.length
+              ? p.active.top_hours.map((h) => String(h).padStart(2, "0") + "h").join(", ")
+              : "—";
+            const gap = p.active?.min_gap_minutes != null
+              ? ` · gap≥${p.active.min_gap_minutes}p`
+              : (p.policy?.min_gap_minutes != null ? ` · gap≥${p.policy.min_gap_minutes}p` : "");
+            const pol = p.policy
+              ? ` · max=${p.policy.max_posts_per_day_effective}/ngày · hôm nay còn ${p.policy.remaining_today}` +
+                (p.policy.quota_trimmed_slots ? ` · cắt ${p.policy.quota_trimmed_slots} slot quota` : "")
+              : "";
+            const stg = p.page_stagger_minutes || p.active?.page_stagger_minutes
+              ? ` · +${p.page_stagger_minutes || p.active.page_stagger_minutes}p stagger`
+              : "";
+            return `<div class="ok" style="margin:.4rem 0;padding:.4rem .5rem;border-left:3px solid rgba(61,214,140,.5)">` +
+              `<b>${esc(p.page_name)}</b> · ${p.slots.length} slot · giờ=[${esc(tops)}] · ${esc(srcLabel)}${gap}${pol}${stg}<br/>` +
+              p.slots.slice(0, 14).map((s) =>
+                `&nbsp;&nbsp;<code style="font-size:.78rem">${esc(s.local_label)}</code>`
+              ).join("<br/>") +
+              (p.slots.length > 14 ? "<br/>…" : "") +
+              `</div>`;
           }).join("");
         return;
       }
       box.innerHTML =
-        `<b>OK ${r.total_ok || 0} · FAIL ${r.total_fail || 0}</b><br/>` +
+        `<b>OK ${r.total_ok || 0} · FAIL ${r.total_fail || 0}</b>` +
+        antiLine +
         (r.results || []).map((p) => {
           const head = `${esc(p.page_name)} · ok=${p.scheduled_ok || 0} fail=${p.scheduled_fail || 0}`;
           if (p.error && !p.items?.length) return `<div class="fail">· ${head}: ${esc(p.error)}</div>`;
@@ -1518,6 +1579,68 @@
           ).join("<br/>");
           return `<div>· ${head}<br/>${lines}</div>`;
         }).join("<br/>");
+    }
+
+    let antiSpamEnabled = true;
+
+    function paintAntiUi() {
+      const on = !!antiSpamEnabled;
+      const chip = $("btnAntiChip");
+      if (chip) {
+        chip.textContent = on ? "Anti: ON" : "Anti: OFF";
+        chip.className = on ? "btn-ok btn-sm" : "btn-warn btn-sm";
+        chip.title = on
+          ? "Anti-spam đang BẬT — bấm để tắt nhanh"
+          : "Anti-spam đang TẮT — bấm để bật";
+      }
+      const label = $("bulkAntiLabel");
+      const hint = $("bulkAntiHint");
+      const bar = $("bulkAntiBar");
+      if (label) {
+        label.textContent = on ? "ON" : "OFF";
+        label.className = on ? "ok" : "fail";
+      }
+      if (hint) {
+        hint.textContent = on
+          ? " — chặn dup / quota / cooldown · cap bulk schedule"
+          : " — không chặn publish (cẩn thận spam)";
+      }
+      if (bar) {
+        bar.style.borderColor = on
+          ? "rgba(61,214,140,.35)"
+          : "rgba(255,120,100,.4)";
+      }
+      const tgl = $("btnBulkAntiToggle");
+      if (tgl) tgl.textContent = on ? "Tắt anti" : "Bật anti";
+    }
+
+    async function loadAntiStatus() {
+      try {
+        const data = await api("/api/anti-spam");
+        antiSpamEnabled = !!data.settings?.enabled;
+        paintAntiUi();
+      } catch {
+        const chip = $("btnAntiChip");
+        if (chip) chip.textContent = "Anti: ?";
+      }
+    }
+
+    async function toggleAntiSpam() {
+      try {
+        const next = !antiSpamEnabled;
+        if (!next && !confirm("Tắt anti-spam?\nKhông chặn trùng media/caption, quota, cooldown.")) {
+          return;
+        }
+        const r = await api("/api/anti-spam/toggle", {
+          method: "POST",
+          body: JSON.stringify({ enabled: next ? 1 : 0 }),
+        });
+        antiSpamEnabled = !!r.enabled;
+        paintAntiUi();
+        flash(r.message || (antiSpamEnabled ? "Anti ON" : "Anti OFF"), true);
+      } catch (e) {
+        flash(e.message, false);
+      }
     }
 
     async function runBulk(dry) {
@@ -1580,6 +1703,8 @@
     };
     $("btnDryRun").onclick = () => runBulk(true);
     $("btnBulkSchedule").onclick = () => runBulk(false);
+    $("btnAntiChip")?.addEventListener("click", () => toggleAntiSpam());
+    $("btnBulkAntiToggle")?.addEventListener("click", () => toggleAntiSpam());
     $("btnBulkPrefHours")?.addEventListener("click", async () => {
       const ids = selectedPageIds();
       if (!ids.length) return flash("Tick page trước", false);
@@ -1713,7 +1838,9 @@
       return $("rotPageTargetAll")?.checked ? "all" : "selected";
     }
     function runNowTimeMode() {
-      return $("rotNowTimeWindows")?.checked ? "windows" : "gap_chain";
+      if ($("rotNowTimePreferred")?.checked) return "preferred";
+      if ($("rotNowTimeWindows")?.checked) return "windows";
+      return "gap_chain";
     }
     function mediaPatternMode() {
       return $("rotNowMediaMode")?.value || "page_sequence";
@@ -1773,9 +1900,11 @@
       const th = $("rotNowTimeHelp");
       if (th) {
         th.textContent =
-          timeMode === "windows"
-            ? "Sáng/Tối: tool treo, đến giờ trong khung → đăng API ngay (không scheduled FB)."
-            : "Liên tục: bài đầu ngay; các vòng sau + gap cùng Page.";
+          timeMode === "preferred"
+            ? "Giờ ưa thích từng page (cùng hẹn FB) · max/interval page + anti · tool chờ → đăng API."
+            : timeMode === "windows"
+              ? "Sáng/Tối: tool treo, đến giờ trong khung → đăng API ngay (không scheduled FB)."
+              : "Liên tục: bài đầu ngay; các vòng sau + gap (interval page + anti).";
       }
       const help = $("rotNowMediaHelp");
       if (help) {
@@ -1894,7 +2023,9 @@
       } else if ($("rotPageTargetSelected")) {
         $("rotPageTargetSelected").checked = true;
       }
-      if (s.run_now_time_mode === "windows") {
+      if (s.run_now_time_mode === "preferred") {
+        if ($("rotNowTimePreferred")) $("rotNowTimePreferred").checked = true;
+      } else if (s.run_now_time_mode === "windows") {
         if ($("rotNowTimeWindows")) $("rotNowTimeWindows").checked = true;
       } else if ($("rotNowTimeGap")) {
         $("rotNowTimeGap").checked = true;
@@ -2306,7 +2437,7 @@
       runNowPlanId = null;
       runNowPlanSignature = null;
     };
-    ["rotNowMediaMode", "rotNowMediaPattern", "rotNowPostType", "rotNowTimeGap", "rotNowTimeWindows",
+    ["rotNowMediaMode", "rotNowMediaPattern", "rotNowPostType", "rotNowTimeGap", "rotNowTimeWindows", "rotNowTimePreferred",
       "rotPageTargetSelected", "rotPageTargetAll", "rotNowPerDay", "rotNowWindows"].forEach((id) => {
       const el = $(id);
       if (!el) return;
@@ -2361,7 +2492,12 @@
         return flash("Cài đặt đã thay đổi hoặc chưa preview. Bấm Xem lịch đăng trực tiếp trước.", false);
       }
       const scope = settingsBody.page_target_mode === "all" ? "TẤT CẢ page" : `${selectedPageIds().length} page đã tick`;
-      const timeLbl = settingsBody.run_now_time_mode === "windows" ? "khung Sáng/Tối" : "liên tục + gap";
+      const timeLbl =
+        settingsBody.run_now_time_mode === "preferred"
+          ? "giờ ưa thích từng page"
+          : settingsBody.run_now_time_mode === "windows"
+            ? "khung Sáng/Tối"
+            : "liên tục + gap";
       const mediaLbl = settingsBody.media_pattern_mode === "pattern"
         ? `pattern ${settingsBody.media_pattern}`
         : settingsBody.media_pattern_mode;
@@ -2615,13 +2751,17 @@
       await loadWorkspaceState();
       await loadDeployAndMediaUpload();
       await loadPages();
-      await Promise.all([loadLogs(), loadRotation()]);
+      await Promise.all([loadLogs(), loadRotation(), loadAntiStatus()]);
       applyControls(workspaceState.bulk || {}, bulkWorkspaceControlIds);
       applyControls(workspaceState.rotation || {}, rotationWorkspaceControlIds);
       if (!$("rotPageTargetSelected")?.checked && !$("rotPageTargetAll")?.checked) {
         if ($("rotPageTargetSelected")) $("rotPageTargetSelected").checked = true;
       }
-      if (!$("rotNowTimeGap")?.checked && !$("rotNowTimeWindows")?.checked) {
+      if (
+        !$("rotNowTimeGap")?.checked &&
+        !$("rotNowTimeWindows")?.checked &&
+        !$("rotNowTimePreferred")?.checked
+      ) {
         if ($("rotNowTimeGap")) $("rotNowTimeGap").checked = true;
       }
       if ($("rotWindows") && !$("rotWindows").value.trim()) {

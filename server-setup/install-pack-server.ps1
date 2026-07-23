@@ -84,12 +84,20 @@ $RedirectUri = $PublicUrl + '/auth/facebook/callback'
 Write-Ok "Public: $PublicUrl"
 Write-Ok "Meta Redirect: $RedirectUri"
 
-Write-Step '2 - Meta App (secret only on this PC)'
-$AppId = Read-Host 'FB_APP_ID'
-$AppSecret = Read-Host 'FB_APP_SECRET'
-if ([string]::IsNullOrWhiteSpace($AppId) -or [string]::IsNullOrWhiteSpace($AppSecret)) {
-  Write-Host 'Need FB_APP_ID and FB_APP_SECRET.' -ForegroundColor Red
-  exit 1
+Write-Step '2 - Meta App (optional now)'
+Write-Host '  Enter = leave empty. Customers can push App ID+Secret from the tool later.' -ForegroundColor DarkGray
+Write-Host '  Server will auto-write them into oauth-relay\.env' -ForegroundColor DarkGray
+$AppId = Read-Host 'FB_APP_ID [Enter = skip, wait for clients]'
+$AppSecret = Read-Host 'FB_APP_SECRET [Enter = skip]'
+$AppId = if ($null -eq $AppId) { '' } else { $AppId.Trim() }
+$AppSecret = if ($null -eq $AppSecret) { '' } else { $AppSecret.Trim() }
+if ($AppId -and -not $AppSecret) {
+  Write-Host 'If you set FB_APP_ID you should also set FB_APP_SECRET (or leave both empty).' -ForegroundColor Yellow
+}
+if (-not $AppId) {
+  Write-Ok 'Skip Meta App for now (RELAY_ALLOW_OPEN_REGISTER=1)'
+} else {
+  Write-Ok "FB_APP_ID set ($($AppId.Substring(0, [Math]::Min(6, $AppId.Length)))…)"
 }
 
 Write-Step '3 - Node.js'
@@ -120,8 +128,16 @@ $envLines = @(
   ('FB_REDIRECT_URI=' + $RedirectUri),
   '',
   'RELAY_EXCHANGE=1',
+  # Home server: clients push App ID+Secret from tool → auto-write this .env
+  'RELAY_ALLOW_OPEN_REGISTER=1',
+  '',
   ('FB_APP_ID=' + $AppId),
   ('FB_APP_SECRET=' + $AppSecret),
+  'FB_APP_NAME=App 1',
+  '',
+  '# FB_APP_ID_2=',
+  '# FB_APP_SECRET_2=',
+  '# FB_APP_NAME_2=App 2',
   '',
   'FB_GRAPH_VERSION=v21.0',
   'DEFAULT_LOCAL_PORT=3847',
@@ -376,17 +392,18 @@ if ($doStart -eq '' -or $doStart -match '^[Yy]') {
   Write-Ok ("Startup shortcut: " + $lnkPath)
 }
 
-Write-Step '8 - Meta Developers (do this on website)'
+Write-Step '8 - Meta Developers (on each customer Meta App)'
 Write-Host ''
 Write-Host ('  Valid OAuth Redirect URIs  =  ' + $RedirectUri) -ForegroundColor Yellow
 Write-Host '  Facebook Login -> Settings -> Save' -ForegroundColor Yellow
+Write-Host '  (Customer does this when they create their App)' -ForegroundColor DarkGray
 Write-Host ''
 
 Write-Step 'DONE'
 Write-Info '1. Run: CHAY-SERVER-TAT-CA.bat'
 Write-Info ('2. Wait ~30s, open on 4G: ' + $PublicUrl + '/health')
-Write-Info '3. Meta: add Redirect URI above'
-Write-Info '4. Other PCs: open internal/customer EXE -> Connect FB'
+Write-Info '3. App ID/Secret: leave empty OK — customers push from tool UI'
+Write-Info '4. Customers: Setup 1.2.40+ -> enter App ID+Secret -> push to server'
 Write-Host ''
 
 $runNow = Read-Host 'Start server now (relay + tunnel)? [Y/n]'

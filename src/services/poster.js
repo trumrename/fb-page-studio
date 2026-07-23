@@ -39,6 +39,13 @@ import {
 import { assertCanPublish as assertLicenseActive } from "./license.js";
 import { withPageOperationLock } from "./pageOperationLock.js";
 import { reserveCaptionSlot } from "./captionPoolState.js";
+import {
+  countPagePostsOnLocalDay,
+  isWithinPreferredWindow,
+  resolveMinGapMinutes,
+  resolvePreferredHours,
+  todayYmd,
+} from "./schedulePolicy.js";
 
 function todayKey() {
   return new Intl.DateTimeFormat("en-CA", {
@@ -205,6 +212,32 @@ function resetDayCounterIfNeeded(cfg) {
   return cfg;
 }
 
+/**
+ * True if page already has a direct/scheduled post within ±gap of targetMs.
+ * Matches anti-spam cooldown semantics so Direct Local ↔ FB schedule don't clash.
+ */
+function hasNearbyEffectivePost(pageRowId, targetMs, gapMinutes) {
+  const gapSec = Math.max(0, Math.floor(Number(gapMinutes) || 0) * 60);
+  if (!gapSec) return false;
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT id FROM post_logs
+         WHERE page_row_id = ?
+           AND status IN ('ok','ok_comment_failed','scheduled','published','schedule_overdue')
+           AND ABS(
+             strftime('%s', COALESCE(NULLIF(scheduled_publish_time, ''), created_at))
+             - ?
+           ) < ?
+         LIMIT 1`
+      )
+      .get(pageRowId, Math.floor(targetMs / 1000), gapSec);
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
 function logPost(row) {
   const db = getDb();
   const info = db
@@ -249,18 +282,53 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     throw new Error("Posting disabled for this page (bật enabled trong config)");
   }
 
-  if (cfg.posts_today >= cfg.max_posts_per_day && !opts.ignore_quota) {
-    throw new Error(
-      `Đã đủ quota hôm nay (${cfg.posts_today}/${cfg.max_posts_per_day})`
-    );
+  // Quota: counter + post_logs (direct + FB scheduled) so both modes share one daily cap
+  if (!opts.ignore_quota) {
+    const day = todayYmd(420);
+    const usedLogs = countPagePostsOnLocalDay(pageRowId, day, 420);
+    const used = Math.max(Number(cfg.posts_today) || 0, usedLogs);
+    if (used >= cfg.max_posts_per_day) {
+      throw new Error(
+        `Đã đủ quota hôm nay (${used}/${cfg.max_posts_per_day}) — gồm đăng trực tiếp + hẹn FB.`
+      );
+    }
   }
 
-  if (cfg.last_post_at && !opts.ignore_interval) {
-    const last = storedUtcMs(cfg.last_post_at);
-    const waitMs = (cfg.interval_minutes || 0) * 60 * 1000;
-    if (Number.isFinite(last) && Date.now() - last < waitMs) {
-      const left = Math.ceil((waitMs - (Date.now() - last)) / 60000);
-      throw new Error(`Chưa đủ interval — còn ~${left} phút`);
+  if (!opts.ignore_interval) {
+    const anti = getAntiSpamSettings();
+    const minGapMin = resolveMinGapMinutes(cfg, anti);
+    const nowMs = Date.now();
+    // 1) classic last_post_at (direct only)
+    if (cfg.last_post_at && minGapMin > 0) {
+      const last = storedUtcMs(cfg.last_post_at);
+      if (Number.isFinite(last) && last <= nowMs && nowMs - last < minGapMin * 60 * 1000) {
+        const left = Math.ceil((minGapMin * 60 * 1000 - (nowMs - last)) / 60000);
+        throw new Error(
+          `Chưa đủ interval (≥${minGapMin}p) — còn ~${left} phút`
+        );
+      }
+    }
+    // 2) any direct OR FB-scheduled slot near now (shared gap with bulk schedule)
+    if (minGapMin > 0 && hasNearbyEffectivePost(pageRowId, nowMs, minGapMin)) {
+      throw new Error(
+        `Gần slot đã đăng/hẹn FB (gap ≥${minGapMin}p — cùng policy hẹn giờ). Đợi hoặc nới interval/anti cooldown.`
+      );
+    }
+  }
+
+  // Local auto-scheduler only: respect preferred hours (same as bulk “giờ tích cực”)
+  if (opts.respectPreferredHours && !opts.force) {
+    const pref = resolvePreferredHours(pageRowId);
+    const win = isWithinPreferredWindow({
+      hours: pref.hours,
+      tzOffsetMinutes: 420,
+      graceBeforeMin: 5,
+      graceAfterMin: 55,
+    });
+    if (!win.ok) {
+      throw new Error(
+        `Ngoài giờ ưa thích [${pref.hours.join(",")}] — chờ khung giờ (khớp hẹn FB active_times)`
+      );
     }
   }
 
@@ -577,7 +645,11 @@ export async function runSchedulerTick() {
   const results = [];
   for (const r of rows) {
     try {
-      const out = await runOnePost(r.page_row_id, { force: false });
+      // respectPreferredHours: same preferred hours as FB bulk “giờ tích cực”
+      const out = await runOnePost(r.page_row_id, {
+        force: false,
+        respectPreferredHours: true,
+      });
       results.push({ page_row_id: r.page_row_id, ...out });
     } catch (e) {
       // not due / disabled quota — skip silently or record skip

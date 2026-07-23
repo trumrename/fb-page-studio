@@ -332,18 +332,83 @@ function cacheActiveHours(pageRowId, result) {
 }
 
 /**
- * Build local-date schedule slots from top hours.
+ * Expand / sample preferred hours for posts_per_day.
+ * - If enough preferred hours: spread evenly across the list (not just earliest).
+ * - If short: fill from VN preset then daytime 8–22.
+ */
+function expandHoursForPostsPerDay(topHours, postsPerDay) {
+  const want = Math.min(10, Math.max(1, Number(postsPerDay) || 2));
+  let hours = [
+    ...new Set(
+      (topHours || [])
+        .map((h) => Number(h))
+        .filter((h) => Number.isInteger(h) && h >= 0 && h <= 23)
+    ),
+  ].sort((a, b) => a - b);
+  if (!hours.length) hours = [...DEFAULT_PREFERRED_HOURS];
+
+  if (hours.length >= want) {
+    if (hours.length === want) return hours;
+    // Evenly sample preferred hours (e.g. 9,12,19,21 + 2/day → 9,21 not 9,12)
+    const picked = [];
+    for (let i = 0; i < want; i++) {
+      const idx =
+        want === 1
+          ? Math.floor((hours.length - 1) / 2)
+          : Math.round((i * (hours.length - 1)) / (want - 1));
+      picked.push(hours[idx]);
+    }
+    return [...new Set(picked)].sort((a, b) => a - b);
+  }
+
+  // Fill from default VN preset without duplicates
+  for (const h of DEFAULT_PREFERRED_HOURS) {
+    if (hours.length >= want) break;
+    if (!hours.includes(h)) hours.push(h);
+  }
+  // Still short? walk the day
+  for (let h = 8; h <= 22 && hours.length < want; h++) {
+    if (!hours.includes(h)) hours.push(h);
+  }
+  return hours.slice(0, want).sort((a, b) => a - b);
+}
+
+/**
+ * Build local-date schedule slots from top hours (preferred / active).
+ * - Jitter phút trong khung giờ (tự nhiên hơn luôn :00)
+ * - Min gap giữa 2 bài cùng page (anti-spam / interval)
+ * - Bù giờ nếu posts_per_day > số giờ đã lưu
+ *
  * @param {number[]} topHours hours 0-23 in "page local" (user offset)
- * @param {object} opts { daysAhead, postsPerDay, tzOffsetMinutes, fromDate? }
- * @returns {Date[]} future Date objects (JS local constructed via UTC offset math)
+ * @param {object} opts {
+ *   daysAhead, postsPerDay, tzOffsetMinutes,
+ *   minGapMinutes?, jitterMinutes?,
+ *   pageStaggerMinutes? — offset all slots for this page (bulk multi-page)
+ * }
+ * @returns {Date[]} future Date objects
  */
 export function buildSlotsFromActiveHours(topHours, opts = {}) {
   const daysAhead = Math.min(30, Math.max(1, Number(opts.daysAhead) || 3));
   const postsPerDay = Math.min(10, Math.max(1, Number(opts.postsPerDay) || 2));
   const tzOffsetMin = Number(opts.tzOffsetMinutes);
   const offsetMin = Number.isFinite(tzOffsetMin) ? tzOffsetMin : 420; // default VN UTC+7
+  const minGapMin = Math.max(
+    0,
+    Number.isFinite(Number(opts.minGapMinutes)) ? Number(opts.minGapMinutes) : 0
+  );
+  // Note: 0 is valid (no in-hour jitter) — do not use `|| 12` (0 is falsy)
+  const jitterRaw = Number(opts.jitterMinutes);
+  const jitterMin = Math.min(
+    45,
+    Math.max(0, Number.isFinite(jitterRaw) ? jitterRaw : 12)
+  );
+  const staggerRaw = Number(opts.pageStaggerMinutes);
+  const staggerMin = Math.max(
+    0,
+    Math.min(90, Number.isFinite(staggerRaw) ? staggerRaw : 0)
+  );
 
-  const hours = (topHours || []).slice(0, postsPerDay);
+  const hours = expandHoursForPostsPerDay(topHours, postsPerDay);
   if (!hours.length) return [];
 
   const now = Date.now();
@@ -359,15 +424,38 @@ export function buildSlotsFromActiveHours(topHours, opts = {}) {
 
   for (let day = 0; day < daysAhead; day++) {
     for (const hour of hours) {
-      // Construct wall time in target TZ → convert to real UTC ms
-      const base = new Date(Date.UTC(y0, m0, d0 + day, hour, 0, 0));
-      const realMs = base.getTime() - offsetMin * 60 * 1000;
+      // Random minute in hour (5..55) — tránh mọi bài đều :00
+      const minute =
+        jitterMin > 0
+          ? Math.min(55, 5 + Math.floor(Math.random() * Math.max(1, jitterMin * 2)))
+          : 0;
+      const base = new Date(Date.UTC(y0, m0, d0 + day, hour, minute, 0));
+      // Stagger multi-page bulk so pages don't hit Graph at the same second
+      const realMs =
+        base.getTime() - offsetMin * 60 * 1000 + staggerMin * 60 * 1000;
       if (realMs < minMs || realMs > maxMs) continue;
       slots.push(new Date(realMs));
     }
   }
 
-  return slots.sort((a, b) => a.getTime() - b.getTime());
+  slots.sort((a, b) => a.getTime() - b.getTime());
+
+  // Enforce min gap between consecutive posts (same page)
+  if (minGapMin > 0 && slots.length > 1) {
+    const gapMs = minGapMin * 60 * 1000;
+    const out = [slots[0]];
+    for (let i = 1; i < slots.length; i++) {
+      const prev = out[out.length - 1].getTime();
+      let t = slots[i].getTime();
+      if (t < prev + gapMs) t = prev + gapMs;
+      if (t > maxMs) continue;
+      if (t < minMs) continue;
+      out.push(new Date(t));
+    }
+    return out;
+  }
+
+  return slots;
 }
 
 /**

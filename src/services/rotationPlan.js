@@ -27,6 +27,14 @@ import {
 import { listMetaAppsPublic } from "./metaApps.js";
 import { getPagePostConfig, getCaptionStats } from "./poster.js";
 import { captionPoolIdentity } from "./captionPoolState.js";
+import {
+  resolveMinGapMinutes,
+  resolveMaxPostsPerDay,
+  resolvePreferredHours,
+  preferredHoursToWindows,
+  countPagePostsOnLocalDay,
+} from "./schedulePolicy.js";
+import { buildSlotsFromActiveHours } from "./activeTimes.js";
 
 const SETTINGS_FILE = () =>
   path.join(config.dataDir || path.dirname(config.databasePath), "rotation_settings.json");
@@ -79,6 +87,7 @@ export const DEFAULT_ROTATION = {
    * Direct Local time:
    * gap_chain = bài #1 now, các bài sau + gap (cũ)
    * windows = dùng khung Sáng/Tối (rot windows) trong ngày
+   * preferred = giờ ưa thích từng page (cùng nguồn hẹn FB active_times)
    */
   run_now_time_mode: "gap_chain",
   /**
@@ -251,7 +260,11 @@ export function normalizeSettings(s) {
   );
   out.post_type = out.post_type || "auto";
   out.page_target_mode = out.page_target_mode === "all" ? "all" : "selected";
-  out.run_now_time_mode = out.run_now_time_mode === "windows" ? "windows" : "gap_chain";
+  {
+    const m = String(out.run_now_time_mode || "gap_chain").toLowerCase();
+    out.run_now_time_mode =
+      m === "windows" || m === "preferred" ? m : "gap_chain";
+  }
   out.run_now_continuous = !!out.run_now_continuous;
   out.force_plan_day =
     out.force_plan_day && /^\d{4}-\d{2}-\d{2}$/.test(String(out.force_plan_day))
@@ -792,11 +805,16 @@ export function buildRunNowPlan(inputSettings = {}) {
     );
   }
   const groups = resolveGroups(settings, matrix);
-  const useWindows = settings.run_now_time_mode === "windows";
+  const timeMode = settings.run_now_time_mode || "gap_chain";
+  const useWindows = timeMode === "windows";
+  const usePreferred = timeMode === "preferred";
   // Windows: số bài/ngày = tổng posts trong khung Sáng/Tối (authoritative).
+  // Preferred: per-page hours (same as FB bulk active_times).
   // Gap chain: posts_per_page_per_day from Direct Local input.
   let rounds;
   let dayWindowTimes = null;
+  /** @type {Map<number, Date[]>} page_row_id → times for preferred mode */
+  const preferredTimesByPage = new Map();
   const tz = settings.tz_offset_minutes;
   const todayVn = todayYmd(tz);
   let planDay = settings.force_plan_day || todayVn;
@@ -804,6 +822,14 @@ export function buildRunNowPlan(inputSettings = {}) {
   let planDayShifted = false;
   const warnings = [];
   const blockers = [];
+
+  const anti = getAntiSpamSettings();
+  const pageConfigs = new Map();
+  for (const account of matrix) {
+    for (const page of account.pages) {
+      pageConfigs.set(page.page_row_id, getPagePostConfig(page.page_row_id));
+    }
+  }
 
   if (useWindows) {
     const winSettings = normalizeSettings({
@@ -843,6 +869,69 @@ export function buildRunNowPlan(inputSettings = {}) {
         planDayShifted = true;
       }
     }
+  } else if (usePreferred) {
+    const req = clamp(
+      Number(inputSettings.posts_per_page_per_day) || settings.posts_per_page_per_day || 2,
+      1,
+      12
+    );
+    const nowMs = Date.now();
+    let maxSlots = 0;
+    for (const [pageRowId, cfg] of pageConfigs) {
+      const pref = resolvePreferredHours(pageRowId);
+      const maxDay = resolveMaxPostsPerDay(cfg, anti, req);
+      const minGap = resolveMinGapMinutes(cfg, anti);
+      let slots = buildSlotsFromActiveHours(pref.hours, {
+        daysAhead: 1,
+        postsPerDay: maxDay,
+        tzOffsetMinutes: tz,
+        minGapMinutes: minGap,
+        jitterMinutes: anti.enabled
+          ? Math.max(3, Number(anti.jitter_minutes_min) || 3)
+          : 8,
+        pageStaggerMinutes: 0,
+      });
+      // If all past for today, take future slots within 2 days
+      if (!slots.length || slots.every((t) => t.getTime() < nowMs - 60 * 1000)) {
+        slots = buildSlotsFromActiveHours(pref.hours, {
+          daysAhead: 2,
+          postsPerDay: maxDay,
+          tzOffsetMinutes: tz,
+          minGapMinutes: minGap,
+          jitterMinutes: anti.enabled
+            ? Math.max(3, Number(anti.jitter_minutes_min) || 3)
+            : 8,
+          pageStaggerMinutes: 0,
+        }).filter((t) => t.getTime() >= nowMs + 60 * 1000);
+        if (slots.length) planDayShifted = true;
+      }
+      const used = countPagePostsOnLocalDay(pageRowId, todayVn, tz);
+      const remain = Math.max(0, maxDay - used);
+      slots = slots.slice(0, remain);
+      preferredTimesByPage.set(pageRowId, slots);
+      maxSlots = Math.max(maxSlots, slots.length);
+    }
+    if (planDayShifted) {
+      warnings.push(
+        "Một số page đã qua giờ ưa thích hôm nay — slot lấy khung còn lại / ngày kế (cùng policy hẹn FB)."
+      );
+    }
+    if (maxSlots < 1) {
+      throw new Error(
+        "Không lập được slot từ giờ ưa thích — lưu preferred hours trên Page, tăng max bài/ngày, hoặc đợi qua giờ đã hẹn."
+      );
+    }
+    rounds = clamp(Math.min(req, maxSlots), 1, 12);
+    const sampleId = [...pageConfigs.keys()][0];
+    if (sampleId != null) {
+      warnings.push(
+        `Direct Local · preferred hours từng page (khớp hẹn FB). VD page#${sampleId}: ${
+          preferredHoursToWindows(resolvePreferredHours(sampleId).hours, rounds)
+            .map((w) => w.name)
+            .join(", ")
+        }`
+      );
+    }
   } else {
     rounds = clamp(
       Number(inputSettings.posts_per_page_per_day) || settings.posts_per_page_per_day,
@@ -850,22 +939,12 @@ export function buildRunNowPlan(inputSettings = {}) {
       12
     );
   }
-  const anti = getAntiSpamSettings();
-  const pageConfigs = new Map();
-  for (const account of matrix) {
-    for (const page of account.pages) {
-      pageConfigs.set(page.page_row_id, getPagePostConfig(page.page_row_id));
-    }
-  }
-  const maxPageIntervalHours = Math.max(
-    0,
-    ...[...pageConfigs.values()].map((c) => (Number(c.interval_minutes) || 0) / 60)
-  );
-  const antiCoolHours = anti.enabled ? (Number(anti.page_cooldown_minutes) || 0) / 60 : 0;
+  // Gap = max(rotation UI, page interval, anti floor/cooldown) — same formula as FB schedule
+  const policyGaps = [...pageConfigs.values()].map((c) => resolveMinGapMinutes(c, anti) / 60);
+  const maxPolicyGapHours = Math.max(0, ...policyGaps, 0);
   const effectiveGapMinHours = Math.max(
     settings.same_page_gap_hours_min,
-    maxPageIntervalHours,
-    antiCoolHours,
+    maxPolicyGapHours,
     0.25
   );
   const effectiveGapMaxHours = Math.max(settings.same_page_gap_hours_max, effectiveGapMinHours);
@@ -880,7 +959,7 @@ export function buildRunNowPlan(inputSettings = {}) {
   let order = 0;
   let previousRoundStartMs = null;
   let previousRoundEndMs = null;
-  const quotaDay = useWindows ? planDay : todayVn;
+  const quotaDay = useWindows || usePreferred ? planDay : todayVn;
   for (let round = 0; round < rounds; round++) {
     let cursorMs;
     if (round === 0) {
@@ -898,15 +977,28 @@ export function buildRunNowPlan(inputSettings = {}) {
       const page = admin.pages[pageIdx];
       if (!page) return;
       const cfg = pageConfigs.get(page.page_row_id);
-      const postedOnPlanDay =
-        cfg?.posts_today_date === quotaDay ? Math.max(0, Number(cfg?.posts_today) || 0) : 0;
-      const maxPerDay = Number(cfg?.max_posts_per_day) || rounds;
+      // Quota: config counter + already scheduled/direct logs (shared with FB schedule)
+      const postedCfg =
+        cfg?.posts_today_date === todayVn ? Math.max(0, Number(cfg?.posts_today) || 0) : 0;
+      const postedLogs = countPagePostsOnLocalDay(page.page_row_id, todayVn, tz);
+      const postedOnPlanDay = Math.max(postedCfg, postedLogs);
+      const maxPerDay = resolveMaxPostsPerDay(cfg, anti, rounds);
       const remainingToday = Math.max(0, maxPerDay - postedOnPlanDay);
       const pageRounds = Math.min(rounds, remainingToday);
       if (round >= pageRounds) return;
       const plannedPostType = resolvePlannedPostType(settings, cfg, round);
       let when;
-      if (useWindows && dayWindowTimes[round]) {
+      if (usePreferred) {
+        const prefSlots = preferredTimesByPage.get(page.page_row_id) || [];
+        if (!prefSlots[round]) return;
+        const baseMs = prefSlots[round].getTime();
+        const stagger = (order + 1) * 1500;
+        when = new Date(baseMs + stagger);
+        if (when.getTime() < Date.now() + 1500) {
+          when = new Date(Date.now() + 2000 + stagger);
+        }
+        cursorMs = when.getTime();
+      } else if (useWindows && dayWindowTimes[round]) {
         const baseMs = dayWindowTimes[round].getTime();
         const stagger = (order + 1) * 1500;
         when = new Date(baseMs + stagger);
@@ -935,10 +1027,10 @@ export function buildRunNowPlan(inputSettings = {}) {
         iso: when.toISOString(),
         local_label: formatLocal(when, tz),
         plan_day: planDay,
-        time_mode: useWindows ? "windows" : "gap_chain",
+        time_mode: usePreferred ? "preferred" : useWindows ? "windows" : "gap_chain",
       });
       lastSlotMs = when.getTime();
-      if (!useWindows) {
+      if (!useWindows && !usePreferred) {
         cursorMs += randBetween(taskGapMinMs, taskGapMaxMs);
       } else {
         cursorMs = when.getTime() + randBetween(taskGapMinMs * 0.15, taskGapMinMs * 0.35);

@@ -954,6 +954,33 @@ router.put("/anti-spam", (req, res) => {
   }
 });
 
+/** POST /api/anti-spam/toggle — bật/tắt nhanh master switch */
+router.post("/anti-spam/toggle", (req, res) => {
+  try {
+    const cur = getAntiSpamSettings();
+    const next =
+      req.body?.enabled === undefined || req.body?.enabled === null
+        ? cur.enabled
+          ? 0
+          : 1
+        : req.body.enabled
+          ? 1
+          : 0;
+    const settings = saveAntiSpamSettings({ enabled: next });
+    res.json({
+      ok: true,
+      enabled: !!settings.enabled,
+      message: settings.enabled
+        ? "Anti-spam ĐANG BẬT — chặn trùng media/caption, quota, cooldown."
+        : "Anti-spam ĐÃ TẮT — không chặn publish (cẩn thận spam).",
+      settings,
+      stats: getAntiSpamStats(),
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
 /** POST /api/anti-spam/preset { name: 'safe'|'strict'|'loose' } */
 router.post("/anti-spam/preset", (req, res) => {
   try {

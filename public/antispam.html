@@ -51,6 +51,22 @@
       <main class="content">
         <div class="flash" id="flash"></div>
 
+        <div class="panel section-gap" id="masterTogglePanel" style="margin-top:0;border-color:rgba(61,214,140,.4)">
+          <div class="panel-body" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 1.1rem">
+            <div style="flex:1;min-width:14rem">
+              <div style="font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;opacity:.75;margin-bottom:.2rem">Master switch</div>
+              <div id="masterStatusTitle" style="font-size:1.15rem;font-weight:700">Anti-spam: …</div>
+              <div id="masterStatusDesc" class="muted" style="margin-top:.25rem;font-size:.82rem;max-width:36rem">
+                Bật = chặn trùng media/caption, quota giờ/ngày, cooldown page, cap bulk schedule. Tắt = không chặn publish (vẫn ghi log).
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+              <span id="masterBadge" class="badge" style="font-size:.85rem;padding:.4rem .75rem">—</span>
+              <button type="button" class="btn-primary" id="btnMasterToggle" style="min-width:9rem">Bật / Tắt</button>
+            </div>
+          </div>
+        </div>
+
         <div class="stats" id="liveStats">
           <div class="stat"><div class="n" id="stHour">—</div><div class="l">Bài / giờ (global)</div></div>
           <div class="stat"><div class="n" id="stDay">—</div><div class="l">Bài / 24h (global)</div></div>
@@ -114,11 +130,38 @@
 
     let settings = null;
 
+    function renderMaster(s) {
+      const on = !!s?.enabled;
+      const title = $("masterStatusTitle");
+      const desc = $("masterStatusDesc");
+      const badge = $("masterBadge");
+      const btn = $("btnMasterToggle");
+      const panel = $("masterTogglePanel");
+      if (!title) return;
+      title.textContent = on ? "Anti-spam: ĐANG BẬT" : "Anti-spam: ĐÃ TẮT";
+      desc.textContent = on
+        ? "Đang chặn trùng media/caption, quota giờ/ngày, cooldown page, cap bulk hẹn giờ. An toàn cho multi-page."
+        : "Không chặn publish / schedule (quota, dup, cooldown). Vẫn ghi log — cẩn thận spam Graph.";
+      badge.textContent = on ? "ON" : "OFF";
+      badge.className = "badge " + (on ? "on" : "off");
+      badge.style.fontSize = ".85rem";
+      badge.style.padding = ".4rem .75rem";
+      btn.textContent = on ? "Tắt anti-spam" : "Bật anti-spam";
+      btn.className = on ? "btn-warn" : "btn-ok";
+      btn.style.minWidth = "9rem";
+      if (panel) {
+        panel.style.borderColor = on
+          ? "rgba(61,214,140,.45)"
+          : "rgba(255,120,100,.5)";
+      }
+    }
+
     function renderForm(s) {
       settings = s;
+      renderMaster(s);
       $("form").innerHTML = `
         <div class="checks">
-          ${chk("enabled", s.enabled, "Bật anti-spam")}
+          ${chk("enabled", s.enabled, "Bật anti-spam (master — hoặc dùng nút lớn phía trên)")}
           ${chk("block_duplicate_caption", s.block_duplicate_caption, "Chặn caption trùng")}
           ${chk("block_duplicate_media", s.block_duplicate_media, "Chặn media trùng (hash)")}
           ${chk("media_once_forever", s.media_once_forever, "1 ảnh/video = 1 lần đời (mọi page)")}
@@ -227,6 +270,24 @@
     $("btnSafe").onclick = () => preset("safe");
     $("btnStrict").onclick = () => preset("strict");
     $("btnLoose").onclick = () => preset("loose");
+
+    $("btnMasterToggle").onclick = async () => {
+      try {
+        const cur = !!settings?.enabled;
+        const next = !cur;
+        if (!next && !confirm("Tắt anti-spam?\nSẽ không chặn trùng media/caption, quota, cooldown — dễ spam Graph.")) {
+          return;
+        }
+        const r = await api("/api/anti-spam/toggle", {
+          method: "POST",
+          body: JSON.stringify({ enabled: next ? 1 : 0 }),
+        });
+        flash(r.message || (r.enabled ? "Anti-spam ON" : "Anti-spam OFF"), true);
+        await load();
+      } catch (e) {
+        flash(e.message, false);
+      }
+    };
 
     load().catch((e) => flash(e.message, false));
   </script>
