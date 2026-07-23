@@ -34,6 +34,9 @@ const child = spawn(process.execPath, [path.join(root, "src", "server.js")], {
     FB_EXE_DIR: tempRoot,
     NGROK_AUTOSTART: "0",
     OPEN_BROWSER: "0",
+    // Không sync Meta App từ modelswiki — test first-run “chưa cấu hình”
+    OAUTH_RELAY: "0",
+    OAUTH_RELAY_URL: "",
   },
 });
 
