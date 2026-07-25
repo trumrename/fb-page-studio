@@ -24,7 +24,8 @@
       <a class="nav-item" href="/antispam.html"><span class="ico">4</span> Giới hạn Anti-spam</a>
       <div class="nav-label">Exports</div>
       <a class="nav-item" href="/app.html#logs"><span class="ico">5</span> Kết quả & log</a>
-      <a class="nav-item" href="#" data-dl="/api/posting/logs/csv" data-name="post_logs.csv"><span class="ico">6</span> Tải báo cáo CSV</a>
+      <a class="nav-item" href="/history.html"><span class="ico">6</span> Lịch sử đăng (theo ngày)</a>
+      <a class="nav-item" href="#" data-dl="/api/posting/logs/csv" data-name="post_logs.csv"><span class="ico">7</span> Tải báo cáo CSV</a>
       <div class="nav-label">System</div>
       <a class="nav-item" href="/license.html"><span class="ico">🔑</span> License</a>
       <a class="nav-item" href="#" id="navUpdate" onclick="event.preventDefault(); if(window.fbpsOpenUpdate) window.fbpsOpenUpdate(); else document.getElementById('btnUpdateApp')?.click(); return false"><span class="ico">↑</span> Cập nhật phiên bản</a>
@@ -185,6 +186,42 @@
               </div>
             </div>
 
+            <div class="panel section-gap" style="margin-top:.6rem">
+              <h2 class="panel-hd" style="font-size:.9rem">Kho ảnh / caption cho các page đã tick</h2>
+              <div class="panel-body">
+                <p class="muted" style="margin:.2rem 0 .5rem;font-size:.78rem">
+                  Hẹn giờ FB lấy ảnh + caption từ kho đã lưu của <b>từng page</b>. Chọn 3 kho dùng chung rồi Áp dụng cho các page đang tick (giống Bước 2, khỏi vào rotation).
+                </p>
+                <div class="row3">
+                  <div>
+                    <label>Kho ảnh / video (inbox)</label>
+                    <div style="display:flex;gap:.3rem">
+                      <input type="text" id="bulkMediaFolder" placeholder="D:\\media\\inbox" />
+                      <button type="button" class="btn-ghost btn-sm" id="btnBulkPickMedia">Chọn</button>
+                    </div>
+                  </div>
+                  <div>
+                    <label>Kho đã đăng (posted)</label>
+                    <div style="display:flex;gap:.3rem">
+                      <input type="text" id="bulkPostedFolder" placeholder="D:\\media\\posted" />
+                      <button type="button" class="btn-ghost btn-sm" id="btnBulkPickPosted">Chọn</button>
+                    </div>
+                  </div>
+                  <div>
+                    <label>Kho caption (.txt .csv)</label>
+                    <div style="display:flex;gap:.3rem">
+                      <input type="text" id="bulkCaptionsFolder" placeholder="D:\\media\\captions" />
+                      <button type="button" class="btn-ghost btn-sm" id="btnBulkPickCaptions">Chọn</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="actions" style="margin-top:.4rem">
+                  <button type="button" class="btn-ok btn-sm" id="btnBulkApplyFolders">Áp dụng 3 kho cho page đã tick</button>
+                  <span id="bulkFolderStatus" class="muted" style="font-size:.8rem"></span>
+                </div>
+              </div>
+            </div>
+
             <div id="bulkActive">
               <div class="row3" style="margin-top:.25rem">
                 <div>
@@ -209,6 +246,32 @@
                 Bài/ngày bulk bị cap theo max page; hôm nay trừ slot đã đăng/hẹn.
                 Trải giờ: 9,12,19,21 + 2 bài → 9h &amp; 21h.
               </p>
+
+              <div class="panel section-gap" id="metaScheduledPanel" style="margin-top:.75rem">
+                <h2 class="panel-hd">Meta Official Scheduled Settings</h2>
+                <div class="panel-body">
+                  <label class="checks">
+                    <input type="checkbox" id="allow30DaysMax" checked /> Allow scheduling up to 30 days (Meta max)
+                  </label>
+                  <div class="row2">
+                    <div>
+                      <label>Max bài hẹn / page / ngày</label>
+                      <input type="number" id="metaMaxScheduledPerDay" min="1" max="100" value="50" />
+                    </div>
+                    <div>
+                      <label>Publish window (ngày)</label>
+                      <input type="number" id="metaPublishWindowDays" min="1" max="30" value="30" />
+                    </div>
+                    <div>
+                      <label>Min interval (phút)</label>
+                      <input type="number" id="metaMinIntervalMinutes" min="5" value="120" />
+                    </div>
+                  </div>
+                  <label class="checks" style="margin-top:.35rem">
+                    <input type="checkbox" id="metaIgnoreGraphLimit" /> Bỏ qua giới hạn 30 ngày (chỉ dùng khi test)
+                  </label>
+                </div>
+              </div>
             </div>
 
             <div id="bulkFixed">
@@ -222,16 +285,27 @@
                     <label>Số bài / page</label>
                     <input type="number" id="bulkCount" min="1" max="50" value="3" />
                   </div>
-                  <div>
-                    <label>Interval (phút ≥10)</label>
-                    <input type="number" id="bulkInterval" min="10" value="120" />
+                  <div class="row2">
+                    <div>
+                      <label>Cách nhau tối thiểu (phút)</label>
+                      <input type="number" id="bulkIntervalMin" min="10" value="120" title="Khoảng cách tối thiểu giữa 2 bài" />
+                    </div>
+                    <div>
+                      <label>tối đa (phút)</label>
+                      <input type="number" id="bulkIntervalMax" min="10" value="120" title="Để bằng tối thiểu = cách đều; lớn hơn = tool tự random trong khoảng" />
+                    </div>
                   </div>
                 </div>
               </div>
+              <input type="hidden" id="bulkInterval" value="120" />
               <label>Hoặc list thời điểm (mỗi dòng · YYYY-MM-DD HH:mm)</label>
               <textarea id="bulkTimes" placeholder="2026-07-18 09:00&#10;2026-07-18 19:00"></textarea>
             </div>
 
+            <label class="checks" style="margin:.5rem 0 0">
+              <input type="checkbox" id="bulkIgnoreQuota" />
+              Bỏ giới hạn bài/ngày của page (đăng đủ số đã nhập, không tự cắt theo max/ngày)
+            </label>
             <div class="actions">
               <button type="button" class="btn-ghost" id="btnDryRun">Xem kế hoạch</button>
               <button type="button" class="btn-warn" id="btnBulkSchedule">Hẹn giờ hàng loạt</button>
@@ -601,6 +675,9 @@
     const bulkWorkspaceControlIds = [
       "bulkMode", "bulkPostType", "bulkTz", "bulkDays", "bulkPerDay",
       "bulkForceActive", "bulkStart", "bulkCount", "bulkInterval", "bulkTimes",
+      "bulkIntervalMin", "bulkIntervalMax", "bulkIgnoreQuota",
+      "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder",
+      "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder",
     ];
     const rotationWorkspaceControlIds = [
       "rotMode", "rotDays", "rotPostType", "rotAppStrategy", "rotNowPerDay",
@@ -677,6 +754,28 @@
       return out;
     }
 
+    function defaultBulkStartValue(offsetMs = 2 * 60 * 60 * 1000) {
+      const d = new Date(Date.now() + offsetMs);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    /**
+     * "Start at" được lưu trong workspace state, nên khi mở lại tool hôm sau
+     * giá trị cũ (đã ở quá khứ) bị phục hồi → mọi mốc giờ bị Facebook loại
+     * (cần ≥ 10 phút kể từ hiện tại) → "Không còn slot hợp lệ" trên mọi page.
+     * Luôn đẩy về tương lai nếu giá trị đang ở quá khứ.
+     */
+    function ensureBulkStartFuture() {
+      const el = $("bulkStart");
+      if (!el) return;
+      const minMs = Date.now() + 15 * 60 * 1000;
+      const cur = el.value ? new Date(el.value).getTime() : NaN;
+      if (!Number.isFinite(cur) || cur < minMs) {
+        el.value = defaultBulkStartValue();
+      }
+    }
+
     function applyControls(values, ids) {
       for (const id of ids) {
         const el = $(id);
@@ -685,6 +784,7 @@
         else el.value = values[id] ?? "";
       }
       $("bulkMode")?.dispatchEvent(new Event("change"));
+      ensureBulkStartFuture();
       rotToggleMode();
       $("rotAppStrategy")?.dispatchEvent(new Event("change"));
     }
@@ -1491,18 +1591,42 @@
         post_type: $("bulkPostType").value,
         tz_offset_minutes: Number($("bulkTz").value) || 420,
         dry_run: !!dryRun,
+        ignore_page_quota: $("bulkIgnoreQuota")?.checked || false,
       };
+      if (mode === "fixed") ensureBulkStartFuture();
       if (mode === "active_times") {
         body.days_ahead = Number($("bulkDays").value) || 3;
         body.posts_per_day = Number($("bulkPerDay").value) || 2;
         body.force_active = $("bulkForceActive").checked;
+        body.meta_max_scheduled_posts_per_day = Number($("metaMaxScheduledPerDay")?.value) || 50;
+        body.meta_publish_window_days = Number($("metaPublishWindowDays")?.value) || 30;
+        body.meta_min_interval_minutes = Number($("metaMinIntervalMinutes")?.value) || 120;
+        body.meta_ignore_graph_limit = $("metaIgnoreGraphLimit")?.checked || false;
       } else {
-        const lines = $("bulkTimes").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        const rawLines = $("bulkTimes").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        // Facebook chỉ nhận mốc ≥ 10 phút kể từ hiện tại. List thời điểm cũng được
+        // lưu lại workspace nên hôm sau mở tool là toàn bộ đã ở quá khứ → server
+        // lọc sạch và báo "Không còn slot hợp lệ". Lọc + cảnh báo ngay tại UI.
+        const minMs = Date.now() + 10 * 60 * 1000;
+        const lines = rawLines.filter((s) => {
+          const t = new Date(s.replace(" ", "T")).getTime();
+          return Number.isFinite(t) && t >= minMs;
+        });
+        const droppedPast = rawLines.length - lines.length;
+        if (droppedPast > 0) {
+          flash(`Đã bỏ ${droppedPast} mốc giờ đã qua trong "list thời điểm" (Facebook cần ≥10 phút kể từ hiện tại)`, false);
+        }
         if (lines.length) body.times = lines;
         else {
           body.start_at = $("bulkStart").value ? $("bulkStart").value.replace("T", " ") : null;
           body.count_per_page = Number($("bulkCount").value) || 1;
-          body.interval_minutes = Number($("bulkInterval").value) || 120;
+          const iMin = Number($("bulkIntervalMin")?.value) || 120;
+          const iMaxRaw = Number($("bulkIntervalMax")?.value) || iMin;
+          const iMax = Math.max(iMin, iMaxRaw);
+          body.interval_minutes_min = iMin;
+          body.interval_minutes_max = iMax;
+          // Tương thích cũ: nếu min=max thì gửi luôn interval_minutes cố định
+          body.interval_minutes = iMin === iMax ? iMin : undefined;
         }
       }
       return body;
@@ -1511,6 +1635,7 @@
     function renderBulkResult(r) {
       const box = $("bulkResult");
       const antiOn = r.anti_spam_enabled !== false && r.anti_spam_enabled !== 0;
+      const metaOn = r.meta_scheduled || (r.plan && r.plan[0]?.active?.meta_scheduled);
       const antiLine =
         `<div style="margin:.2rem 0 .5rem;font-size:.8rem">` +
         `Anti-spam: <b class="${antiOn ? "ok" : "fail"}">${antiOn ? "ON" : "OFF"}</b>` +
@@ -1523,6 +1648,7 @@
         (r.page_stagger_step_minutes != null
           ? ` · stagger +${r.page_stagger_step_minutes}p/page`
           : "") +
+        (metaOn ? ` · Meta scheduled: max=${metaOn.max_scheduled_per_day}/ngày · window=${metaOn.publish_window_days} ngày` : "") +
         `</div>`;
 
       if (r.dry_run) {
@@ -1703,6 +1829,13 @@
     };
     $("btnDryRun").onclick = () => runBulk(true);
     $("btnBulkSchedule").onclick = () => runBulk(false);
+
+    // Load meta scheduled controls
+    $("metaMaxScheduledPerDay")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
+    $("metaPublishWindowDays")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
+    $("metaMinIntervalMinutes")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
+    $("metaIgnoreGraphLimit")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
+    $("allow30DaysMax")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
     $("btnAntiChip")?.addEventListener("click", () => toggleAntiSpam());
     $("btnBulkAntiToggle")?.addEventListener("click", () => toggleAntiSpam());
     $("btnBulkPrefHours")?.addEventListener("click", async () => {
@@ -1755,10 +1888,7 @@
     });
 
     (() => {
-      const d = new Date(Date.now() + 2 * 60 * 60 * 1000);
-      const pad = (n) => String(n).padStart(2, "0");
-      $("bulkStart").value =
-        `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      $("bulkStart").value = defaultBulkStartValue();
     })();
 
     /* ── Rotation so-le ── */
@@ -2478,6 +2608,34 @@
         flash(e.message, false);
       }
     };
+    if ($("btnBulkPickMedia"))
+      $("btnBulkPickMedia").onclick = () => pickFolderInto("bulkMediaFolder", "Chọn kho ảnh / video (inbox)");
+    if ($("btnBulkPickPosted"))
+      $("btnBulkPickPosted").onclick = () => pickFolderInto("bulkPostedFolder", "Chọn folder đã đăng (posted)");
+    if ($("btnBulkPickCaptions"))
+      $("btnBulkPickCaptions").onclick = () => pickFolderInto("bulkCaptionsFolder", "Chọn kho tiêu đề / caption (.txt .csv)");
+    if ($("btnBulkApplyFolders"))
+      $("btnBulkApplyFolders").onclick = async () => {
+        const ids = selectedPageIds();
+        if (!ids.length) return flash("Tick ít nhất một Page bên trái", false);
+        const media = $("bulkMediaFolder").value.trim();
+        const posted = $("bulkPostedFolder").value.trim();
+        const captions = $("bulkCaptionsFolder").value.trim();
+        if (!media || !posted || !captions) return flash("Cần chọn đủ Media, Posted và Caption folder", false);
+        try {
+          const r = await api("/api/posting/config-bulk", {
+            method: "PUT",
+            body: JSON.stringify({
+              page_row_ids: ids,
+              config: { media_folder: media, posted_folder: posted, captions_folder: captions },
+            }),
+          });
+          $("bulkFolderStatus").innerHTML = `<span class="ok">Đã lưu 3 kho cho <b>${r.updated}</b> Page.</span>`;
+          flash(`Đã lưu kho cho ${r.updated} Page`, true);
+        } catch (e) {
+          flash(e.message, false);
+        }
+      };
     $("btnRotNowRun").onclick = async () => {
       let settingsBody;
       try {

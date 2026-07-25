@@ -253,7 +253,12 @@ export function isWithinPreferredWindow(opts = {}) {
 export function capSlotsByDailyQuota(slots, policy) {
   const tz = policy.tzOffsetMinutes ?? 420;
   const maxPerDay = Math.max(1, Number(policy.maxPerDay) || 3);
-  const remainingToday = Math.max(0, Number(policy.remainingToday) ?? maxPerDay);
+  // Number(undefined) = NaN và `NaN ?? x` vẫn là NaN → fallback cũ không chạy,
+  // khiến limit thành NaN và mọi so sánh `used >= NaN` luôn false (không cap gì).
+  const remainingRaw = Number(policy.remainingToday);
+  const remainingToday = Number.isFinite(remainingRaw)
+    ? Math.max(0, remainingRaw)
+    : maxPerDay;
   const today = policy.todayYmd || todayYmd(tz);
 
   const sorted = [...(slots || [])].sort((a, b) => a.getTime() - b.getTime());
@@ -314,4 +319,32 @@ export function preferredHoursToWindows(hours, postsPerDay = null) {
     end: `${p(h)}:55`,
     posts: 1,
   }));
+}
+
+/**
+ * Meta official scheduled options (for bulk schedule / 1 bài)
+ * Allows fine-tuning to match Facebook's native scheduling behavior
+ */
+export const META_SCHEDULED_OPTIONS = {
+  max_scheduled_posts_per_page: 50,      // practical Graph API soft limit
+  publish_window_days: 30,            // Graph API max window
+  min_interval_minutes: 15,           // soft recommendation
+  retry_backoff_seconds: 300,         // retry failed scheduled
+};
+
+export function resolveMetaScheduledPolicy(cfg, anti = null) {
+  const s = anti || getAntiSpamSettings();
+  const maxScheduled = Number(cfg?.meta_max_scheduled_posts_per_day || META_SCHEDULED_OPTIONS.max_scheduled_posts_per_page);
+  const windowDays = Number(cfg?.meta_publish_window_days || META_SCHEDULED_OPTIONS.publish_window_days);
+  const minInterval = Math.max(
+    Number(cfg?.interval_minutes) || 0,
+    Number(s.min_interval_minutes_floor) || 15,
+    10
+  );
+  return {
+    max_scheduled_per_day: Math.min(maxScheduled, 100),
+    publish_window_days: Math.min(windowDays, 30),
+    min_interval_minutes: minInterval,
+    retry_backoff_seconds: Number(cfg?.meta_retry_backoff_seconds) || 300,
+  };
 }

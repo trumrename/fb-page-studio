@@ -278,6 +278,109 @@ router.get("/logs/csv", (_req, res) => {
   res.download(file, "post_logs.csv");
 });
 
+/**
+ * delivery_mode chuẩn hoá cho cả dữ liệu cũ (chưa có cột):
+ *  - có cột delivery_mode → dùng nguyên
+ *  - chưa có / rỗng: scheduled_publish_time not null → fb_scheduled, else direct
+ */
+const DELIVERY_MODE_SQL = `
+  CASE
+    WHEN delivery_mode IN ('direct','scheduled_direct','fb_scheduled') THEN delivery_mode
+    WHEN scheduled_publish_time IS NOT NULL AND scheduled_publish_time <> '' THEN 'fb_scheduled'
+    ELSE 'direct'
+  END`;
+// Ngày VN (post_logs lưu UTC) — dùng scheduled_publish_time nếu có, else created_at.
+const VN_DAY_SQL = `date(COALESCE(NULLIF(scheduled_publish_time,''), created_at), '+7 hours')`;
+const SUCCESS_STATUS = "('ok','ok_comment_failed','scheduled','published','schedule_overdue')";
+
+/**
+ * GET /api/posting/stats/summary?day=YYYY-MM-DD
+ * Tiến trình tổng + theo ngày, phân 3 loại delivery_mode.
+ */
+router.get("/stats/summary", (req, res) => {
+  const db = getDb();
+  const day =
+    typeof req.query.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.day)
+      ? req.query.day
+      : null;
+  const rowsFor = (whereDay) => {
+    const rows = db
+      .prepare(
+        `SELECT ${DELIVERY_MODE_SQL} AS mode,
+                SUM(CASE WHEN status IN ${SUCCESS_STATUS} THEN 1 ELSE 0 END) AS ok,
+                SUM(CASE WHEN status NOT IN ${SUCCESS_STATUS} THEN 1 ELSE 0 END) AS fail,
+                COUNT(*) AS total
+         FROM post_logs
+         ${whereDay ? `WHERE ${VN_DAY_SQL} = ?` : ""}
+         GROUP BY mode`
+      )
+      .all(...(whereDay ? [whereDay] : []));
+    const out = {
+      direct: { ok: 0, fail: 0, total: 0 },
+      scheduled_direct: { ok: 0, fail: 0, total: 0 },
+      fb_scheduled: { ok: 0, fail: 0, total: 0 },
+      all: { ok: 0, fail: 0, total: 0 },
+    };
+    for (const r of rows) {
+      const m = out[r.mode] || out.direct;
+      m.ok += Number(r.ok || 0);
+      m.fail += Number(r.fail || 0);
+      m.total += Number(r.total || 0);
+      out.all.ok += Number(r.ok || 0);
+      out.all.fail += Number(r.fail || 0);
+      out.all.total += Number(r.total || 0);
+    }
+    return out;
+  };
+  const todayVn = todayVnKey();
+  res.json({
+    day: day || todayVn,
+    today: rowsFor(day || todayVn),
+    total: rowsFor(null),
+  });
+});
+
+/**
+ * GET /api/posting/history/days — danh sách ngày VN có dữ liệu (mới → cũ).
+ */
+router.get("/history/days", (_req, res) => {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT ${VN_DAY_SQL} AS day, COUNT(*) AS n
+       FROM post_logs
+       GROUP BY day
+       ORDER BY day DESC`
+    )
+    .all();
+  res.json({ days: rows.map((r) => ({ day: r.day, count: Number(r.n || 0) })) });
+});
+
+/**
+ * GET /api/posting/history?day=YYYY-MM-DD&limit= — log 1 ngày VN, phân 3 loại.
+ */
+router.get("/history", (req, res) => {
+  const db = getDb();
+  const day =
+    typeof req.query.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.day)
+      ? req.query.day
+      : todayVnKey();
+  const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
+  const rows = db
+    .prepare(
+      `SELECT id, page_row_id, page_name, post_type, status, error,
+              fb_post_id, fb_post_url, caption, media_path,
+              created_at, scheduled_publish_time,
+              ${DELIVERY_MODE_SQL} AS delivery_mode
+       FROM post_logs
+       WHERE ${VN_DAY_SQL} = ?
+       ORDER BY COALESCE(NULLIF(scheduled_publish_time,''), created_at) ASC
+       LIMIT ?`
+    )
+    .all(day, limit);
+  res.json({ day, count: rows.length, rows });
+});
+
 /** GET /api/posting/pages — pages with config summary */
 router.get("/pages", (_req, res) => {
   const appNames = new Map(listMetaAppsPublic().map((a) => [a.key, a.name]));

@@ -145,7 +145,12 @@ export async function exportPostingHistoryDaily({ day = vnDay() } = {}) {
     report_day: day, app_name: appMap.get(r.meta_app_key || "app1") || r.meta_app_key || "App 1",
     admin_name: r.admin_name || "", admin_fb_id: r.admin_fb_id || "",
     page_name: r.page_name || "", page_id: r.page_id || "",
-    delivery_mode: r.scheduled_publish_time ? "Hẹn giờ Facebook" : "Đăng trực tiếp",
+    delivery_mode:
+      (r.delivery_mode === "fb_scheduled" || (!r.delivery_mode && r.scheduled_publish_time))
+        ? "Hẹn giờ Facebook"
+        : r.delivery_mode === "scheduled_direct"
+          ? "Hẹn giờ đăng trực tiếp"
+          : "Đăng trực tiếp",
     post_type: r.post_type || "", created_vn: r.created_at ? getDb().prepare("SELECT datetime(?, '+7 hours') AS v").get(r.created_at).v : "",
     scheduled_vn: r.scheduled_publish_time ? getDb().prepare("SELECT datetime(?, '+7 hours') AS v").get(r.scheduled_publish_time).v : "",
     status: r.status || "", fb_post_id: r.fb_post_id || "", fb_post_url: r.fb_post_url || "",

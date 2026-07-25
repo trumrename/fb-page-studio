@@ -315,9 +315,20 @@ router.post("/bulk-schedule", async (req, res) => {
       }
     }
     if (!slots.length) {
+      // Đẩy lý do CỤ THỂ của page đầu tiên lên UI. Message chung
+      // ("kiểm tra anti-spam / giờ / page") che mất nguyên nhân thật
+      // (giờ quá khứ / hết quota / chưa có giờ ưa thích).
+      const reasons = [
+        ...new Set(
+          (planned.plan || []).map((p) => p.error).filter(Boolean)
+        ),
+      ];
       return res.status(400).json({
         ok: false,
-        error: "Không có slot hợp lệ để hẹn (kiểm tra anti-spam / giờ / page)",
+        error: reasons.length
+          ? `Không có slot hợp lệ để hẹn — ${reasons[0]}${reasons.length > 1 ? ` (+${reasons.length - 1} lý do khác)` : ""}`
+          : "Không có slot hợp lệ để hẹn (kiểm tra anti-spam / giờ / page)",
+        reasons,
         plan: planned,
       });
     }

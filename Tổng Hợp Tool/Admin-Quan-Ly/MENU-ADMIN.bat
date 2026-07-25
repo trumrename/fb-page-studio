@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal
-cd /d "%~dp0\.."
+cd /d "%~dp0\..\.."
 title FB Page Studio — Admin
 
 :menu
@@ -30,10 +30,26 @@ if "%c%"=="3" goto lifetime
 if "%c%"=="4" goto custom
 if "%c%"=="5" goto list
 if "%c%"=="6" goto verify
-if "%c%"=="7" start "" "%CD%\keys\issued" & goto menu
-if "%c%"=="8" start "" "%CD%\pack-customer" & goto menu
-if "%c%"=="9" start "" "%CD%\Luu-Tru-Ban-Cu" & goto menu
+if "%c%"=="7" goto openIssued
+if "%c%"=="8" goto openCustomer
+if "%c%"=="9" goto openArchive
 if "%c%"=="0" exit /b 0
+goto menu
+
+rem cmd tach "&" o top level nen "if ... start ... & goto menu" lam goto chay
+rem vo dieu kien =^> cac lua chon 8/9/0 khong bao gio toi duoc. Dung goto rieng.
+rem Dung %~dp0.. (thu muc cha cua Admin-Quan-Ly) thay vi go ten thu muc co dau,
+rem tranh phu thuoc code page khi cmd doc duong dan Unicode.
+:openIssued
+start "" "%CD%\keys\issued"
+goto menu
+
+:openCustomer
+start "" "%~dp0..\pack-customer"
+goto menu
+
+:openArchive
+start "" "%~dp0..\Luu-Tru-Ban-Cu"
 goto menu
 
 :commercial
@@ -70,12 +86,22 @@ pause
 goto menu
 
 :verify
-set /p F=Duong dan file .txt key (hoac de trong de dan KEY): 
+set "F="
+set "K="
+set /p F=Duong dan file .txt key (hoac de trong de dan KEY):
 if not "%F%"=="" (
   node scripts\verify-license-key.mjs --file "%F%"
-) else (
-  set /p K=Dan KEY: 
-  node scripts\verify-license-key.mjs "%K%"
+  pause
+  goto menu
 )
+rem KHONG dat "set /p K" va "%K%" trong cung mot khoi ( ) — cmd expand %K%
+rem ngay luc parse khoi nen se luon rong. Tach ra ngoai khoi.
+set /p K=Dan KEY:
+if "%K%"=="" (
+  echo Chua nhap KEY.
+  pause
+  goto menu
+)
+node scripts\verify-license-key.mjs "%K%"
 pause
 goto menu

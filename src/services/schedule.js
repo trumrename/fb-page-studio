@@ -463,6 +463,9 @@ export async function scheduleBulk(body = {}) {
 
     // Page post config (dùng chung cho mọi mode)
     const cfg = getPagePostConfig(pageRowId);
+    // Min gap dùng chung cho mọi mode (trước đây chỉ khai báo trong nhánh
+    // "fixed" nên nhánh "windows" tham chiếu minGap → ReferenceError).
+    const minGap = resolveMinGapMinutes(cfg, antiGlobal);
 
     // Meta official scheduled policy (if set)
     const metaPolicy = resolveMetaScheduledPolicy(cfg, antiGlobal);
@@ -474,7 +477,6 @@ export async function scheduleBulk(body = {}) {
     };
 
     if (mode === "fixed") {
-      const minGap = resolveMinGapMinutes(cfg, antiGlobal);
       if (Array.isArray(body.times) && body.times.length) {
         slots = parseFixedTimes(body.times, tz).map(
           (d) => new Date(d.getTime() + pageStagger * 60 * 1000)
@@ -671,6 +673,11 @@ export async function scheduleBulk(body = {}) {
 
     // filter valid Graph window: 10 min .. 30 days
     const now = Date.now();
+    const slotsBeforeWindow = slots.length;
+    const tooSoon = slots.filter((d) => d.getTime() < now + 10 * 60 * 1000).length;
+    const tooFar = slots.filter(
+      (d) => d.getTime() > now + 30 * 24 * 60 * 60 * 1000
+    ).length;
     slots = slots.filter(
       (d) =>
         d.getTime() >= now + 10 * 60 * 1000 &&
@@ -678,18 +685,53 @@ export async function scheduleBulk(body = {}) {
     );
 
     // Cap by page daily quota (today = remaining after direct + already-scheduled)
+    // ignorePageCap (tick "bỏ giới hạn bài/ngày" hoặc anti-spam OFF) phải bỏ luôn
+    // cap của HÔM NAY. Trước đây vẫn truyền policy.remaining_today, nên page đã
+    // đăng đủ max/ngày => remaining=0 => mọi slot hôm nay bị trim.
     const capped = capSlotsByDailyQuota(slots, {
       maxPerDay: policy.max_posts_per_day_effective,
-      remainingToday: policy.remaining_today,
+      remainingToday: ignorePageCap
+        ? policy.max_posts_per_day_effective
+        : policy.remaining_today,
       todayYmd: policy.today_ymd || todayYmd(tz),
       tzOffsetMinutes: tz,
     });
     slots = capped.slots;
     policyMeta = {
       ...policyMeta,
+      ignore_page_quota: ignorePageCap,
       quota_trimmed_slots: capped.trimmed,
       used_per_day_plan: capped.used_per_day,
+      slots_before_window_filter: slotsBeforeWindow,
+      slots_dropped_too_soon: tooSoon,
+      slots_dropped_too_far: tooFar,
     };
+
+    // Thông báo lỗi phải nói ĐÚNG nguyên nhân, không gộp thành "Không còn slot hợp lệ".
+    let slotError = null;
+    if (!slots.length) {
+      if (capped.trimmed) {
+        slotError =
+          `Hết quota ngày (max ${policy.max_posts_per_day_effective}/ngày, hôm nay đã dùng ` +
+          `${policy.used_today}, còn ${policy.remaining_today}). ` +
+          `Tick "Bỏ giới hạn bài/ngày" hoặc tăng max bài/ngày của page.`;
+      } else if (!slotsBeforeWindow) {
+        slotError =
+          mode === "fixed"
+            ? "Không sinh được mốc giờ nào — kiểm tra Start at / số bài / list thời điểm."
+            : "Không sinh được mốc giờ nào — kiểm tra giờ ưa thích / khung giờ.";
+      } else if (tooSoon && !tooFar) {
+        slotError =
+          `Tất cả ${tooSoon} mốc giờ đã ở quá khứ hoặc quá gần (Facebook yêu cầu ≥ 10 phút ` +
+          `kể từ hiện tại). Đổi "Start at" sang giờ tương lai.`;
+      } else if (tooFar && !tooSoon) {
+        slotError = `Tất cả ${tooFar} mốc giờ vượt 30 ngày — giới hạn hẹn giờ của Facebook.`;
+      } else {
+        slotError =
+          `Không mốc giờ nào nằm trong cửa sổ hợp lệ của Facebook ` +
+          `(≥ 10 phút và ≤ 30 ngày): ${tooSoon} quá gần/quá khứ, ${tooFar} quá xa.`;
+      }
+    }
 
     plan.push({
       page_row_id: pageRowId,
@@ -698,11 +740,7 @@ export async function scheduleBulk(body = {}) {
       active: activeMeta,
       policy: policyMeta,
       page_stagger_minutes: pageStagger,
-      error: slots.length
-        ? null
-        : capped.trimmed
-          ? `Hết quota ngày (max ${policy.max_posts_per_day_effective}/ngày, hôm nay còn ${policy.remaining_today}). Tăng max bài/ngày page hoặc bỏ tick hẹn trùng.`
-          : "Không còn slot hợp lệ",
+      error: slotError,
     });
   }
 

@@ -18,6 +18,28 @@ import { decryptToken } from "./crypto.js";
 export const DEFAULT_PREFERRED_HOURS = [9, 12, 19, 21];
 
 /**
+ * Seeded PRNG (mulberry32) — cùng seed cho ra cùng chuỗi số.
+ * Dùng để "Xem kế hoạch" (dry-run) và "Hẹn giờ thật" sinh ra CÙNG bộ giờ,
+ * tránh tình trạng mỗi lần bấm lại ra giờ khác.
+ */
+function makeSeededRng(seedStr) {
+  const s = String(seedStr);
+  let h = 1779033703 ^ s.length;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let a = h >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
  * Aggregate hourly scores from insights values.
  * FB returns value as object: { "0": n, "1": n, ... "23": n }.
  */
@@ -469,6 +491,8 @@ export function buildSlotsFromActiveHours(topHours, opts = {}) {
  *   tzOffsetMinutes — offset phút so GMT (mặc định 420 = VN)
  *   pageStaggerMinutes — lệch nhiều page (bulk)
  *   minGapMinutes   — khoảng tối thiểu giữa 2 bài cùng page
+ *   seed            — chuỗi seed; cùng seed => cùng giờ (dry-run == chạy thật).
+ *                     Bỏ trống => random thật (mỗi lần gọi ra giờ khác).
  * @returns {Date[]} UTC Date objects, đã sắp xếp và áp gap
  */
 export function buildSlotsFromWindows(windows, opts = {}) {
@@ -478,6 +502,9 @@ export function buildSlotsFromWindows(windows, opts = {}) {
     : 420;
   const staggerMin = Number(opts.pageStaggerMinutes) || 0;
   const minGapMin = Math.max(0, Number(opts.minGapMinutes) || 30);
+  // Có seed thì dùng PRNG tất định: "Xem kế hoạch" và "Hẹn giờ thật" phải ra
+  // cùng bộ giờ, nếu không user thấy giờ nhảy mỗi lần bấm.
+  const rand = opts.seed != null ? makeSeededRng(opts.seed) : Math.random;
 
   /** Parse "HH:mm" → [hour, minute] hoặc null */
   const parseHM = (s) => {
@@ -510,7 +537,7 @@ export function buildSlotsFromWindows(windows, opts = {}) {
       // Sinh count random phút trong [startMins, endMins), rồi sort tăng dần
       const randMins = Array.from(
         { length: count },
-        () => startMins + Math.random() * span
+        () => startMins + rand() * span
       ).sort((a, b) => a - b);
 
       for (const minOfDay of randMins) {

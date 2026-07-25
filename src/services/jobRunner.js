@@ -43,6 +43,7 @@ function restoreJobs() {
     for (const job of list.slice(0, MAX_JOBS)) {
       if (!job?.id || !Array.isArray(job.tasks)) continue;
       if (["running", "paused", "queued"].includes(job.status)) {
+        job.status = "interrupted";
         let hasPending = false;
         for (const task of job.tasks) {
           if (task.status === "running") {

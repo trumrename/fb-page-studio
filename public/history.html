@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lịch sử đăng · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    .mode-pill{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.72rem;font-weight:700;white-space:nowrap}
+    .mode-direct{background:rgba(96,165,250,.18);color:#93c5fd}
+    .mode-scheduled_direct{background:rgba(167,139,250,.18);color:#c4b5fd}
+    .mode-fb_scheduled{background:rgba(52,211,153,.18);color:#6ee7b7}
+    .st-ok{color:#6ee7b7}.st-fail{color:#f87171}
+    .day-chip{cursor:pointer;padding:.3rem .6rem;border-radius:8px;border:1px solid rgba(255,255,255,.12);font-size:.8rem;white-space:nowrap;background:transparent;color:inherit}
+    .day-chip.active{background:rgba(96,165,250,.2);border-color:rgba(96,165,250,.5)}
+    .hist-table{width:100%;border-collapse:collapse;font-size:.82rem}
+    .hist-table th,.hist-table td{padding:.4rem .5rem;border-bottom:1px solid rgba(255,255,255,.07);text-align:left;vertical-align:top}
+    .hist-table th{position:sticky;top:0;background:#12151c;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;opacity:.8}
+    .tile{padding:.7rem .9rem;border-radius:10px;border:1px solid rgba(255,255,255,.09);min-width:9rem}
+    .tile b{font-size:1.35rem;display:block}
+    .caption-cell{max-width:22rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  </style>
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/">
+        <div class="brand-mark">FB</div>
+        <div class="brand-text">
+          <strong>Page Studio</strong>
+          <span>Graph API · Official</span>
+        </div>
+      </a>
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="/"><span class="ico">1</span> Connect & chọn Page</a>
+      <a class="nav-item" href="/posting.html"><span class="ico">2</span> Cấu hình & chạy</a>
+      <a class="nav-item" href="/app.html"><span class="ico">3</span> Tiến trình vận hành</a>
+      <a class="nav-item" href="/antispam.html"><span class="ico">4</span> Giới hạn Anti-spam</a>
+      <div class="nav-label">Báo cáo</div>
+      <a class="nav-item active" href="/history.html"><span class="ico">5</span> Lịch sử đăng</a>
+      <div class="nav-label">System</div>
+      <a class="nav-item" href="/license.html"><span class="ico">🔑</span> License</a>
+    </aside>
+
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <h1>Lịch sử đăng</h1>
+            <div class="sub">Xem theo ngày · trực tiếp · hẹn giờ trực tiếp · hẹn giờ FB</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <input type="date" id="dayPicker" class="input" style="max-width:11rem" />
+          <button type="button" class="btn-ghost btn-sm" id="btnCsv">Tải CSV ngày này</button>
+          <button type="button" class="btn-primary btn-sm" id="btnXlsx">Tải XLSX tất cả sheet</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="flash" id="flash"></div>
+
+        <div class="panel section-gap" style="margin-top:0">
+          <div class="panel-hd"><span>Tiến trình</span></div>
+          <div class="panel-body">
+            <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.4rem">
+              <div class="tile"><span class="muted" style="font-size:.72rem">HÔM NAY · TỔNG</span><b id="tToday">0</b><span class="muted" id="tTodayDetail">—</span></div>
+              <div class="tile"><span class="muted" style="font-size:.72rem">Đăng trực tiếp</span><b id="tDirect">0</b><span class="muted" id="tDirectD">—</span></div>
+              <div class="tile"><span class="muted" style="font-size:.72rem">Hẹn giờ trực tiếp</span><b id="tSchedDirect">0</b><span class="muted" id="tSchedDirectD">—</span></div>
+              <div class="tile"><span class="muted" style="font-size:.72rem">Hẹn giờ FB</span><b id="tFb">0</b><span class="muted" id="tFbD">—</span></div>
+              <div class="tile" style="border-color:rgba(96,165,250,.3)"><span class="muted" style="font-size:.72rem">TỔNG CỘNG (mọi ngày)</span><b id="tAll">0</b><span class="muted" id="tAllD">—</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel section-gap">
+          <div class="panel-hd"><span>Sheet theo ngày</span><span class="hint" id="daysHint">—</span></div>
+          <div class="panel-body">
+            <input type="text" id="daySearch" class="input" placeholder="Tìm ngày (YYYY-MM-DD)…" style="max-width:16rem;margin-bottom:.5rem" />
+            <div id="dayChips" style="display:flex;gap:.4rem;flex-wrap:wrap;max-height:8rem;overflow:auto"></div>
+          </div>
+        </div>
+
+        <div class="panel section-gap">
+          <div class="panel-hd"><span id="tableTitle">Lịch sử</span><span class="hint" id="rowCount">—</span></div>
+          <div class="panel-body" style="overflow:auto;max-height:60vh">
+            <table class="hist-table">
+              <thead><tr>
+                <th>Giờ (VN)</th><th>Page</th><th>Loại giao</th><th>Kiểu bài</th>
+                <th>Trạng thái</th><th>Link</th><th>Caption</th><th>Lỗi</th>
+              </tr></thead>
+              <tbody id="histBody"><tr><td colspan="8" class="muted">Đang tải…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    async function api(url) {
+      const r = await fetch(url);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      return d;
+    }
+    function flash(msg, ok = true) {
+      const el = $("flash");
+      el.textContent = msg;
+      el.className = "flash show " + (ok ? "ok" : "err");
+      setTimeout(() => (el.className = "flash"), 3000);
+    }
+    function todayVn() {
+      return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(new Date());
+    }
+    const MODE_LABEL = {
+      direct: "Đăng trực tiếp",
+      scheduled_direct: "Hẹn giờ trực tiếp",
+      fb_scheduled: "Hẹn giờ FB",
+    };
+    const OK_STATUS = new Set(["ok", "ok_comment_failed", "scheduled", "published", "schedule_overdue"]);
+
+    let selectedDay = todayVn();
+    let allDays = [];
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    }
+
+    async function loadSummary() {
+      try {
+        const r = await api(`/api/posting/stats/summary?day=${selectedDay}`);
+        const t = r.today, tot = r.total;
+        const line = (m) => `OK ${m.ok} · FAIL ${m.fail}`;
+        $("tToday").textContent = t.all.total;
+        $("tTodayDetail").textContent = line(t.all);
+        $("tDirect").textContent = t.direct.total;
+        $("tDirectD").textContent = line(t.direct);
+        $("tSchedDirect").textContent = t.scheduled_direct.total;
+        $("tSchedDirectD").textContent = line(t.scheduled_direct);
+        $("tFb").textContent = t.fb_scheduled.total;
+        $("tFbD").textContent = line(t.fb_scheduled);
+        $("tAll").textContent = tot.all.total;
+        $("tAllD").textContent = line(tot.all);
+      } catch (e) { flash(e.message, false); }
+    }
+
+    function renderDayChips() {
+      const q = $("daySearch").value.trim();
+      const list = q ? allDays.filter((d) => d.day.includes(q)) : allDays;
+      const box = $("dayChips");
+      if (!list.length) { box.innerHTML = `<span class="muted">Chưa có dữ liệu</span>`; return; }
+      box.innerHTML = list.map((d, i) => {
+        const label = d.day === todayVn() ? `Hôm nay` : d.day;
+        return `<button class="day-chip ${d.day === selectedDay ? "active" : ""}" data-day="${d.day}">${label} · ${d.count}</button>`;
+      }).join("");
+      box.querySelectorAll(".day-chip").forEach((el) => {
+        el.onclick = () => { selectedDay = el.dataset.day; $("dayPicker").value = selectedDay; refresh(); };
+      });
+    }
+
+    async function loadDays() {
+      try {
+        const r = await api(`/api/posting/history/days`);
+        allDays = r.days || [];
+        $("daysHint").textContent = `${allDays.length} ngày có dữ liệu`;
+        renderDayChips();
+      } catch (e) { flash(e.message, false); }
+    }
+
+    async function loadHistory() {
+      $("histBody").innerHTML = `<tr><td colspan="8" class="muted">Đang tải…</td></tr>`;
+      try {
+        const r = await api(`/api/posting/history?day=${selectedDay}&limit=2000`);
+        $("tableTitle").textContent = `Lịch sử · ${selectedDay === todayVn() ? "Hôm nay" : selectedDay}`;
+        $("rowCount").textContent = `${r.count} bài`;
+        if (!r.rows.length) {
+          $("histBody").innerHTML = `<tr><td colspan="8" class="muted">Không có bài nào trong ngày này</td></tr>`;
+          return;
+        }
+        $("histBody").innerHTML = r.rows.map((row) => {
+          const when = row.scheduled_publish_time || row.created_at || "";
+          const timeVn = when ? new Date(when).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", hour12: false }) : "—";
+          const mode = row.delivery_mode || "direct";
+          const okCls = OK_STATUS.has(row.status) ? "st-ok" : "st-fail";
+          const link = row.fb_post_url ? `<a href="${esc(row.fb_post_url)}" target="_blank" rel="noopener">mở</a>` : "—";
+          return `<tr>
+            <td>${esc(timeVn)}</td>
+            <td>${esc(row.page_name || "?")}</td>
+            <td><span class="mode-pill mode-${mode}">${esc(MODE_LABEL[mode] || mode)}</span></td>
+            <td>${esc(row.post_type || "—")}</td>
+            <td class="${okCls}">${esc(row.status || "—")}</td>
+            <td>${link}</td>
+            <td class="caption-cell" title="${esc(row.caption || "")}">${esc(row.caption || "—")}</td>
+            <td class="st-fail">${esc(row.error || "")}</td>
+          </tr>`;
+        }).join("");
+      } catch (e) {
+        $("histBody").innerHTML = `<tr><td colspan="8" class="st-fail">${esc(e.message)}</td></tr>`;
+      }
+    }
+
+    async function refresh() {
+      renderDayChips();
+      await Promise.all([loadSummary(), loadHistory()]);
+    }
+
+    $("dayPicker").value = selectedDay;
+    $("dayPicker").onchange = () => {
+      if (/^\d{4}-\d{2}-\d{2}$/.test($("dayPicker").value)) { selectedDay = $("dayPicker").value; refresh(); }
+    };
+    $("daySearch").oninput = renderDayChips;
+    $("btnCsv").onclick = async () => {
+      // Build fresh then download the per-day CSV
+      try {
+        const res = await fetch(`/api/reports/daily/history`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ day: selectedDay }),
+        });
+        const d = await res.json();
+        if (!res.ok || !d.ok) throw new Error(d.error || "Lỗi xuất CSV");
+        window.location = `/api/reports/daily/file/lich-su-dang-${selectedDay}.csv`;
+      } catch (e) { flash(e.message, false); }
+    };
+    $("btnXlsx").onclick = async () => {
+      try {
+        const res = await fetch(`/api/reports/daily/history`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ day: selectedDay }),
+        });
+        const d = await res.json();
+        if (!res.ok || !d.ok) throw new Error(d.error || "Lỗi xuất XLSX");
+        window.location = `/api/reports/daily/file/lich-su-dang.xlsx`;
+      } catch (e) { flash(e.message, false); }
+    };
+    $("menuBtn")?.addEventListener("click", () => $("sidebar")?.classList.toggle("open"));
+
+    loadDays();
+    refresh();
+    setInterval(loadSummary, 5000);
+  </script>
+</body>
+</html>
