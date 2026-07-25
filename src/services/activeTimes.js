@@ -459,6 +459,91 @@ export function buildSlotsFromActiveHours(topHours, opts = {}) {
 }
 
 /**
+ * Build random slots từ danh sách time windows cho mỗi ngày.
+ * Mỗi ngày sinh random giờ bên trong mỗi window → các ngày KHÁC NHAU.
+ *
+ * @param {Array<{name?:string, start:string, end:string, posts?:number}>} windows
+ *   start/end: "HH:mm" theo local time (VN +7 mặc định)
+ * @param {object} opts
+ *   daysAhead       — số ngày sinh slot (mặc định 3, tối đa 30)
+ *   tzOffsetMinutes — offset phút so GMT (mặc định 420 = VN)
+ *   pageStaggerMinutes — lệch nhiều page (bulk)
+ *   minGapMinutes   — khoảng tối thiểu giữa 2 bài cùng page
+ * @returns {Date[]} UTC Date objects, đã sắp xếp và áp gap
+ */
+export function buildSlotsFromWindows(windows, opts = {}) {
+  const daysAhead = Math.min(30, Math.max(1, Number(opts.daysAhead) || 3));
+  const offsetMin = Number.isFinite(Number(opts.tzOffsetMinutes))
+    ? Number(opts.tzOffsetMinutes)
+    : 420;
+  const staggerMin = Number(opts.pageStaggerMinutes) || 0;
+  const minGapMin = Math.max(0, Number(opts.minGapMinutes) || 30);
+
+  /** Parse "HH:mm" → [hour, minute] hoặc null */
+  const parseHM = (s) => {
+    const m = String(s || "").match(/^(\d{1,2}):(\d{2})$/);
+    return m ? [Number(m[1]), Number(m[2])] : null;
+  };
+
+  const now = Date.now();
+  const minMs = now + 10 * 60 * 1000;          // tối thiểu 10p từ hiện tại
+  const maxMs = now + 30 * 24 * 60 * 60 * 1000; // tối đa 30 ngày
+  const nowInTz = new Date(now + offsetMin * 60 * 1000);
+  const y0 = nowInTz.getUTCFullYear();
+  const m0 = nowInTz.getUTCMonth();
+  const d0 = nowInTz.getUTCDate();
+
+  const slots = [];
+
+  for (let day = 0; day < daysAhead; day++) {
+    for (const win of windows || []) {
+      const startHM = parseHM(win.start);
+      const endHM = parseHM(win.end);
+      const count = Math.max(1, Math.min(10, Number(win.posts) || 1));
+      if (!startHM || !endHM) continue;
+
+      const startMins = startHM[0] * 60 + startHM[1];
+      const endMins = endHM[0] * 60 + endHM[1];
+      if (endMins <= startMins) continue;
+      const span = endMins - startMins;
+
+      // Sinh count random phút trong [startMins, endMins), rồi sort tăng dần
+      const randMins = Array.from(
+        { length: count },
+        () => startMins + Math.random() * span
+      ).sort((a, b) => a - b);
+
+      for (const minOfDay of randMins) {
+        const h = Math.floor(minOfDay / 60);
+        const mn = Math.round(minOfDay % 60);
+        const base = new Date(Date.UTC(y0, m0, d0 + day, h, mn, 0));
+        const realMs = base.getTime() - offsetMin * 60 * 1000 + staggerMin * 60 * 1000;
+        if (realMs < minMs || realMs > maxMs) continue;
+        slots.push(new Date(realMs));
+      }
+    }
+  }
+
+  slots.sort((a, b) => a.getTime() - b.getTime());
+
+  // Ép khoảng tối thiểu giữa các bài cùng page
+  if (minGapMin > 0 && slots.length > 1) {
+    const gapMs = minGapMin * 60 * 1000;
+    const out = [slots[0]];
+    for (let i = 1; i < slots.length; i++) {
+      const prev = out[out.length - 1].getTime();
+      let t = slots[i].getTime();
+      if (t < prev + gapMs) t = prev + gapMs;
+      if (t < minMs || t > maxMs) continue;
+      out.push(new Date(t));
+    }
+    return out;
+  }
+
+  return slots;
+}
+
+/**
  * Parse fixed times: ISO strings or "YYYY-MM-DD HH:mm" with tz offset.
  */
 export function parseFixedTimes(times, tzOffsetMinutes = 420) {

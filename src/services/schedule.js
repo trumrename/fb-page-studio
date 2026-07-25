@@ -17,6 +17,7 @@ import { getCaptionStats, getPagePostConfig, savePagePostConfig } from "./poster
 import {
   getActiveTimesForPageRow,
   buildSlotsFromActiveHours,
+  buildSlotsFromWindows,
   parseFixedTimes,
 } from "./activeTimes.js";
 import { appendPostCsv } from "./postLogCsv.js";
@@ -391,7 +392,12 @@ export async function scheduleBulk(body = {}) {
     throw new Error("Chọn ít nhất 1 page (page_row_ids)");
   }
 
-  const mode = body.mode === "fixed" ? "fixed" : "active_times";
+  const mode =
+    body.mode === "fixed"
+      ? "fixed"
+      : body.mode === "windows"
+        ? "windows"
+        : "active_times";
   const tz = Number.isFinite(Number(body.tz_offset_minutes))
     ? Number(body.tz_offset_minutes)
     : 420;
@@ -407,7 +413,8 @@ export async function scheduleBulk(body = {}) {
     ? Math.min(12, Math.max(3, Number(antiGlobal.jitter_minutes_min) || 3))
     : 5;
   let pageIndex = 0;
-  const ignorePageCap = !!body.ignore_page_quota;
+  // Khi anti-spam OFF, tự động bỏ cap ngày — user tắt anti = muốn đăng tự do
+  const ignorePageCap = !!body.ignore_page_quota || !antiOn;
   // Hẹn giờ cố định: tôn trọng đúng giờ/khoảng cách người dùng nhập,
   // KHÔNG cộng jitter ngẫu nhiên, KHÔNG ép min-gap của page.
   // Mặc định bật cho mode "fixed"; có thể tắt bằng body.strict_timing === false.
@@ -550,6 +557,48 @@ export async function scheduleBulk(body = {}) {
         page_stagger_minutes: pageStagger,
         anti_spam_enabled: antiOn,
       };
+    } else if (mode === "windows") {
+      // windows — random giờ trong từng khung (vd Sáng 07:30–11:30, Tối 18:00–21:30)
+      // Mỗi ngày sinh giờ random khác nhau, không cố định như active_times
+      const wins = Array.isArray(body.windows) ? body.windows : [];
+      if (!wins.length) {
+        plan.push({
+          page_row_id: pageRowId,
+          page_name: page.name,
+          slots: [],
+          policy: policyMeta,
+          error: "mode windows cần windows: [{name?, start, end, posts}]",
+        });
+        continue;
+      }
+      // Seed theo page + ngày + cấu hình windows => dry-run và chạy thật ra cùng giờ
+      const seedStr = `${pageRowId}.${daysAhead}.${JSON.stringify(wins)}`;
+      slots = buildSlotsFromWindows(wins, {
+        daysAhead,
+        tzOffsetMinutes: tz,
+        pageStaggerMinutes: pageStagger,
+        minGapMinutes: minGap,
+        seed: seedStr,
+      });
+      activeMeta = {
+        source: "windows",
+        windows: wins,
+        page_stagger_minutes: pageStagger,
+        anti_spam_enabled: antiOn,
+        posts_per_day_effective: wins.reduce((s, w) => s + (Number(w.posts) || 1), 0),
+      };
+      if (!slots.length) {
+        plan.push({
+          page_row_id: pageRowId,
+          page_name: page.name,
+          slots: [],
+          active: activeMeta,
+          policy: policyMeta,
+          error:
+            "Slot trống (tất cả khung giờ đã qua hôm nay). Tăng số ngày hoặc điều chỉnh khung giờ.",
+        });
+        continue;
+      }
     } else {
       // active_times — giờ ưa thích / preset từng page (same hours as Direct Local preferred)
       const active = await getActiveTimesForPageRow(pageRowId, {
