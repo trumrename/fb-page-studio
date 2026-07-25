@@ -90,7 +90,9 @@ function parseJsonArr(s) {
   }
 }
 
+let _tablesEnsured = false;
 export function ensureAntiSpamTables() {
+  if (_tablesEnsured) return;
   const db = getDb();
   db.exec(`
     CREATE TABLE IF NOT EXISTS anti_spam_settings (
@@ -152,6 +154,7 @@ export function ensureAntiSpamTables() {
   if (!bo) {
     db.prepare(`INSERT INTO graph_backoff (id, until_ts, streak) VALUES (1, 0, 0)`).run();
   }
+  _tablesEnsured = true;
 }
 
 export function getAntiSpamSettings() {
@@ -766,6 +769,9 @@ export function enforceBulkLimits(plan, body = {}) {
   if (!s.enabled) {
     return { plan, trimmed: false, settings: s };
   }
+  // strictTiming: hẹn giờ cố định — tôn trọng đúng giờ người dùng nhập,
+  // KHÔNG cộng jitter ngẫu nhiên (nếu không mỗi lần xem kế hoạch ra giờ khác).
+  const strictTiming = !!body.strict_timing;
   let pages = Array.isArray(plan) ? [...plan] : [];
   let trimmed = false;
   if (pages.length > s.bulk_max_pages) {
@@ -779,10 +785,10 @@ export function enforceBulkLimits(plan, body = {}) {
       slots = slots.slice(0, s.bulk_max_slots_per_page);
       trimmed = true;
     }
-    // jitter each slot
+    // jitter each slot (bỏ qua khi strictTiming — giữ đúng giờ đã nhập)
     slots = slots.map((d) => {
       const dt = d instanceof Date ? d : new Date(d);
-      return applyJitterToDate(dt);
+      return strictTiming ? dt : applyJitterToDate(dt);
     });
     // re-filter 10min-30d after jitter
     const now = Date.now();

@@ -47,6 +47,7 @@ import {
   todayYmd,
 } from "./schedulePolicy.js";
 
+/** Vietnam local date — IANA timezone (not Windows default) */
 function todayKey() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Ho_Chi_Minh",
@@ -205,7 +206,7 @@ export function savePagePostConfig(pageRowId, body) {
 }
 
 function resetDayCounterIfNeeded(cfg) {
-  const today = todayKey();
+  const today = todayYmd(420);
   if (cfg.posts_today_date !== today) {
     return { ...cfg, posts_today: 0, posts_today_date: today };
   }
@@ -240,18 +241,26 @@ function hasNearbyEffectivePost(pageRowId, targetMs, gapMinutes) {
 
 function logPost(row) {
   const db = getDb();
+  // direct = đăng trực tiếp (scheduler/tay); scheduled_direct = hẹn giờ đăng trực tiếp (rotation run-now)
+  const rowWithMode = {
+    ...row,
+    delivery_mode:
+      row.delivery_mode === "scheduled_direct" ? "scheduled_direct" : "direct",
+  };
   const info = db
     .prepare(
       `INSERT INTO post_logs (
         page_row_id, page_id, page_name, post_type, media_path, caption,
-        fb_post_id, fb_post_url, day_index, status, error, comment_text, comment_id
+        fb_post_id, fb_post_url, day_index, status, error, comment_text, comment_id,
+        delivery_mode
       ) VALUES (
         @page_row_id, @page_id, @page_name, @post_type, @media_path, @caption,
-        @fb_post_id, @fb_post_url, @day_index, @status, @error, @comment_text, @comment_id
+        @fb_post_id, @fb_post_url, @day_index, @status, @error, @comment_text, @comment_id,
+        @delivery_mode
       )`
     )
-    .run(row);
-  const logRow = { id: info.lastInsertRowid, ...row, created_at: new Date().toISOString() };
+    .run(rowWithMode);
+  const logRow = { id: info.lastInsertRowid, ...rowWithMode, created_at: new Date().toISOString() };
   try {
     appendPostCsv(logRow);
   } catch (e) {
@@ -267,6 +276,10 @@ function logPost(row) {
 async function runOnePostUnlocked(pageRowId, opts = {}) {
   ensureAntiSpamTables();
   assertLicenseActive();
+  // scheduled_direct = hẹn giờ đăng trực tiếp (rotation run-now chờ đúng giờ rồi đăng);
+  // direct = đăng ngay (scheduler tick / đăng tay).
+  const deliveryMode =
+    opts.delivery_mode === "scheduled_direct" ? "scheduled_direct" : "direct";
   const db = getDb();
   const page = db
     .prepare(
@@ -347,19 +360,20 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
   let mediaPath = null;
   let mediaSkipped = 0;
   const triedCaptions = [];
-  let selectedCaptionSlot = captionSlot;
   const captionPoolTotal = getCaptionStats(cfg).total;
   const maxCaptionAttempts = Math.max(1, captionPoolTotal || 1);
+  // Reserve caption slot ONCE before loop — retries use slot offset so DB
+  // counter is not burned on every attempt (Bug #2 fix).
+  const baseReservation = reserveCaptionSlot({
+    captionsFolder: cfg.captions_folder,
+    captions: cfg.captions,
+    pageRowId,
+  });
+  let selectedCaptionSlot = baseReservation.slot_index;
   for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
-    const reservation = reserveCaptionSlot({
-      captionsFolder: cfg.captions_folder,
-      captions: cfg.captions,
-      pageRowId,
-    });
-    selectedCaptionSlot = reservation.slot_index;
     caption = pickCaption(
       cfg.captions,
-      selectedCaptionSlot,
+      selectedCaptionSlot + attempt,
       "sequential_shuffle",
       cfg.captions_folder,
       triedCaptions
@@ -527,6 +541,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
             error: ce.message,
             comment_text: commentText,
             comment_id: null,
+            delivery_mode: deliveryMode,
           });
           savePagePostConfig(pageRowId, {
             ...cfg,
@@ -534,7 +549,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
             caption_slot_index: caption ? selectedCaptionSlot + 1 : captionSlot,
             last_post_at: new Date().toISOString().replace("T", " ").slice(0, 19),
             posts_today: dayIndex,
-            posts_today_date: todayKey(),
+            posts_today_date: todayYmd(420),
           });
           return {
             ok: true,
@@ -564,6 +579,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       error: null,
       comment_text: commentText,
       comment_id: commentId,
+      delivery_mode: deliveryMode,
     });
 
     savePagePostConfig(pageRowId, {
@@ -572,7 +588,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       caption_slot_index: caption ? selectedCaptionSlot + 1 : captionSlot,
       last_post_at: new Date().toISOString().replace("T", " ").slice(0, 19),
       posts_today: dayIndex,
-      posts_today_date: todayKey(),
+      posts_today_date: todayYmd(420),
     });
 
     return {
@@ -586,11 +602,15 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     };
   } catch (e) {
     // Only Graph API failures trigger backoff — not local validation (caption/media empty)
+    // Primary indicator: publish.js always sets e.fb on Graph errors.
+    // Numeric codes: standard FB throttle/auth codes.
+    // Regex fallback: avoid generic words like "permission" (matches EACCES)
+    // or bare "spam" (too broad).
     const isGraphFail =
       !!e.fb ||
-      e.code === 4 ||
-      e.code === 17 ||
-      /graph|facebook|oauth|rate limit|spam|permission|#\d+/i.test(
+      (typeof e.code === "number" &&
+        [4, 17, 32, 100, 190, 200, 341].includes(e.code)) ||
+      /\bgraph(?:\.facebook)?\b|\bfacebook\b.*error|\boauth\b.*token|\brate.?limit\b|\bapi[.\s]spam\b|\b#\d{2,}\b/i.test(
         String(e.message || "")
       );
     const isLocalValidation =
@@ -614,6 +634,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       error: e.message,
       comment_text: null,
       comment_id: null,
+      delivery_mode: deliveryMode,
     });
     return {
       ok: false,

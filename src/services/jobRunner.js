@@ -43,32 +43,46 @@ function restoreJobs() {
     for (const job of list.slice(0, MAX_JOBS)) {
       if (!job?.id || !Array.isArray(job.tasks)) continue;
       if (["running", "paused", "queued"].includes(job.status)) {
+        let hasPending = false;
         for (const task of job.tasks) {
           if (task.status === "running") {
+            // Task đang gọi Graph khi app đóng — không rõ đã gửi hay chưa.
+            // Để fail (an toàn, tránh gửi trùng); reconcile FB sẽ xác nhận sau.
             task.status = "fail";
             task.percent = 100;
-            task.error = "App đã đóng hoặc khởi động lại khi nhiệm vụ đang chạy";
+            task.error = "App đã đóng khi nhiệm vụ đang chạy (không rõ đã gửi chưa)";
             task.message = task.error;
             task.finished_at = nowIso();
           } else if (task.status === "pending") {
-            task.status = "skipped";
-            task.percent = 100;
-            task.message = "Bỏ qua vì App đã khởi động lại";
-            task.finished_at = nowIso();
+            // Giữ pending để chạy tiếp sau khi mở lại app.
+            hasPending = true;
           }
         }
-        job.status = "interrupted";
-        job.paused = false;
-        job.stop_requested = true;
-        job.finished_at = nowIso();
-        job.notifications = job.notifications || [];
-        job.notifications.unshift({
-          id: nanoid(6), level: "error", title: "Job bị gián đoạn",
-          body: "App đã đóng hoặc khởi động lại trước khi job hoàn tất.", at: nowIso(),
-        });
+        job.stop_requested = false;
+        if (hasPending) {
+          // Còn task chưa chạy → re-arm: đưa về queued rồi runJob chạy tiếp.
+          job.status = "queued";
+          job.paused = false;
+          job.finished_at = null;
+          job.notifications = job.notifications || [];
+          job.notifications.unshift({
+            id: nanoid(6), level: "info", title: "Chạy tiếp job dở",
+            body: "App vừa mở lại — tiếp tục các nhiệm vụ chưa hoàn tất.", at: nowIso(),
+          });
+          job._resume = true;
+        } else {
+          // Không còn task pending → coi như kết thúc theo trạng thái task.
+          job.status = job.progress?.fail ? "partial" : "ok";
+          job.paused = false;
+          job.finished_at = nowIso();
+        }
       }
       recompute(job);
       jobs.set(job.id, job);
+      if (job._resume) {
+        delete job._resume;
+        setImmediate(() => runJob(job.id).catch((e) => console.error("[job resume]", e)));
+      }
     }
     persistJobs();
   } catch (e) {
@@ -88,7 +102,7 @@ function trimJobs() {
   while (list.length > MAX_JOBS) {
     const old = list.shift();
     if (old && old.status !== "running") jobs.delete(old.id);
-    else break;
+    // skip running jobs — continue to evict older non-running ones
   }
 }
 
@@ -109,6 +123,27 @@ function recompute(job) {
   const skipped = tasks.filter((t) => t.status === "skipped").length;
   const running = tasks.find((t) => t.status === "running");
   const progressUnits = done + (running ? (Number(running.percent) || 0) / 100 : 0);
+  // Phân loại tiến trình theo 3 loại giao hàng:
+  // fb_scheduled = hẹn giờ FB (kind schedule); scheduled_direct = hẹn giờ đăng
+  // trực tiếp (kind post có run_at); direct = đăng ngay.
+  const taskMode = (t) =>
+    t.kind === "schedule"
+      ? "fb_scheduled"
+      : t.opts?.run_at || t.run_at
+        ? "scheduled_direct"
+        : "direct";
+  const by_mode = {
+    direct: { total: 0, ok: 0, fail: 0, done: 0 },
+    scheduled_direct: { total: 0, ok: 0, fail: 0, done: 0 },
+    fb_scheduled: { total: 0, ok: 0, fail: 0, done: 0 },
+  };
+  for (const t of tasks) {
+    const m = by_mode[taskMode(t)];
+    m.total++;
+    if (["ok", "fail", "skipped"].includes(t.status)) m.done++;
+    if (t.status === "ok") m.ok++;
+    if (t.status === "fail") m.fail++;
+  }
   job.progress = {
     total,
     done,
@@ -116,6 +151,7 @@ function recompute(job) {
     fail,
     skipped,
     percent: Math.min(100, Math.round((progressUnits / total) * 100)),
+    by_mode,
     current_task_id: running?.id || null,
     current_label: running
       ? `${running.page_name || "?"} · ${running.label || running.kind}`
@@ -533,6 +569,12 @@ async function runJob(jobId) {
   emit(job);
 
   for (const task of job.tasks) {
+    // Resume-safe: task đã có kết quả cuối (ok/fail/skipped) thì KHÔNG chạy lại
+    // — tránh đăng trùng khi job được re-arm sau khi mở lại app.
+    if (["ok", "fail", "skipped"].includes(task.status)) {
+      continue;
+    }
+
     if (job.stop_requested) {
       if (task.status === "pending") {
         task.status = "skipped";
@@ -886,11 +928,14 @@ async function executeTask(task) {
   const kind = task.kind;
   task.percent = 40;
   if (kind === "post" || kind === "run") {
+    // Task có run_at (chờ đúng giờ rồi đăng) = hẹn giờ đăng trực tiếp; còn lại = đăng ngay.
+    const deliveryMode = task.opts && task.opts.run_at ? "scheduled_direct" : "direct";
     return runOnePost(task.page_row_id, {
       force: true,
       ignore_quota: !!task.opts.ignore_quota,
       ignore_interval: !!task.opts.ignore_interval,
       post_type: task.opts.post_type,
+      delivery_mode: deliveryMode,
     });
   }
   if (kind === "schedule") {

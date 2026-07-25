@@ -14,7 +14,9 @@ export function listMediaFiles(folder, kind = "any") {
   const files = fs
     .readdirSync(folder)
     .map((f) => path.join(folder, f))
-    .filter((f) => fs.statSync(f).isFile());
+    .filter((f) => {
+      try { return fs.statSync(f).isFile(); } catch { return false; }
+    });
 
   if (kind === "photo" || kind === "image") {
     return files.filter((f) => IMAGE_EXT.test(f)).sort();
@@ -229,16 +231,19 @@ function stableShuffle(list, cycle) {
 }
 
 function captionOrderForCycle(list, cycle) {
-  if (cycle === 0) return [...list];
-  const out = stableShuffle(list, cycle);
-  const previous = captionOrderForCycle(list, cycle - 1);
-  if (out.length > 1 && out.every((item, i) => item === previous[i])) {
-    out.push(out.shift());
+  // Iterative — avoids O(cycle) stack depth after thousands of posts.
+  let prev = [...list];
+  for (let c = 1; c <= cycle; c++) {
+    const out = stableShuffle(list, c);
+    if (out.length > 1 && out.every((item, i) => item === prev[i])) {
+      out.push(out.shift());
+    }
+    if (out.length > 1 && out[0] === prev[prev.length - 1]) {
+      out.push(out.shift());
+    }
+    prev = out;
   }
-  if (out.length > 1 && out[0] === previous[previous.length - 1]) {
-    out.push(out.shift());
-  }
-  return out;
+  return prev;
 }
 
 export function captionPoolStats(captionsFolder, inlineCaptions = []) {

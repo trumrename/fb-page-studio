@@ -142,6 +142,10 @@ function migrate(database) {
       `ALTER TABLE post_logs ADD COLUMN scheduled_publish_time TEXT`
     );
   }
+  // Phân loại nguồn đăng: direct | scheduled_direct | fb_scheduled
+  if (logCols.length && !logCols.includes("delivery_mode")) {
+    database.exec(`ALTER TABLE post_logs ADD COLUMN delivery_mode TEXT`);
+  }
 
   // Multi Meta App: tag each account with meta_app_key (app1 / app2)
   migrateMetaAppColumns(database);
@@ -195,6 +199,8 @@ function migrate(database) {
 
     CREATE INDEX IF NOT EXISTS idx_post_logs_page ON post_logs(page_row_id);
     CREATE INDEX IF NOT EXISTS idx_post_logs_created ON post_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_post_logs_scheduled ON post_logs(scheduled_publish_time);
+    CREATE INDEX IF NOT EXISTS idx_post_logs_status_page ON post_logs(page_row_id, status, created_at);
 
     CREATE TABLE IF NOT EXISTS page_follower_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

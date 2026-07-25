@@ -938,6 +938,24 @@ export function buildRunNowPlan(inputSettings = {}) {
       1,
       12
     );
+    // gap_chain: if every page is quota-exhausted today, shift to tomorrow
+    // (mirrors windows-mode behavior; prevents empty plan when pages already hit daily cap)
+    if (pageConfigs.size > 0) {
+      const allExhausted = [...pageConfigs.entries()].every(([id, cfg]) => {
+        const postedLogs = countPagePostsOnLocalDay(id, todayVn, tz);
+        const postedCfg = cfg?.posts_today_date === todayVn
+          ? Math.max(0, Number(cfg?.posts_today) || 0) : 0;
+        const max = resolveMaxPostsPerDay(cfg, anti, rounds);
+        return Math.max(postedLogs, postedCfg) >= max;
+      });
+      if (allExhausted) {
+        planDay = addDaysYmd(todayVn, 1);
+        planDayShifted = true;
+        warnings.push(
+          `Tất cả page đã đủ quota hôm nay (${todayVn}). Kế hoạch chuyển sang ${planDay}.`
+        );
+      }
+    }
   }
   // Gap = max(rotation UI, page interval, anti floor/cooldown) — same formula as FB schedule
   const policyGaps = [...pageConfigs.values()].map((c) => resolveMinGapMinutes(c, anti) / 60);
@@ -959,7 +977,7 @@ export function buildRunNowPlan(inputSettings = {}) {
   let order = 0;
   let previousRoundStartMs = null;
   let previousRoundEndMs = null;
-  const quotaDay = useWindows || usePreferred ? planDay : todayVn;
+  const quotaDay = planDay; // always follow planDay (may be shifted to tomorrow)
   for (let round = 0; round < rounds; round++) {
     let cursorMs;
     if (round === 0) {
@@ -979,8 +997,8 @@ export function buildRunNowPlan(inputSettings = {}) {
       const cfg = pageConfigs.get(page.page_row_id);
       // Quota: config counter + already scheduled/direct logs (shared with FB schedule)
       const postedCfg =
-        cfg?.posts_today_date === todayVn ? Math.max(0, Number(cfg?.posts_today) || 0) : 0;
-      const postedLogs = countPagePostsOnLocalDay(page.page_row_id, todayVn, tz);
+        cfg?.posts_today_date === quotaDay ? Math.max(0, Number(cfg?.posts_today) || 0) : 0;
+      const postedLogs = countPagePostsOnLocalDay(page.page_row_id, quotaDay, tz);
       const postedOnPlanDay = Math.max(postedCfg, postedLogs);
       const maxPerDay = resolveMaxPostsPerDay(cfg, anti, rounds);
       const remainingToday = Math.max(0, maxPerDay - postedOnPlanDay);
@@ -1179,7 +1197,7 @@ export function buildRunNowPlan(inputSettings = {}) {
     }
   }
   const nextPlanDay = finalSlots.length
-    ? addDaysYmd(String(finalSlots[finalSlots.length - 1].local_label).slice(0, 10) || planDay, 1)
+    ? addDaysYmd(finalSlots[finalSlots.length - 1].plan_day || planDay, 1)
     : addDaysYmd(planDay || todayVn, 1);
 
   return {

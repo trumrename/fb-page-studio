@@ -35,10 +35,41 @@ import {
   resolveMaxPostsPerDay,
   capSlotsByDailyQuota,
   todayYmd,
+  resolveMetaScheduledPolicy,
 } from "./schedulePolicy.js";
 import { assertCanPublish as assertLicenseActive } from "./license.js";
 import { withPageOperationLock } from "./pageOperationLock.js";
 import { reserveCaptionSlot } from "./captionPoolState.js";
+
+/**
+ * Seeded PRNG (mulberry32) — cùng seed => cùng chuỗi số.
+ * Dùng cho random khoảng giờ hẹn FB để dry-run (Xem kế hoạch) và chạy thật
+ * ra GIỐNG nhau, tránh "mỗi lần bấm ra giờ khác".
+ */
+function makeSeededRng(seedStr) {
+  let h = 1779033703 ^ String(seedStr).length;
+  for (let i = 0; i < String(seedStr).length; i++) {
+    h = Math.imul(h ^ String(seedStr).charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let a = h >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Random số phút trong [min,max] dùng rng đã seed; max<=min => trả min. */
+function randBetweenSeeded(rng, min, max) {
+  const a = Number(min);
+  const b = Number(max);
+  if (!Number.isFinite(a)) return 0;
+  if (!Number.isFinite(b) || b <= a) return a;
+  return a + rng() * (b - a);
+}
 
 function logScheduled(row) {
   const db = getDb();
@@ -101,27 +132,30 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
   ).toLowerCase();
 
   let caption = "";
-  let selectedCaptionSlot = captionSlot;
   let usedPoolCaption = false;
   let mediaPath = null;
   const triedCaptions = [];
   const captionPoolTotal = getCaptionStats(cfg).total;
   const maxCaptionAttempts = Math.max(1, captionPoolTotal || 1);
-  for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
-    const manualCaption = opts.caption != null && String(opts.caption).trim();
-    if (!manualCaption) {
-      selectedCaptionSlot = reserveCaptionSlot({
+  // Reserve caption slot ONCE before loop — retries use slot offset so DB
+  // counter is not burned on every attempt (Bug #2 fix).
+  const manualCaption0 = opts.caption != null && String(opts.caption).trim();
+  const baseReservation = !manualCaption0
+    ? reserveCaptionSlot({
         captionsFolder: cfg.captions_folder,
         captions: cfg.captions,
         pageRowId,
-      }).slot_index;
-    }
+      })
+    : { slot_index: captionSlot };
+  let selectedCaptionSlot = baseReservation.slot_index;
+  for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
+    const manualCaption = manualCaption0;
     caption =
       manualCaption
         ? String(opts.caption).trim()
         : pickCaption(
             cfg.captions,
-            selectedCaptionSlot,
+            selectedCaptionSlot + attempt,
             "sequential_shuffle",
             cfg.captions_folder,
             triedCaptions
@@ -283,7 +317,19 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       page: { id: page.id, page_id: page.page_id, name: page.name },
     };
   } catch (e) {
-    noteGraphFailure(e);
+    // Only Graph API failures trigger backoff — not local validation (caption/media empty etc.)
+    const isGraphFail =
+      !!e.fb ||
+      e.code === 4 ||
+      e.code === 17 ||
+      /graph|facebook|oauth|rate limit|spam|#\d+/i.test(String(e.message || ""));
+    const isLocalValidation =
+      /caption|media|inbox|kho|quota|interval|cooldown|anti-spam|hết caption|không có ảnh|không có video/i.test(
+        String(e.message || "")
+      );
+    if (isGraphFail && !isLocalValidation) {
+      noteGraphFailure(e);
+    }
     const log = logScheduled({
       page_row_id: pageRowId,
       page_id: page.page_id,
@@ -362,6 +408,11 @@ export async function scheduleBulk(body = {}) {
     : 5;
   let pageIndex = 0;
   const ignorePageCap = !!body.ignore_page_quota;
+  // Hẹn giờ cố định: tôn trọng đúng giờ/khoảng cách người dùng nhập,
+  // KHÔNG cộng jitter ngẫu nhiên, KHÔNG ép min-gap của page.
+  // Mặc định bật cho mode "fixed"; có thể tắt bằng body.strict_timing === false.
+  const strictTiming =
+    body.strict_timing != null ? !!body.strict_timing : mode === "fixed";
   const daysAhead = Math.min(30, Math.max(1, Number(body.days_ahead) || 3));
   const requestedPerDay = body.posts_per_day != null ? Number(body.posts_per_day) : null;
 
@@ -386,7 +437,7 @@ export async function scheduleBulk(body = {}) {
     const pageStagger = pageIndex * staggerStep;
     pageIndex += 1;
 
-    // Shared policy: interval / max/day / preferred / remaining today
+    // Shared policy
     const policy = resolvePagePostingPolicy(pageRowId, {
       tzOffsetMinutes: tz,
       postsPerDay: requestedPerDay,
@@ -403,8 +454,19 @@ export async function scheduleBulk(body = {}) {
       notes: policy.notes,
     };
 
+    // Page post config (dùng chung cho mọi mode)
+    const cfg = getPagePostConfig(pageRowId);
+
+    // Meta official scheduled policy (if set)
+    const metaPolicy = resolveMetaScheduledPolicy(cfg, antiGlobal);
+    policyMeta.meta_scheduled = {
+      max_scheduled_per_day: metaPolicy.max_scheduled_per_day,
+      publish_window_days: metaPolicy.publish_window_days,
+      min_interval_minutes: metaPolicy.min_interval_minutes,
+      retry_backoff_seconds: metaPolicy.retry_backoff_seconds,
+    };
+
     if (mode === "fixed") {
-      const cfg = getPagePostConfig(pageRowId);
       const minGap = resolveMinGapMinutes(cfg, antiGlobal);
       if (Array.isArray(body.times) && body.times.length) {
         slots = parseFixedTimes(body.times, tz).map(
@@ -416,9 +478,29 @@ export async function scheduleBulk(body = {}) {
         const count = ignorePageCap
           ? rawCount
           : Math.min(rawCount, policy.max_posts_per_day_effective);
-        const interval = Math.max(
-          minGap,
-          Math.max(10, Number(body.interval_minutes) || policy.interval_minutes || 120)
+        // strictTiming: dùng đúng interval người dùng nhập (chỉ chặn tối thiểu 10p
+        // theo giới hạn Graph). Không ép min-gap của page đè lên.
+        // Khoảng cách bài–bài: nếu có interval_minutes_min/max và max>min thì
+        // tool tự random trong [min,max] cho mỗi bước; ngược lại dùng 1 giá trị cố định.
+        const rawMin = Number(body.interval_minutes_min);
+        const rawMax = Number(body.interval_minutes_max);
+        const fallbackInterval =
+          Number(body.interval_minutes) || policy.interval_minutes || 120;
+        let intervalMin = Math.max(10, Number.isFinite(rawMin) ? rawMin : fallbackInterval);
+        let intervalMax = Math.max(
+          intervalMin,
+          Number.isFinite(rawMax) ? rawMax : intervalMin
+        );
+        if (!strictTiming) {
+          // Ở chế độ không strict, tôn trọng min-gap của page làm sàn.
+          intervalMin = Math.max(minGap, intervalMin);
+          intervalMax = Math.max(intervalMin, intervalMax);
+        }
+        const randomizeInterval = intervalMax > intervalMin;
+        // Seed cố định theo (page + start + count + khoảng) => dry-run và chạy thật
+        // ra GIỐNG nhau; không đổi mỗi lần bấm "Xem kế hoạch".
+        const rng = makeSeededRng(
+          `${pageRowId}.${body.start_at}.${count}.${intervalMin}.${intervalMax}`
         );
         const startList = parseFixedTimes([body.start_at], tz);
         if (!startList.length) {
@@ -434,7 +516,10 @@ export async function scheduleBulk(body = {}) {
         let t = startList[0].getTime() + pageStagger * 60 * 1000;
         for (let i = 0; i < count; i++) {
           slots.push(new Date(t));
-          t += interval * 60 * 1000;
+          const stepMin = randomizeInterval
+            ? randBetweenSeeded(rng, intervalMin, intervalMax)
+            : intervalMin;
+          t += Math.round(stepMin) * 60 * 1000;
         }
       } else {
         plan.push({
@@ -446,8 +531,8 @@ export async function scheduleBulk(body = {}) {
         });
         continue;
       }
-      // Enforce min gap between fixed slots
-      if (minGap > 0 && slots.length > 1) {
+      // Enforce min gap between fixed slots (bỏ qua khi strictTiming — tôn trọng giờ nhập)
+      if (!strictTiming && minGap > 0 && slots.length > 1) {
         slots.sort((a, b) => a.getTime() - b.getTime());
         const gapMs = minGap * 60 * 1000;
         const out = [slots[0]];
@@ -573,7 +658,7 @@ export async function scheduleBulk(body = {}) {
   }
 
   // Anti-spam: hard bulk caps + jitter (skipped entirely when anti-spam OFF)
-  const limited = enforceBulkLimits(plan, body);
+  const limited = enforceBulkLimits(plan, { ...body, strict_timing: strictTiming });
   const finalPlan = limited.plan;
 
   if (dryRun) {
