@@ -9,6 +9,7 @@ import https from "https";
 import http from "http";
 import { spawn } from "child_process";
 import { getExeDir, getOuterExePath, getPackageJson, isPackaged } from "../paths.js";
+// spawn already imported for setup installer launch
 import { config } from "../config.js";
 
 const updateProgress = {
@@ -253,14 +254,91 @@ function downloadUrlCandidates(primaryUrl) {
   return [...new Set(list)];
 }
 
+function isDirWritable(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `._fbps_write_${process.pid}.tmp`);
+    fs.writeFileSync(probe, "ok");
+    fs.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** NSIS / Program Files installs cannot be replaced without elevation. */
+function isProtectedInstallDir(dir) {
+  const d = path.resolve(String(dir || "")).toLowerCase();
+  if (!d) return false;
+  if (d.includes("\\program files") || d.includes("\\program files (x86)")) return true;
+  if (d.includes("\\windows\\")) return true;
+  return !isDirWritable(dir);
+}
+
 function downloadFileOnce(url, dest, onProgress, maxRedirects = 8) {
   return new Promise((resolve, reject) => {
     if (maxRedirects < 0) {
       reject(new Error("Quá nhiều redirect khi tải EXE"));
       return;
     }
+    const parent = path.dirname(dest);
+    try {
+      fs.mkdirSync(parent, { recursive: true });
+    } catch (e) {
+      reject(
+        new Error(
+          `Không ghi được thư mục tải update:\n${parent}\n${e.message}\n` +
+            `Bản cài Setup (Program Files) hãy tải Setup từ GitHub và cài đè.`
+        )
+      );
+      return;
+    }
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      try {
+        file.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        if (fs.existsSync(dest)) fs.unlinkSync(dest);
+      } catch {
+        /* ignore */
+      }
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    const ok = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    let file;
+    try {
+      file = fs.createWriteStream(dest);
+    } catch (e) {
+      reject(
+        new Error(
+          `EPERM/ghi file: ${dest}\n${e.message}\n` +
+            `Không cập nhật in-place trong Program Files — dùng Setup-v….exe (Run as admin).`
+        )
+      );
+      return;
+    }
+    file.on("error", (e) => {
+      fail(
+        new Error(
+          `Không ghi được file update (${e.code || e.message}):\n${dest}\n` +
+            (e.code === "EPERM" || e.code === "EACCES"
+              ? "Thư mục cài đặt bị khóa (Program Files). Hãy tải Setup và cài đè."
+              : "")
+        )
+      );
+    });
+
     const lib = String(url).startsWith("https") ? https : http;
-    const file = fs.createWriteStream(dest);
     const req = lib.get(
       url,
       {
@@ -272,7 +350,11 @@ function downloadFileOnce(url, dest, onProgress, maxRedirects = 8) {
       },
       (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          file.close();
+          try {
+            file.close();
+          } catch {
+            /* ignore */
+          }
           try {
             fs.unlinkSync(dest);
           } catch {
@@ -282,18 +364,12 @@ function downloadFileOnce(url, dest, onProgress, maxRedirects = 8) {
             ? res.headers.location
             : new URL(res.headers.location, url).toString();
           res.resume();
-          downloadFileOnce(next, dest, onProgress, maxRedirects - 1).then(resolve, reject);
+          downloadFileOnce(next, dest, onProgress, maxRedirects - 1).then(ok, fail);
           return;
         }
         if (res.statusCode && res.statusCode >= 400) {
-          file.close();
-          try {
-            fs.unlinkSync(dest);
-          } catch {
-            /* ignore */
-          }
           res.resume();
-          reject(new Error(`Download HTTP ${res.statusCode}`));
+          fail(new Error(`Download HTTP ${res.statusCode}`));
           return;
         }
         const total = Number(res.headers["content-length"] || 0);
@@ -302,28 +378,17 @@ function downloadFileOnce(url, dest, onProgress, maxRedirects = 8) {
           got += chunk.length;
           if (onProgress && total) onProgress(got, total);
         });
+        res.on("error", fail);
         res.pipe(file);
-        file.on("finish", () => file.close(() => resolve(dest)));
+        file.on("finish", () => {
+          file.close(() => ok(dest));
+        });
       }
     );
-    req.on("error", (e) => {
-      try {
-        file.close();
-        fs.unlinkSync(dest);
-      } catch {
-        /* ignore */
-      }
-      reject(e);
-    });
+    req.on("error", fail);
     req.on("timeout", () => {
       req.destroy();
-      try {
-        file.close();
-        fs.unlinkSync(dest);
-      } catch {
-        /* ignore */
-      }
-      reject(new Error("Download timeout"));
+      fail(new Error("Download timeout"));
     });
   });
 }
@@ -398,6 +463,16 @@ export async function checkForUpdate() {
   const checksumAsset = asset
     ? assets.find((item) => item.name === `${asset.name}.sha256.txt`) || null
     : null;
+  const setupName = `FB-Page-Studio-Setup-v${remoteVersion}.exe`;
+  const setupAsset =
+    assets.find((item) => item.name === setupName) ||
+    assets.find(
+      (item) =>
+        /\.exe$/i.test(item.name || "") &&
+        /setup/i.test(item.name || "") &&
+        String(item.name || "").includes(remoteVersion)
+    ) ||
+    null;
 
   const newer = isNewerVersion(remoteVersion, cfg.current_version);
 
@@ -416,6 +491,13 @@ export async function checkForUpdate() {
           name: asset.name,
           size: asset.size,
           download_url: asset.browser_download_url,
+        }
+      : null,
+    setup_asset: setupAsset
+      ? {
+          name: setupAsset.name,
+          size: setupAsset.size,
+          download_url: setupAsset.browser_download_url,
         }
       : null,
     checksum_asset: checksumAsset
@@ -474,6 +556,109 @@ export async function applyUpdate() {
   const currentExe = getOuterExePath();
   const exeDir = path.dirname(currentExe);
   const currentName = path.basename(currentExe) || getUpdateConfig().asset_name;
+  const userWritable =
+    process.env.FB_USER_DIR ||
+    process.env.FB_EXE_DIR ||
+    getExeDir();
+  const protectedInstall = isProtectedInstallDir(exeDir);
+
+  // ── NSIS / Program Files: cannot replace in-place (EPERM). Use Setup. ──
+  if (protectedInstall) {
+    const setupName = `FB-Page-Studio-Setup-v${check.latest_version}.exe`;
+    const assets = Array.isArray(check._assets) ? check._assets : [];
+    // Prefer setup asset from release list if available via re-fetch fields
+    let setupUrl = null;
+    let setupSize = 0;
+    try {
+      // Re-use check fields: if API returned only desktop, build known URL
+      const base =
+        check.release_url?.replace(/\/tag\/.*/, "/download/") ||
+        `https://github.com/${getUpdateConfig().github_repo}/releases/download/`;
+      const tag = check.tag_name || `v${check.latest_version}`;
+      setupUrl = `https://github.com/${getUpdateConfig().github_repo}/releases/download/${tag}/${setupName}`;
+    } catch {
+      setupUrl = null;
+    }
+    // Prefer asset from check if we stored full release (optional)
+    if (check.setup_asset?.download_url) {
+      setupUrl = check.setup_asset.download_url;
+      setupSize = Number(check.setup_asset.size) || 0;
+    }
+
+    const stageDir = path.join(userWritable, "updates");
+    if (!isDirWritable(userWritable) && !isDirWritable(stageDir)) {
+      const err =
+        `Bản cài Setup nằm trong Program Files (không ghi được).\n` +
+        `Tải tay và cài đè (Run as admin):\n${MANUAL_RELEASE}\n` +
+        `File: ${setupName}`;
+      setUpdateProgress({ state: "error", error: err, message: "Cần cài Setup thủ công" });
+      return { ok: false, error: err, needs_setup: true, manual_url: MANUAL_RELEASE, ...check };
+    }
+
+    fs.mkdirSync(stageDir, { recursive: true });
+    const destSetup = path.join(stageDir, setupName);
+    setUpdateProgress({
+      state: "downloading",
+      from: check.current_version,
+      to: check.latest_version,
+      bytes: 0,
+      total: setupSize || 0,
+      percent: 0,
+      message: `Bản Setup (Program Files) — đang tải ${setupName}…`,
+    });
+    try {
+      await downloadFile(setupUrl, destSetup, (bytes, total) => {
+        const expected = total || setupSize || 0;
+        setUpdateProgress({
+          state: "downloading",
+          bytes,
+          total: expected,
+          percent: expected ? Math.min(100, Math.floor((bytes / expected) * 100)) : 0,
+          message: `Đang tải Setup v${check.latest_version}…`,
+        });
+      });
+    } catch (e) {
+      const err =
+        `${e.message || e}\n\nMở trang tải tay:\n${MANUAL_RELEASE}`;
+      setUpdateProgress({ state: "error", error: err, message: "Tải Setup thất bại" });
+      return { ok: false, error: err, needs_setup: true, manual_url: MANUAL_RELEASE, ...check };
+    }
+
+    // Launch installer (UAC). User finishes wizard → overwrites Program Files.
+    try {
+      spawn(
+        "cmd.exe",
+        ["/c", "start", "", destSetup],
+        { detached: true, stdio: "ignore", windowsHide: true }
+      ).unref();
+    } catch (e) {
+      const err = `Đã tải Setup nhưng không mở được:\n${destSetup}\n${e.message}\nHãy chạy file Setup thủ công.`;
+      setUpdateProgress({ state: "error", error: err, message: "Mở Setup thất bại" });
+      return { ok: false, error: err, setup_path: destSetup, ...check };
+    }
+
+    setUpdateProgress({
+      state: "ready",
+      percent: 100,
+      message: `Đã mở Setup v${check.latest_version}. Cài đè xong → thoát tool (khay) → mở lại từ Start Menu.`,
+      from: check.current_version,
+      to: check.latest_version,
+      setup_mode: true,
+      setup_path: destSetup,
+    });
+    return {
+      ok: true,
+      updated: true,
+      setup_mode: true,
+      setup_path: destSetup,
+      message:
+        `Bản cài Program Files không thay EXE trực tiếp.\n` +
+        `Đã tải + mở ${setupName}.\n` +
+        `Trong cửa sổ cài: Next → cài đè → xong → thoát tool cũ → mở "FB Page Studio" từ Start Menu.`,
+      ...check,
+    };
+  }
+
   // Always end as versioned filename so Explorer / shortcut show NEW version (not v1.2.27 after update).
   const finalName = `FB-Page-Studio-Desktop-v${check.latest_version}.exe`;
   // Stage next to app; may differ from currentName when upgrading from old versioned/unversioned name
@@ -506,16 +691,22 @@ export async function applyUpdate() {
     percent: 0,
     message: `Đang tải v${check.latest_version} từ GitHub…`,
   });
-  await downloadFile(check.asset.download_url, destNew, (bytes, total) => {
-    const expected = total || Number(check.asset.size) || 0;
-    setUpdateProgress({
-      state: "downloading",
-      bytes,
-      total: expected,
-      percent: expected ? Math.min(100, Math.floor((bytes / expected) * 100)) : 0,
-      message: `Đang tải v${check.latest_version}…`,
+  try {
+    await downloadFile(check.asset.download_url, destNew, (bytes, total) => {
+      const expected = total || Number(check.asset.size) || 0;
+      setUpdateProgress({
+        state: "downloading",
+        bytes,
+        total: expected,
+        percent: expected ? Math.min(100, Math.floor((bytes / expected) * 100)) : 0,
+        message: `Đang tải v${check.latest_version}…`,
+      });
     });
-  });
+  } catch (e) {
+    const err = e.message || String(e);
+    setUpdateProgress({ state: "error", error: err, message: "Tải update thất bại" });
+    return { ok: false, error: err, manual_url: MANUAL_RELEASE, ...check };
+  }
   if (Number(check.asset.size) > 0 && fs.statSync(destNew).size !== Number(check.asset.size)) {
     throw new Error("File update tải về không đủ dung lượng; không thay EXE hiện tại");
   }

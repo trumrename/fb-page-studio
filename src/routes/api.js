@@ -1057,6 +1057,7 @@ router.post("/update/apply", async (req, res) => {
     }
     const restart = req.body?.restart !== false;
     const started = startUpdate();
+    // Respond immediately so browser can poll progress (downloads can take minutes).
     res.status(started.already_running ? 200 : 202).json({
       ok: true,
       started: started.started,
@@ -1065,8 +1066,18 @@ router.post("/update/apply", async (req, res) => {
     });
     if (started.started) {
       started.promise.then((result) => {
-        if (result?.ok && result.updated && restart && result.bat) {
-          setTimeout(() => requestUpdateRestart(result.bat, path.dirname(result.target_exe)), 700);
+        if (!result?.ok) return;
+        // Program Files / NSIS: Setup already launched; no bat restart.
+        if (result.setup_mode) return;
+        if (result.updated && restart && result.bat) {
+          setTimeout(
+            () =>
+              requestUpdateRestart(
+                result.bat,
+                path.dirname(result.target_exe || result.bat)
+              ),
+            700
+          );
         }
       });
     }

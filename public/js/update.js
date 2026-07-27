@@ -499,7 +499,12 @@
 
       if (p.state === "error") throw new Error(p.error || "Tải update thất bại");
       if (p.state === "ready" || p.state === "restarting") {
-        return { restarting: true, progress: p };
+        // setup_mode (Program Files) also uses ready — caller handles
+        return {
+          restarting: !p.setup_mode,
+          setup_mode: !!p.setup_mode,
+          progress: p,
+        };
       }
 
       // Only accept idle as "already latest" if we never entered an update session
@@ -582,10 +587,15 @@
       });
 
       const startedAt = Date.now();
-      const started = await api("/api/update/apply", {
-        method: "POST",
-        body: JSON.stringify({ restart: true }),
-      });
+      const started = await api(
+        "/api/update/apply",
+        {
+          method: "POST",
+          body: JSON.stringify({ restart: true }),
+          timeoutMs: 60000,
+        },
+        { retries: 1, kind: "local" }
+      );
       if (!started.ok) throw new Error(started.error || "Không thể bắt đầu update");
 
       if (started.progress) {
@@ -597,9 +607,30 @@
       }
 
       const finished = await watchUpdateProgress(startedAt);
+      // Program Files path: progress ends in ready + setup_mode
+      if (finished.progress?.setup_mode || finished.progress?.setup_path) {
+        const sp = finished.progress.setup_path || "";
+        setUiProgress({
+          percent: 100,
+          text: "Đã mở Setup",
+          log:
+            (finished.progress.message || "") +
+            (sp ? `\nFile: ${sp}` : "") +
+            "\n\nCài đè xong → Thoát tool (khay) → mở lại từ Start Menu.",
+        });
+        alert(
+          (finished.progress.message || "Đã tải Setup.") +
+            "\n\nCài đè xong hãy THOÁT tool cũ (khay hệ thống) rồi mở lại FB Page Studio."
+        );
+        return;
+      }
       if (finished.latest) {
         alert("Đã là bản mới nhất (hoặc phiên cập nhật không chạy).");
       } else if (finished.restarting) {
+        // If ready was setup, already handled; else portable restart
+        if (finished.progress?.state === "ready" && finished.progress?.setup_mode) {
+          return;
+        }
         setUiProgress({
           percent: 100,
           text: "Restarting…",
