@@ -57,6 +57,8 @@ nsis:
   include: build/installer.nsh
 extraMetadata:
   main: electron/main.cjs
+# CI/tag: do NOT auto-publish (needs GH_TOKEN). Release step uses `gh release upload`.
+publish: null
 
 
 
