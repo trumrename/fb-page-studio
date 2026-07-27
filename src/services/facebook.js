@@ -676,99 +676,263 @@ export async function deletePagePost(postId, pageToken, opts = {}) {
 }
 
 /**
- * List posts published by the Page (paginated).
- * Prefer /published_posts (page-authored). Falls back to /posts then /feed.
+ * Normalize a Graph object (post / video / photo) into a common shape for delete UI.
+ */
+function normalizeDeletableItem(raw, source) {
+  if (!raw || raw.id == null) return null;
+  const id = String(raw.id);
+  const message =
+    raw.message ||
+    raw.story ||
+    raw.description ||
+    raw.title ||
+    raw.name ||
+    "";
+  const mediaType =
+    raw.attachments?.data?.[0]?.media_type ||
+    raw.attachments?.data?.[0]?.type ||
+    (source === "videos" || source === "live_videos" || source === "video_reels"
+      ? "video"
+      : source === "photos"
+        ? "photo"
+        : raw.status_type || null);
+  return {
+    id,
+    message,
+    story: raw.story || null,
+    created_time: raw.created_time || raw.updated_time || null,
+    permalink_url: raw.permalink_url || raw.link || null,
+    full_picture: raw.full_picture || raw.picture || null,
+    status_type: raw.status_type || mediaType || source,
+    content_source: source,
+    media_type: mediaType,
+    is_published: raw.is_published,
+    raw,
+  };
+}
+
+/**
+ * Paginate one Graph edge into a list of normalized deletable items.
+ */
+async function listEdgeItems(endpoint, pageToken, query, graphOpts, rlOpts, opts) {
+  const items = [];
+  let data = await withRateLimitRetry(
+    () => graphGet(endpoint, pageToken, query, graphOpts),
+    rlOpts
+  );
+  while (true) {
+    if (opts.shouldStop?.()) break;
+    const batch = data.data || [];
+    for (const row of batch) {
+      items.push(row);
+      if (opts._hardCap > 0 && items.length >= opts._hardCap) return items;
+    }
+    if (opts.onEdgeBatch) opts.onEdgeBatch(endpoint, items.length);
+    const next = data.paging?.next;
+    if (!next) break;
+    data = await withRateLimitRetry(
+      () => graphFetchAbsolute(next, pageToken, graphOpts),
+      { ...rlOpts, label: `list next ${endpoint}` }
+    );
+  }
+  return items;
+}
+
+/**
+ * List ALL deletable Page content for bulk wipe.
  *
- * @param {string} pageId
- * @param {string} pageToken
- * @param {{
- *   limit?: number,
- *   maxPosts?: number,
- *   since?: string|number,
- *   until?: string|number,
- *   fields?: string,
- *   onBatch?: (posts: object[], total: number) => void,
- *   metaAppKey?: string,
- *   appSecret?: string,
- * }} [opts]
+ * IMPORTANT: union many edges (not "first success only"). Videos often live on
+ * /videos and are missing from /published_posts alone.
+ *
+ * Sources (default full wipe):
+ *  - published_posts, posts, feed
+ *  - videos, live_videos, video_reels (when available)
+ *  - photos (uploaded)
+ *  - scheduled_posts
+ *
+ * @returns {Promise<object[]>} deduped by id
  */
 export async function listPagePosts(pageId, pageToken, opts = {}) {
   const pid = String(pageId || "").trim();
   if (!pid) throw new Error("Thiếu page_id");
   const pageLimit = Math.min(100, Math.max(1, Number(opts.limit) || 100));
-  const maxPosts = Math.max(0, Number(opts.maxPosts) || 0); // 0 = no cap
-  const fields =
-    opts.fields ||
-    "id,message,story,created_time,permalink_url,full_picture,status_type,is_published,attachments{media_type,type,url,title}";
+  // 0 = unlimited (full wipe). Positive = soft cap after union.
+  const maxPosts = Math.max(0, Number(opts.maxPosts) || 0);
+  const includeVideos = opts.include_videos !== false && opts.includeVideos !== false;
+  const includePhotos = opts.include_photos !== false && opts.includePhotos !== false;
+  const includeScheduled =
+    opts.include_scheduled !== false && opts.includeScheduled !== false;
   const graphOpts = {
     metaAppKey: opts.metaAppKey,
     appSecret: opts.appSecret,
   };
+  const postFields =
+    opts.fields ||
+    "id,message,story,created_time,permalink_url,full_picture,status_type,is_published,attachments{media_type,type,url,title}";
+  const videoFields =
+    "id,description,title,created_time,updated_time,permalink_url,picture,length,from";
+  const photoFields = "id,name,created_time,link,picture,from";
 
-  const query = { fields, limit: pageLimit };
-  if (opts.since != null && opts.since !== "") query.since = opts.since;
-  if (opts.until != null && opts.until !== "") query.until = opts.until;
+  const feedQuery = { fields: postFields, limit: pageLimit };
+  if (opts.since != null && opts.since !== "") feedQuery.since = opts.since;
+  if (opts.until != null && opts.until !== "") feedQuery.until = opts.until;
 
-  const endpoints = [
-    `/${pid}/published_posts`,
-    `/${pid}/posts`,
-    `/${pid}/feed`,
+  /** @type {{ edge: string, query: object, source: string, optional?: boolean }[]} */
+  const sources = [
+    { edge: `/${pid}/published_posts`, query: { ...feedQuery }, source: "published_posts" },
+    { edge: `/${pid}/posts`, query: { ...feedQuery }, source: "posts", optional: true },
+    { edge: `/${pid}/feed`, query: { ...feedQuery }, source: "feed", optional: true },
   ];
+  if (includeVideos) {
+    sources.push(
+      {
+        edge: `/${pid}/videos`,
+        query: { fields: videoFields, type: "uploaded", limit: pageLimit },
+        source: "videos",
+      },
+      // without type= — some pages only return items on the default edge
+      {
+        edge: `/${pid}/videos`,
+        query: { fields: videoFields, limit: pageLimit },
+        source: "videos_all",
+        optional: true,
+      },
+      {
+        edge: `/${pid}/live_videos`,
+        query: {
+          fields: "id,title,description,created_time,status,permalink_url",
+          limit: pageLimit,
+        },
+        source: "live_videos",
+        optional: true,
+      },
+      {
+        edge: `/${pid}/video_reels`,
+        query: { fields: videoFields, limit: pageLimit },
+        source: "video_reels",
+        optional: true,
+      }
+    );
+  }
+  if (includePhotos) {
+    sources.push({
+      edge: `/${pid}/photos`,
+      query: { fields: photoFields, type: "uploaded", limit: pageLimit },
+      source: "photos",
+      optional: true,
+    });
+  }
+  if (includeScheduled) {
+    sources.push({
+      edge: `/${pid}/scheduled_posts`,
+      query: {
+        fields: "id,message,created_time,scheduled_publish_time,permalink_url",
+        limit: pageLimit,
+      },
+      source: "scheduled_posts",
+      optional: true,
+    });
+  }
 
-  const rlOpts = {
-    maxAttempts: 12,
-    shouldStop: opts.shouldStop,
-    label: `list posts ${pid}`,
-    onRateLimit: opts.onRateLimit,
-  };
+  const byId = new Map();
+  const sourceHits = {};
+  let hardErrors = 0;
+  let lastHardError = null;
 
-  let lastError = null;
-  for (const endpoint of endpoints) {
+  for (const src of sources) {
+    if (opts.shouldStop?.()) break;
+    const rlOpts = {
+      maxAttempts: 10,
+      shouldStop: opts.shouldStop,
+      label: `list ${src.source} ${pid}`,
+      onRateLimit: opts.onRateLimit,
+    };
     try {
-      const posts = [];
-      let data = await withRateLimitRetry(
-        () => graphGet(endpoint, pageToken, query, graphOpts),
-        rlOpts
-      );
-      while (true) {
-        if (opts.shouldStop?.()) break;
-        const batch = data.data || [];
-        for (const p of batch) {
-          posts.push(p);
-          if (maxPosts > 0 && posts.length >= maxPosts) {
-            if (opts.onBatch) opts.onBatch(batch, posts.length);
-            return posts.slice(0, maxPosts);
-          }
+      const rawItems = await listEdgeItems(
+        src.edge,
+        pageToken,
+        src.query,
+        graphOpts,
+        rlOpts,
+        {
+          shouldStop: opts.shouldStop,
+          // per-edge safety cap high enough for full wipes; final maxPosts applied after union
+          _hardCap: maxPosts > 0 ? Math.max(maxPosts * 3, 50000) : 0,
+          onEdgeBatch: (_edge, n) => {
+            sourceHits[src.source] = n;
+            if (opts.onBatch) {
+              opts.onBatch([], byId.size + n, {
+                source: src.source,
+                source_count: n,
+                unique: byId.size,
+              });
+            }
+          },
         }
-        if (opts.onBatch) opts.onBatch(batch, posts.length);
-        const next = data.paging?.next;
-        if (!next) break;
-        data = await withRateLimitRetry(
-          () => graphFetchAbsolute(next, pageToken, graphOpts),
-          { ...rlOpts, label: `list posts next ${pid}` }
-        );
+      );
+      let added = 0;
+      for (const row of rawItems) {
+        const item = normalizeDeletableItem(row, src.source);
+        if (!item) continue;
+        if (!byId.has(item.id)) {
+          byId.set(item.id, item);
+          added++;
+        } else {
+          // merge source tags
+          const prev = byId.get(item.id);
+          prev.content_source = `${prev.content_source}+${src.source}`;
+          if (!prev.permalink_url && item.permalink_url) {
+            prev.permalink_url = item.permalink_url;
+          }
+          if (!prev.message && item.message) prev.message = item.message;
+        }
       }
-      return posts;
+      sourceHits[src.source] = rawItems.length;
+      if (opts.onBatch) {
+        opts.onBatch([], byId.size, {
+          source: src.source,
+          source_count: rawItems.length,
+          added,
+          unique: byId.size,
+        });
+      }
     } catch (e) {
-      lastError = e;
       if (e.code === "STOPPED") throw e;
-      // Rate limit exhausted after retries — bubble up
       if (isGraphRateLimitError(e) || e.rate_limit) throw e;
-      // Try next endpoint if permission / unknown edge
-      const code = e.code;
-      const msg = String(e.message || "");
-      if (
-        code === 100 ||
-        code === 200 ||
-        code === 10 ||
-        /does not exist|permission|unsupported|unknown path/i.test(msg)
-      ) {
-        continue;
+      sourceHits[src.source] = `error: ${e.message || e}`;
+      if (!src.optional) {
+        hardErrors++;
+        lastHardError = e;
       }
-      throw e;
+      // optional edges (videos/photos/reels) often 100/200 — skip
+      continue;
     }
   }
-  throw lastError || new Error("Không lấy được danh sách bài Page");
+
+  if (!byId.size && hardErrors && lastHardError) {
+    throw lastHardError;
+  }
+
+  let out = [...byId.values()].sort((a, b) => {
+    const ta = a.created_time ? Date.parse(a.created_time) : 0;
+    const tb = b.created_time ? Date.parse(b.created_time) : 0;
+    return tb - ta;
+  });
+
+  if (maxPosts > 0 && out.length > maxPosts) {
+    out = out.slice(0, maxPosts);
+  }
+
+  // attach debug counts for callers/UI (non-enumerable so JSON map stays clean)
+  Object.defineProperty(out, "_source_hits", {
+    value: sourceHits,
+    enumerable: false,
+  });
+  Object.defineProperty(out, "_unique", {
+    value: out.length,
+    enumerable: false,
+  });
+  return out;
 }
 
 /**

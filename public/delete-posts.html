@@ -89,11 +89,13 @@
       <main class="content">
         <div class="warn-box">
           <b>Cảnh báo:</b> Xóa bài trên Facebook <b>không khôi phục được</b>.
-          Chỉ xóa bài do <b>Page của bạn</b> đăng (token Page + quyền <code>pages_manage_posts</code>).
-          Nên bấm <b>Xem trước</b> / <b>Dry-run</b> trước khi xóa hàng loạt.
+          Chỉ xóa nội dung Page token quản lý được (quyền <code>pages_manage_posts</code>).
+          Tool list <b>gộp nhiều nguồn</b>: feed/published_posts + <b>/videos</b> + photos + scheduled
+          (tránh sót video chỉ nằm ở thư viện Video).
+          Nên bấm <b>Xem trước</b> / <b>Dry-run</b> trước khi xóa full.
           <br/><br/>
           <b>Rate limit Facebook:</b> nếu API bị limit, tool <b>tự tạm dừng</b>, hiện đếm ngược,
-          rồi <b>tự chạy lại</b> (tối đa ~12 lần chờ / lần gọi). Bấm <b>Dừng</b> nếu muốn hủy hẳn.
+          rồi <b>tự chạy lại</b>. Bấm <b>Dừng</b> nếu muốn hủy hẳn.
         </div>
 
         <div class="del-grid">
@@ -126,8 +128,8 @@
               </div>
               <div class="field-row" style="margin-top:.75rem">
                 <div>
-                  <label class="field">Tối đa bài / page (khi list)</label>
-                  <input type="number" id="maxPosts" value="5000" min="1" max="20000" />
+                  <label class="field">Tối đa bài / page (0 = full / không giới hạn)</label>
+                  <input type="number" id="maxPosts" value="0" min="0" max="100000" />
                 </div>
                 <div>
                   <label class="field">Delay giữa batch (ms)</label>
@@ -137,7 +139,7 @@
               <div class="field-row" style="margin-top:.75rem">
                 <div>
                   <label class="field">Số page song song (1–10)</label>
-                  <input type="number" id="pageParallel" value="5" min="1" max="10" />
+                  <input type="number" id="pageParallel" value="3" min="1" max="10" />
                 </div>
                 <div>
                   <label class="field">Preset tốc độ</label>
@@ -145,15 +147,28 @@
                     <button type="button" class="btn-ghost btn-sm" id="presetSafe">An toàn</button>
                     <button type="button" class="btn-ghost btn-sm" id="presetBalanced">Cân bằng</button>
                     <button type="button" class="btn-warn btn-sm" id="presetTurbo">Turbo</button>
+                    <button type="button" class="btn-primary btn-sm" id="presetFull" style="background:linear-gradient(135deg,#ff5a6e,#e11d48);border:0">Xóa full</button>
                   </div>
+                </div>
+              </div>
+              <div class="chk"><input type="checkbox" id="fullWipe" checked /> <span><b>Xóa full</b> — list không giới hạn (feed + videos + photos + scheduled)</span></div>
+              <div class="chk"><input type="checkbox" id="includeVideos" checked /> <span>Gồm thư viện <b>Video / Reels / Live</b> (<code>/videos</code>)</span></div>
+              <div class="chk"><input type="checkbox" id="includePhotos" checked /> <span>Gồm thư viện <b>Ảnh uploaded</b> (<code>/photos</code>)</span></div>
+              <div class="chk"><input type="checkbox" id="includeScheduled" checked /> <span>Gồm bài <b>đã hẹn giờ</b> (<code>/scheduled_posts</code>)</span></div>
+              <div class="field-row" style="margin-top:.5rem">
+                <div>
+                  <label class="field">Số vòng list→xóa (xóa sạch video sót)</label>
+                  <input type="number" id="wipePasses" value="3" min="1" max="8" />
+                </div>
+                <div class="muted" style="font-size:.78rem;align-self:end;padding-bottom:.35rem">
+                  Full wipe: sau mỗi vòng xóa, tool list lại và xóa phần còn. Mặc định 3 vòng.
                 </div>
               </div>
               <div class="chk"><input type="checkbox" id="useBatch" checked /> <span>Dùng Graph Batch (tối đa 50 DELETE / request — nhanh nhất)</span></div>
               <p class="muted" style="margin-top:.75rem;font-size:.8rem;line-height:1.45">
-                <b>Nhiều page 1 lúc:</b> set «Số page song song» (vd 3–5).<br/>
-                Nếu fail nhiều: hạ song song xuống <b>2</b>, delay <b>80–150ms</b>, bấm preset <b>Cân bằng / An toàn</b>.<br/>
-                Tool sẽ <b>retry lỗi tạm</b> + <b>quét lại bài fail</b> 1 lần; log hiện <b>top lỗi</b> Meta.<br/>
-                Quyền: <code>pages_manage_posts</code>, <code>pages_read_engagement</code>.
+                <b>Sót video?</b> Bật «Gồm Video» + «Xóa full» (max = 0). Tool gộp feed <b>và</b> <code>/videos</code>.<br/>
+                <b>Nhiều page:</b> song song 2–3; nếu fail nhiều → delay 80–150ms + preset An toàn.<br/>
+                Quyền: <code>pages_manage_posts</code>, <code>pages_read_engagement</code>, <code>pages_read_user_content</code> (nếu có).
               </p>
             </div>
           </section>
@@ -287,18 +302,34 @@
     }
 
     function optsFromForm(extra = {}) {
+      const fullWipe = $("fullWipe")?.checked !== false;
+      let maxPosts = Number($("maxPosts").value);
+      if (!Number.isFinite(maxPosts) || maxPosts < 0) maxPosts = 0;
+      if (fullWipe) maxPosts = 0;
       return {
         page_row_ids: selectedIds(),
         since: toUnix($("since").value),
         until: toUnix($("until").value),
         keyword: $("keyword").value.trim() || null,
-        max_posts: Number($("maxPosts").value) || 5000,
+        max_posts: maxPosts,
+        full_wipe: fullWipe || maxPosts === 0,
+        include_videos: $("includeVideos")?.checked !== false,
+        include_photos: $("includePhotos")?.checked !== false,
+        include_scheduled: $("includeScheduled")?.checked !== false,
+        wipe_passes: Math.min(8, Math.max(1, Number($("wipePasses")?.value) || (fullWipe || maxPosts === 0 ? 3 : 1))),
         delay_ms: Math.max(0, Number($("delayMs").value) || 0),
         page_parallel: Math.min(10, Math.max(1, Number($("pageParallel").value) || 3)),
         use_batch: $("useBatch").checked,
         ...extra,
       };
     }
+
+    $("fullWipe")?.addEventListener("change", () => {
+      if ($("fullWipe").checked) $("maxPosts").value = 0;
+    });
+    $("maxPosts")?.addEventListener("change", () => {
+      if (Number($("maxPosts").value) > 0 && $("fullWipe")) $("fullWipe").checked = false;
+    });
 
     $("presetSafe").onclick = () => {
       $("useBatch").checked = true;
@@ -314,7 +345,19 @@
       $("useBatch").checked = true;
       $("delayMs").value = 0;
       $("pageParallel").value = 5;
+      if ($("fullWipe")) $("fullWipe").checked = false;
       $("maxPosts").value = 5000;
+    };
+    $("presetFull").onclick = () => {
+      $("useBatch").checked = true;
+      $("delayMs").value = 40;
+      $("pageParallel").value = 2;
+      $("maxPosts").value = 0;
+      if ($("wipePasses")) $("wipePasses").value = 3;
+      if ($("fullWipe")) $("fullWipe").checked = true;
+      if ($("includeVideos")) $("includeVideos").checked = true;
+      if ($("includePhotos")) $("includePhotos").checked = true;
+      if ($("includeScheduled")) $("includeScheduled").checked = true;
     };
 
     function renderReport(job) {
@@ -512,8 +555,18 @@
         return;
       }
       if (!dry) {
+        const o = optsFromForm();
+        const scope = [
+          o.full_wipe || o.max_posts === 0 ? "FULL (không giới hạn số bài)" : `tối đa ${o.max_posts} bài/page`,
+          o.include_videos ? "videos" : null,
+          o.include_photos ? "photos" : null,
+          o.include_scheduled ? "scheduled" : null,
+        ].filter(Boolean).join(" · ");
         const ok = confirm(
-          `XÓA VĨNH VIỄN bài đăng trên ${ids.length} page?\n\nHành động không hoàn tác được.`
+          `XÓA VĨNH VIỄN nội dung trên ${ids.length} page?\n\n` +
+          `Phạm vi: ${scope}\n` +
+          `Gồm video trong /videos (không chỉ feed).\n\n` +
+          `Hành động không hoàn tác được.`
         );
         if (!ok) return;
       }
@@ -535,11 +588,16 @@
         alert("Chọn ít nhất 1 Page để xem trước");
         return;
       }
-      $("previewList").innerHTML = `<p class="muted" style="padding:.75rem">Đang tải bài…</p>`;
+      $("previewList").innerHTML = `<p class="muted" style="padding:.75rem">Đang tải bài (feed + videos)…</p>`;
       try {
+        const full = $("fullWipe")?.checked || Number($("maxPosts").value) === 0;
         const q = new URLSearchParams({
           page_row_id: String(ids[0]),
-          max_posts: String(Math.min(100, Number($("maxPosts").value) || 50)),
+          // preview sample: full list can be huge — cap 150 unless full checkbox and user ok
+          max_posts: full ? "150" : String(Math.min(150, Number($("maxPosts").value) || 50)),
+          include_videos: $("includeVideos")?.checked === false ? "0" : "1",
+          include_photos: $("includePhotos")?.checked === false ? "0" : "1",
+          include_scheduled: $("includeScheduled")?.checked === false ? "0" : "1",
         });
         const since = toUnix($("since").value);
         const until = toUnix($("until").value);
@@ -552,15 +610,22 @@
           $("previewList").innerHTML = `<p class="muted" style="padding:.75rem">Không có bài khớp filter trên page này.</p>`;
           return;
         }
+        const media = data.by_media || {};
+        const sources = data.source_hits
+          ? Object.entries(data.source_hits).map(([k, v]) => `${k}=${v}`).join(", ")
+          : "";
         $("previewList").innerHTML = `
           <div class="muted" style="padding:.5rem .75rem;font-size:.8rem">
             ${esc(data.page?.name)} · khớp ${data.total_matched}/${data.total_fetched}
+            · video≈${media.video || 0} · ảnh≈${media.photo || 0} · khác≈${media.other || 0}
+            ${sources ? `<br/>Nguồn Graph: ${esc(sources)}` : ""}
+            ${full ? "<br/><b>Preview chỉ sample 150</b> — Dry-run/Xóa full sẽ list hết." : ""}
           </div>
           ${posts.map((p) => `
             <div class="post-row">
               <div>
                 <div class="msg">${esc(p.message || "(không caption)")}</div>
-                <div class="meta">${esc(p.created_time || "")} · ${esc(p.id)}</div>
+                <div class="meta">${esc(p.created_time || "")} · ${esc(p.content_source || p.media_type || "")} · ${esc(p.id)}</div>
               </div>
               ${p.permalink_url ? `<a class="btn-ghost btn-sm" href="${esc(p.permalink_url)}" target="_blank" rel="noopener">Mở</a>` : ""}
             </div>

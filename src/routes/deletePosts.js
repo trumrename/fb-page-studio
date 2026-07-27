@@ -45,11 +45,20 @@ router.get("/preview", async (req, res) => {
     if (!Number.isFinite(pageRowId) || pageRowId <= 0) {
       return res.status(400).json({ ok: false, error: "Thiếu page_row_id" });
     }
+    const flag = (v, def = true) => {
+      if (v == null || v === "") return def;
+      const s = String(v).toLowerCase();
+      if (s === "0" || s === "false" || s === "no") return false;
+      return true;
+    };
     const data = await previewPagePosts(pageRowId, {
-      max_posts: req.query.max_posts || req.query.maxPosts || 100,
+      max_posts: req.query.max_posts ?? req.query.maxPosts ?? 100,
       since: req.query.since || undefined,
       until: req.query.until || undefined,
       keyword: req.query.keyword || undefined,
+      include_videos: flag(req.query.include_videos),
+      include_photos: flag(req.query.include_photos),
+      include_scheduled: flag(req.query.include_scheduled),
     });
     res.json({ ok: true, ...data });
   } catch (e) {

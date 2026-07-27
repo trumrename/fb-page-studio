@@ -73,7 +73,15 @@ export function loadPageForDelete(pageRowId) {
 function matchKeyword(post, keyword) {
   const kw = String(keyword || "").trim().toLowerCase();
   if (!kw) return true;
-  const hay = [post.message, post.story, post.id]
+  const hay = [
+    post.message,
+    post.story,
+    post.description,
+    post.title,
+    post.content_source,
+    post.media_type,
+    post.id,
+  ]
     .filter(Boolean)
     .join("\n")
     .toLowerCase();
@@ -162,17 +170,36 @@ function finalizeReport(job) {
  */
 export async function previewPagePosts(pageRowId, opts = {}) {
   const page = loadPageForDelete(pageRowId);
-  const maxPosts = Math.max(0, Number(opts.max_posts) || Number(opts.maxPosts) || 200);
+  const rawMax = opts.max_posts ?? opts.maxPosts;
+  // preview default 200; 0 = full list (can be slow)
+  const maxPosts =
+    rawMax === undefined || rawMax === null || rawMax === ""
+      ? 200
+      : Math.max(0, Number(rawMax) || 0);
   const posts = await listPagePosts(page.page_id, page.page_token, {
-    maxPosts: maxPosts || 200,
+    maxPosts,
     since: opts.since || undefined,
     until: opts.until || undefined,
+    include_videos: opts.include_videos !== false,
+    include_photos: opts.include_photos !== false,
+    include_scheduled: opts.include_scheduled !== false,
     metaAppKey: page.meta_app_key,
   });
 
   let filtered = posts;
   if (opts.keyword) {
     filtered = posts.filter((p) => matchKeyword(p, opts.keyword));
+  }
+
+  const bySource = {};
+  const byMedia = { video: 0, photo: 0, other: 0 };
+  for (const p of filtered) {
+    const src = String(p.content_source || "post").split("+")[0];
+    bySource[src] = (bySource[src] || 0) + 1;
+    const mt = String(p.media_type || p.status_type || "").toLowerCase();
+    if (mt.includes("video") || src.includes("video")) byMedia.video++;
+    else if (mt.includes("photo") || src === "photos") byMedia.photo++;
+    else byMedia.other++;
   }
 
   return {
@@ -183,12 +210,17 @@ export async function previewPagePosts(pageRowId, opts = {}) {
     },
     total_fetched: posts.length,
     total_matched: filtered.length,
+    source_hits: posts._source_hits || null,
+    by_source: bySource,
+    by_media: byMedia,
     posts: filtered.map((p) => ({
       id: p.id,
-      message: (p.message || p.story || "").slice(0, 240),
+      message: (p.message || p.story || p.description || "").slice(0, 240),
       created_time: p.created_time || null,
       permalink_url: p.permalink_url || null,
       status_type: p.status_type || null,
+      content_source: p.content_source || null,
+      media_type: p.media_type || null,
       has_picture: Boolean(p.full_picture),
     })),
   };
@@ -202,7 +234,8 @@ export async function previewPagePosts(pageRowId, opts = {}) {
  * - post_ids: string[] (optional — nếu có thì xóa đúng list, bỏ list API)
  * - since / until: unix or ISO
  * - keyword: filter message
- * - max_posts: cap per page when listing
+ * - max_posts: cap per page when listing (0 = unlimited / full wipe)
+ * - include_videos / include_photos / include_scheduled: default true
  * - use_batch: default true
  * - concurrency: default 8 (khi fallback single DELETE)
  * - page_parallel: số page chạy song song (list + delete), default 3, max 10
@@ -232,6 +265,15 @@ export function startDeleteJob(opts = {}) {
     10,
     Math.max(1, Number(opts.page_parallel ?? opts.pageParallel ?? 3) || 3)
   );
+  // 0 = unlimited (full wipe). UI "Xóa full" sends 0.
+  const rawMax = opts.max_posts ?? opts.maxPosts;
+  let maxPosts = 0;
+  if (rawMax !== undefined && rawMax !== null && rawMax !== "") {
+    maxPosts = Math.max(0, Number(rawMax) || 0);
+  } else if (!opts.full_wipe && !opts.fullWipe) {
+    // legacy default when neither full_wipe nor max set
+    maxPosts = 0;
+  }
   const job = {
     id: nanoid(10),
     kind: "delete_posts",
@@ -244,11 +286,21 @@ export function startDeleteJob(opts = {}) {
       since: opts.since || null,
       until: opts.until || null,
       keyword: opts.keyword || null,
-      max_posts: Number(opts.max_posts || opts.maxPosts || 500) || 500,
+      max_posts: maxPosts,
+      full_wipe: Boolean(opts.full_wipe || opts.fullWipe) || maxPosts === 0,
+      include_videos: opts.include_videos !== false && opts.includeVideos !== false,
+      include_photos: opts.include_photos !== false && opts.includePhotos !== false,
+      include_scheduled:
+        opts.include_scheduled !== false && opts.includeScheduled !== false,
       use_batch: opts.use_batch !== false && opts.useBatch !== false,
       concurrency: Math.min(20, Math.max(1, Number(opts.concurrency) || 8)),
       page_parallel: pageParallel,
       delay_ms: Math.max(0, Number(opts.delay_ms ?? opts.delayMs ?? 0)),
+      // Full clean: list→delete→list again until empty (or max passes)
+      wipe_passes: Math.min(
+        8,
+        Math.max(1, Number(opts.wipe_passes ?? opts.wipePasses ?? (maxPosts === 0 ? 3 : 1)) || 1)
+      ),
     },
     pages: pageRowIds.map((id) => ({
       page_row_id: id,
@@ -444,14 +496,20 @@ async function listOnePage(job, pageState, toDelete) {
       }
     } else {
       const posts = await listPagePosts(page.page_id, page.page_token, {
-        maxPosts: job.options.max_posts,
+        maxPosts: job.options.max_posts || 0,
         since: job.options.since || undefined,
         until: job.options.until || undefined,
+        include_videos: job.options.include_videos,
+        include_photos: job.options.include_photos,
+        include_scheduled: job.options.include_scheduled,
         metaAppKey: page.meta_app_key,
         shouldStop: () => job.stop_requested,
         onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
-        onBatch: (_batch, total) => {
+        onBatch: (_batch, total, info) => {
           pageState.listed = total;
+          if (info?.source) {
+            job.progress.label = `List · ${page.name} · ${info.source} (unique ${total})`;
+          }
           recompute(job);
           if (job.status === "rate_limited") {
             clearRateLimitUi(job, `List · ${page.name}`);
@@ -461,26 +519,45 @@ async function listOnePage(job, pageState, toDelete) {
       });
       clearRateLimitUi(job, `List xong · ${page.name}`);
       pageState.listed = posts.length;
+      pageState.source_hits = posts._source_hits || null;
       const filtered = job.options.keyword
         ? posts.filter((p) => matchKeyword(p, job.options.keyword))
         : posts;
       pageState.matched = filtered.length;
+      // count media kinds for report
+      let nVideo = 0;
+      let nPhoto = 0;
+      for (const p of filtered) {
+        const mt = String(p.media_type || p.status_type || p.content_source || "").toLowerCase();
+        if (mt.includes("video")) nVideo++;
+        else if (mt.includes("photo")) nPhoto++;
+      }
+      pageState.matched_videos = nVideo;
+      pageState.matched_photos = nPhoto;
       ids = filtered.map((p) => p.id);
       for (const p of filtered) {
         meta.set(p.id, {
           id: p.id,
           link: buildPostUrl(p.id, page.page_id, p.permalink_url),
-          message: String(p.message || p.story || "").slice(0, 200),
+          message: String(p.message || p.story || p.description || "").slice(0, 200),
           created_time: p.created_time || null,
+          content_source: p.content_source || null,
+          media_type: p.media_type || p.status_type || null,
         });
       }
     }
 
     job._postMeta.set(pageState.page_row_id, meta);
     toDelete.set(pageState.page_row_id, ids);
+    const srcNote = pageState.source_hits
+      ? ` · nguồn ${JSON.stringify(pageState.source_hits)}`
+      : "";
     pushRecent(
       job,
-      `${page.name}: ${ids.length} bài khớp (list ${pageState.listed})`
+      `${page.name}: ${ids.length} bài khớp (list ${pageState.listed}` +
+        `${pageState.matched_videos ? `, ~${pageState.matched_videos} video` : ""}` +
+        `${pageState.matched_photos ? `, ~${pageState.matched_photos} ảnh` : ""})` +
+        srcNote
     );
 
     if (job.dry_run) {
@@ -510,7 +587,7 @@ async function deleteOnePage(job, pageState, toDelete) {
   }
   if (pageState.status !== "ready") return;
 
-  const ids = toDelete.get(pageState.page_row_id) || [];
+  let ids = toDelete.get(pageState.page_row_id) || [];
   if (!ids.length) {
     pageState.status = "ok";
     recompute(job);
@@ -521,90 +598,139 @@ async function deleteOnePage(job, pageState, toDelete) {
   try {
     const page = loadPageForDelete(pageState.page_row_id);
     pageState.status = "deleting";
-    job.progress.label = `Xóa · ${page.name} (${ids.length}) · //${job.options.page_parallel} page`;
+    const passes = job.options.wipe_passes || 1;
+    job.progress.label = `Xóa · ${page.name} (${ids.length}) · ${passes} vòng · //${job.options.page_parallel}`;
     emit(job);
 
-    const result = await deletePagePostsFast(ids, page.page_token, {
-      useBatch: job.options.use_batch,
-      concurrency: job.options.concurrency,
-      delayMs: job.options.delay_ms,
-      metaAppKey: page.meta_app_key,
-      shouldStop: () => job.stop_requested,
-      onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
-      onProgress: (info) => {
-        pageState.ok = info.ok;
-        pageState.fail = info.fail;
-        recompute(job);
-        if (info.phase === "rate_limited" || info.rate_limit) {
-          // already handled by onRateLimit
-          return;
-        }
-        if (job.status === "rate_limited" || job.progress.rate_limited) {
-          clearRateLimitUi(
-            job,
-            `${page.name}: ${info.done}/${info.total}`
-          );
-        }
-        job.progress.phase = "deleting";
-        const active = job.pages.filter((p) => p.status === "deleting").length;
-        job.progress.label = `${page.name}: ${info.done}/${info.total} · ${active} page đang xóa`;
+    let totalOk = 0;
+    let totalFail = 0;
+    let lastResult = null;
+    const allFailed = [];
+
+    for (let pass = 1; pass <= passes; pass++) {
+      if (job.stop_requested) break;
+      if (!ids.length && pass > 1) break;
+
+      if (pass > 1) {
+        // Re-list remaining content (videos often only surface after feed is cleared)
+        pushRecent(job, `${page.name}: vòng ${pass}/${passes} — list lại…`);
+        job.progress.label = `List lại · ${page.name} · vòng ${pass}/${passes}`;
         emit(job);
-      },
-    });
+        const posts = await listPagePosts(page.page_id, page.page_token, {
+          maxPosts: job.options.max_posts || 0,
+          since: job.options.since || undefined,
+          until: job.options.until || undefined,
+          include_videos: job.options.include_videos,
+          include_photos: job.options.include_photos,
+          include_scheduled: job.options.include_scheduled,
+          metaAppKey: page.meta_app_key,
+          shouldStop: () => job.stop_requested,
+          onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
+        });
+        clearRateLimitUi(job, `List lại xong · ${page.name}`);
+        const filtered = job.options.keyword
+          ? posts.filter((p) => matchKeyword(p, job.options.keyword))
+          : posts;
+        ids = filtered.map((p) => p.id);
+        pageState.listed = (pageState.listed || 0) + posts.length;
+        pageState.matched = (pageState.matched || 0) + filtered.length;
+        if (!ids.length) {
+          pushRecent(job, `${page.name}: vòng ${pass} — hết bài, dừng.`);
+          break;
+        }
+        pushRecent(job, `${page.name}: vòng ${pass} — còn ${ids.length} bài/video`);
+        job.progress.total_delete = (job.progress.total_delete || 0) + ids.length;
+      }
+
+      job.progress.label = `Xóa · ${page.name} · vòng ${pass}/${passes} (${ids.length})`;
+      emit(job);
+
+      lastResult = await deletePagePostsFast(ids, page.page_token, {
+        useBatch: job.options.use_batch,
+        concurrency: job.options.concurrency,
+        delayMs: job.options.delay_ms,
+        metaAppKey: page.meta_app_key,
+        shouldStop: () => job.stop_requested,
+        onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
+        onProgress: (info) => {
+          pageState.ok = totalOk + (info.ok || 0);
+          pageState.fail = totalFail + (info.fail || 0);
+          recompute(job);
+          if (info.phase === "rate_limited" || info.rate_limit) return;
+          if (job.status === "rate_limited" || job.progress.rate_limited) {
+            clearRateLimitUi(
+              job,
+              `${page.name}: vòng ${pass} ${info.done}/${info.total}`
+            );
+          }
+          job.progress.phase = "deleting";
+          const active = job.pages.filter((p) => p.status === "deleting").length;
+          job.progress.label = `${page.name}: vòng ${pass}/${passes} · ${info.done}/${info.total} · ${active} page`;
+          emit(job);
+        },
+      });
+
+      totalOk += lastResult.ok || 0;
+      totalFail += lastResult.fail || 0;
+      for (const it of lastResult.items || []) {
+        if (!it.ok) allFailed.push(it);
+      }
+      pushRecent(
+        job,
+        `${page.name}: vòng ${pass}/${passes} · OK ${lastResult.ok} · fail ${lastResult.fail}` +
+          (lastResult.gone ? ` · gone ${lastResult.gone}` : "")
+      );
+
+      // After a full wipe pass, clear ids so next pass re-lists fresh
+      if (passes > 1) ids = [];
+    }
 
     clearRateLimitUi(job, null);
-    pageState.ok = result.ok;
-    pageState.fail = result.fail;
-    pageState.error_summary = result.error_summary || [];
+    pageState.ok = totalOk;
+    pageState.fail = totalFail;
+    pageState.error_summary = lastResult?.error_summary || [];
     pageState.status =
-      result.fail === 0 ? "ok" : result.ok === 0 ? "fail" : "partial";
+      totalFail === 0 ? "ok" : totalOk === 0 ? "fail" : "partial";
+    pageState.wipe_passes_done = passes;
 
     const meta = job._postMeta?.get(pageState.page_row_id) || new Map();
     const failed = [];
-    for (const it of result.items || []) {
-      if (it.ok) continue;
+    // de-dupe failed by post_id, keep last error
+    const failById = new Map();
+    for (const it of allFailed) {
+      failById.set(it.post_id, it);
+    }
+    for (const it of failById.values()) {
       const m = meta.get(it.post_id) || {};
       failed.push({
         post_id: it.post_id,
         link: m.link || buildPostUrl(it.post_id, page.page_id),
         message: m.message || "",
         created_time: m.created_time || null,
+        content_source: m.content_source || null,
+        media_type: m.media_type || null,
         error: it.error || "unknown",
       });
     }
-    // Cap stored fails per page to keep job JSON sane (UI can still show + export)
     const MAX_FAIL_STORE = 3000;
     pageState.failed_posts = failed.slice(0, MAX_FAIL_STORE);
     pageState.failed_truncated = failed.length > MAX_FAIL_STORE;
 
-    if (result.fail) {
-      const top = (result.error_summary || [])[0];
-      const firstFail = result.items.find((x) => !x.ok);
+    if (totalFail) {
+      const top = (lastResult?.error_summary || [])[0];
       pageState.error =
         (top && `${top.message} (×${top.count})`) ||
-        firstFail?.error ||
-        `${result.fail} lỗi`;
+        failed[0]?.error ||
+        `${totalFail} lỗi`;
     }
-    const pauseNote =
-      result.rate_limit_pauses > 0
-        ? ` · đã tạm dừng limit ${result.rate_limit_pauses}+ lần`
-        : "";
-    const goneNote = result.gone ? ` · đã mất sẵn ${result.gone}` : "";
     pushRecent(
       job,
-      `${page.name}: xóa OK ${result.ok} · fail ${result.fail}${goneNote}${pauseNote}`
+      `${page.name}: TỔNG xóa OK ${totalOk} · fail ${totalFail} · ${passes} vòng`
     );
-    if (result.error_summary?.length) {
-      const top3 = result.error_summary
-        .slice(0, 3)
-        .map((e) => `「${e.message}」×${e.count}`)
-        .join(" · ");
-      pushRecent(job, `${page.name} · top lỗi: ${top3}`);
-    }
     if (failed.length) {
       pushRecent(
         job,
-        `${page.name}: ${failed.length} link lỗi (xem bảng kết quả / tải CSV)`
+        `${page.name}: ${failed.length} link lỗi (xem bảng / CSV)`
       );
     }
   } catch (e) {
