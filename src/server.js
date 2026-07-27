@@ -10,6 +10,8 @@ import apiRoutes from "./routes/api.js";
 import postingRoutes from "./routes/posting.js";
 import jobsRoutes from "./routes/jobs.js";
 import licenseRoutes from "./routes/license.js";
+import deletePostsRoutes from "./routes/deletePosts.js";
+import deleteGroupPostsRoutes from "./routes/deleteGroupPosts.js";
 import { runSchedulerTick, getPagePostConfig, mediaStats, getCaptionStats } from "./services/poster.js";
 import { reconcileScheduledLogs } from "./services/schedule.js";
 import { exportAllDailyReports, exportPostingHistoryDaily, vnDay, yesterdayVn } from "./services/dailyReports.js";
@@ -100,20 +102,23 @@ const exampleBeside = path.join(getExeDir(), ".env.example");
 if (!fs.existsSync(exampleBeside)) {
   try {
     const sample = [
+      "# Mẫu tham khảo — KHÔNG chứa App ID/Secret sẵn. Tự điền trong tool.",
       "PORT=3847",
-      "APP_BASE_URL=http://localhost:3847",
+      "APP_BASE_URL=http://127.0.0.1:3847",
+      "# Connect FB qua OAuth relay HTTPS (secret chỉ trên server relay)",
+      "OAUTH_RELAY=1",
+      "OAUTH_RELAY_URL=",
       "FB_APP_ID=",
-      "FB_APP_SECRET=",
+      "# FB_APP_SECRET=  ← gói khách để trống; chỉ máy nội bộ mới điền",
       "FB_APP_NAME=App 1",
-      "FB_REDIRECT_URI=http://localhost:3847/auth/facebook/callback",
+      "FB_REDIRECT_URI=",
       "# App 2 (optional — Connect /auth/facebook?app=app2)",
       "FB_APP_ID_2=",
-      "FB_APP_SECRET_2=",
       "FB_APP_NAME_2=App 2",
       "# FB_REDIRECT_URI_2=  (empty = same as App 1; register URI on BOTH Meta apps)",
       "FB_GRAPH_VERSION=v21.0",
       "NGROK_AUTHTOKEN=",
-      "NGROK_AUTOSTART=1",
+      "NGROK_AUTOSTART=0",
       "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
       "TOKEN_ENCRYPTION_KEY=change-me-to-a-long-random-string-32+",
       "GITHUB_REPO=trumrename/fb-page-studio",
@@ -261,6 +266,8 @@ app.use("/api/license", licenseRoutes);
 app.use("/api", apiRoutes);
 app.use("/api/posting", postingRoutes);
 app.use("/api/jobs", jobsRoutes);
+app.use("/api/delete-posts", deletePostsRoutes);
+app.use("/api/delete-group-posts", deleteGroupPostsRoutes);
 app.use(express.static(publicDir));
 
 // Startup: log if GitHub has a newer release (non-blocking)

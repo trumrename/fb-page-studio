@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Xóa bài Fanpage · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    .del-grid { display:grid; grid-template-columns: 1.1fr 1fr; gap:1rem; }
+    @media (max-width: 980px) { .del-grid { grid-template-columns: 1fr; } }
+    .page-pick {
+      max-height: 320px; overflow:auto; border:1px solid var(--border);
+      border-radius:12px; background:rgba(0,0,0,.18);
+    }
+    .page-pick label {
+      display:flex; gap:.6rem; align-items:flex-start; padding:.55rem .7rem;
+      border-bottom:1px solid var(--border); cursor:pointer; font-size:.86rem;
+    }
+    .page-pick label:hover { background:rgba(55,163,255,.08); }
+    .page-pick label.checked { background:rgba(255,113,132,.08); }
+    .page-pick small { color:var(--muted); display:block; }
+    .post-list {
+      max-height: 420px; overflow:auto; border:1px solid var(--border);
+      border-radius:12px;
+    }
+    .post-row {
+      display:grid; grid-template-columns: 1fr auto; gap:.5rem;
+      padding:.65rem .75rem; border-bottom:1px solid var(--border); font-size:.82rem;
+    }
+    .post-row .msg { color:var(--text); white-space:pre-wrap; word-break:break-word; }
+    .post-row .meta { color:var(--muted); font-size:.75rem; margin-top:.25rem; }
+    .bar {
+      height:12px; border-radius:99px; background:rgba(255,255,255,.06);
+      border:1px solid var(--border); overflow:hidden; margin:.5rem 0;
+    }
+    .bar > i {
+      display:block; height:100%; width:0%;
+      background:linear-gradient(90deg,#ff7184,#ff9a5a);
+      transition:width .25s ease;
+    }
+    .log-box {
+      max-height:180px; overflow:auto; font-size:.78rem; font-family:ui-monospace,monospace;
+      background:rgba(0,0,0,.25); border-radius:10px; padding:.6rem .75rem;
+      border:1px solid var(--border); color:var(--muted);
+    }
+    .warn-box {
+      border:1px solid rgba(255,113,132,.35); background:rgba(255,113,132,.08);
+      border-radius:12px; padding:.75rem .9rem; font-size:.86rem; margin-bottom:1rem;
+    }
+    .field-row { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+    @media (max-width:640px){ .field-row { grid-template-columns:1fr; } }
+    label.field { display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem; }
+    input[type=text], input[type=number], input[type=datetime-local] {
+      width:100%; padding:.55rem .7rem; border-radius:10px; border:1px solid var(--border);
+      background:rgba(0,0,0,.25); color:var(--text); font:inherit;
+    }
+    .chk { display:flex; align-items:center; gap:.45rem; font-size:.86rem; margin-top:.5rem; }
+    .rl-banner {
+      display:none; margin:.75rem 0 0; padding:.75rem .9rem; border-radius:12px;
+      border:1px solid rgba(245,201,106,.45); background:rgba(245,201,106,.12);
+      font-size:.88rem; line-height:1.45;
+    }
+    .rl-banner.on { display:block; }
+    .rl-banner b { color:#f5c96a; }
+    .rl-banner .sec { font-variant-numeric:tabular-nums; font-weight:800; font-size:1.15rem; color:#ffe08a; }
+  </style>
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <h1>Xóa bài Fanpage siêu nhanh</h1>
+            <div class="sub">Graph API · batch 50 · multi-page</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" class="btn-ghost btn-sm" id="btnReloadPages">Tải lại Page</button>
+          <button type="button" class="btn-ghost btn-sm" id="btnPreview">Xem trước</button>
+          <button type="button" class="btn-warn btn-sm" id="btnDry">Dry-run</button>
+          <button type="button" class="btn-primary" id="btnDelete" style="background:linear-gradient(135deg,#ff5a6e,#e11d48);border:0">Xóa ngay</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="warn-box">
+          <b>Cảnh báo:</b> Xóa bài trên Facebook <b>không khôi phục được</b>.
+          Chỉ xóa bài do <b>Page của bạn</b> đăng (token Page + quyền <code>pages_manage_posts</code>).
+          Nên bấm <b>Xem trước</b> / <b>Dry-run</b> trước khi xóa hàng loạt.
+          <br/><br/>
+          <b>Rate limit Facebook:</b> nếu API bị limit, tool <b>tự tạm dừng</b>, hiện đếm ngược,
+          rồi <b>tự chạy lại</b> (tối đa ~12 lần chờ / lần gọi). Bấm <b>Dừng</b> nếu muốn hủy hẳn.
+        </div>
+
+        <div class="del-grid">
+          <section class="panel">
+            <h2 class="panel-hd">1. Chọn Page</h2>
+            <div class="panel-body">
+              <input type="text" id="pageFilter" placeholder="Lọc tên page…" style="margin-bottom:.6rem" />
+              <div class="page-pick" id="pageList"><p class="muted" style="padding:.75rem">Đang tải…</p></div>
+              <div class="chk"><input type="checkbox" id="chkAll" /> <span>Chọn tất cả (đã lọc)</span></div>
+              <p class="muted" style="margin:.6rem 0 0;font-size:.8rem" id="pageCount">0 page</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-hd">2. Bộ lọc & tốc độ</h2>
+            <div class="panel-body">
+              <div class="field-row">
+                <div>
+                  <label class="field">Từ ngày (tùy chọn)</label>
+                  <input type="datetime-local" id="since" />
+                </div>
+                <div>
+                  <label class="field">Đến ngày (tùy chọn)</label>
+                  <input type="datetime-local" id="until" />
+                </div>
+              </div>
+              <div style="margin-top:.75rem">
+                <label class="field">Keyword trong caption (tùy chọn)</label>
+                <input type="text" id="keyword" placeholder="VD: sale, test, outdated…" />
+              </div>
+              <div class="field-row" style="margin-top:.75rem">
+                <div>
+                  <label class="field">Tối đa bài / page (khi list)</label>
+                  <input type="number" id="maxPosts" value="5000" min="1" max="20000" />
+                </div>
+                <div>
+                  <label class="field">Delay giữa batch (ms)</label>
+                  <input type="number" id="delayMs" value="0" min="0" max="5000" />
+                </div>
+              </div>
+              <div class="field-row" style="margin-top:.75rem">
+                <div>
+                  <label class="field">Số page song song (1–10)</label>
+                  <input type="number" id="pageParallel" value="5" min="1" max="10" />
+                </div>
+                <div>
+                  <label class="field">Preset tốc độ</label>
+                  <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+                    <button type="button" class="btn-ghost btn-sm" id="presetSafe">An toàn</button>
+                    <button type="button" class="btn-ghost btn-sm" id="presetBalanced">Cân bằng</button>
+                    <button type="button" class="btn-warn btn-sm" id="presetTurbo">Turbo</button>
+                  </div>
+                </div>
+              </div>
+              <div class="chk"><input type="checkbox" id="useBatch" checked /> <span>Dùng Graph Batch (tối đa 50 DELETE / request — nhanh nhất)</span></div>
+              <p class="muted" style="margin-top:.75rem;font-size:.8rem;line-height:1.45">
+                <b>Nhiều page 1 lúc:</b> set «Số page song song» (vd 3–5).<br/>
+                Nếu fail nhiều: hạ song song xuống <b>2</b>, delay <b>80–150ms</b>, bấm preset <b>Cân bằng / An toàn</b>.<br/>
+                Tool sẽ <b>retry lỗi tạm</b> + <b>quét lại bài fail</b> 1 lần; log hiện <b>top lỗi</b> Meta.<br/>
+                Quyền: <code>pages_manage_posts</code>, <code>pages_read_engagement</code>.
+              </p>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel section-gap">
+          <h2 class="panel-hd">3. Tiến trình</h2>
+          <div class="panel-body">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+              <div>
+                <div class="pct" id="pct">0%</div>
+                <div class="muted" id="phaseLabel" style="font-size:.85rem">Chưa chạy</div>
+              </div>
+              <div class="stats" style="margin:0;flex:1;min-width:240px">
+                <div class="stat"><div class="n" id="stListed">0</div><div class="l">Đã list</div></div>
+                <div class="stat"><div class="n" id="stMatched">0</div><div class="l">Khớp filter</div></div>
+                <div class="stat"><div class="n" id="stOk">0</div><div class="l">Đã xóa</div></div>
+                <div class="stat"><div class="n" id="stFail">0</div><div class="l">Lỗi</div></div>
+              </div>
+              <button type="button" class="btn-ghost btn-sm" id="btnStop" disabled>Dừng</button>
+            </div>
+            <div class="bar"><i id="barFill"></i></div>
+            <div class="rl-banner" id="rlBanner">
+              <b>⚠ Facebook đang limit API</b> — tool đã <b>tạm dừng</b> và sẽ
+              <b>tự chạy lại</b> khi hết limit.
+              Còn <span class="sec" id="rlSec">—</span> giây.
+              <div class="muted" id="rlMsg" style="margin-top:.35rem;font-size:.8rem"></div>
+            </div>
+            <div class="log-box" id="logBox">Log sẽ hiện ở đây…</div>
+          </div>
+        </section>
+
+        <section class="panel section-gap" id="reportSection" style="display:none">
+          <h2 class="panel-hd">4. Kết quả theo Page · bài lỗi</h2>
+          <div class="panel-body">
+            <div id="reportSummary" class="muted" style="margin-bottom:.75rem;font-size:.88rem"></div>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem">
+              <button type="button" class="btn-ghost btn-sm" id="btnCopyLinks" disabled>Copy link lỗi</button>
+              <a class="btn btn-ghost btn-sm" id="btnCsv" href="#" style="pointer-events:none;opacity:.5">Tải CSV lỗi</a>
+              <a class="btn btn-ghost btn-sm" id="btnTxt" href="#" style="pointer-events:none;opacity:.5">Tải TXT link</a>
+            </div>
+            <div class="post-list" id="pageReport" style="max-height:280px;margin-bottom:1rem"></div>
+            <h3 style="font-size:.95rem;margin:0 0 .5rem">Danh sách bài lỗi (link)</h3>
+            <div class="post-list" id="failLinks" style="max-height:360px">
+              <p class="muted" style="padding:.75rem">Chưa có bài lỗi.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel section-gap">
+          <h2 class="panel-hd">5. Xem trước bài (1 page đầu tiên đã chọn)</h2>
+          <div class="panel-body">
+            <div class="post-list" id="previewList">
+              <p class="muted" style="padding:.75rem">Bấm «Xem trước» để tải danh sách bài.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="/js/shell.js"></script>
+  <script src="/js/update.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let pages = [];
+    let currentJobId = null;
+    let es = null;
+
+    async function api(path, opts = {}) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function toUnix(localVal) {
+      if (!localVal) return null;
+      const t = new Date(localVal).getTime();
+      if (!Number.isFinite(t)) return null;
+      return Math.floor(t / 1000);
+    }
+
+    function selectedIds() {
+      return [...document.querySelectorAll("#pageList input[type=checkbox]:checked")]
+        .map((el) => Number(el.value))
+        .filter((n) => n > 0);
+    }
+
+    function renderPages(filter = "") {
+      const q = filter.trim().toLowerCase();
+      const list = pages.filter((p) => {
+        if (!q) return true;
+        return (p.name || "").toLowerCase().includes(q) || String(p.page_id).includes(q);
+      });
+      $("pageCount").textContent = `${list.length} page${list.length !== pages.length ? ` (lọc từ ${pages.length})` : ""}`;
+      if (!list.length) {
+        $("pageList").innerHTML = `<p class="muted" style="padding:.75rem">Không có page. Hãy Connect Facebook ở màn Kết nối.</p>`;
+        return;
+      }
+      $("pageList").innerHTML = list.map((p) => `
+        <label data-id="${p.id}">
+          <input type="checkbox" value="${p.id}" />
+          <span>
+            <b>${esc(p.name || "Page")}</b>
+            <small>${esc(p.page_id)} · row #${p.id}</small>
+          </span>
+        </label>
+      `).join("");
+      $("pageList").querySelectorAll("input").forEach((inp) => {
+        inp.addEventListener("change", () => {
+          inp.closest("label")?.classList.toggle("checked", inp.checked);
+        });
+      });
+    }
+
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    async function loadPages() {
+      $("pageList").innerHTML = `<p class="muted" style="padding:.75rem">Đang tải…</p>`;
+      const data = await api("/api/delete-posts/pages");
+      pages = data.pages || [];
+      renderPages($("pageFilter").value);
+    }
+
+    function optsFromForm(extra = {}) {
+      return {
+        page_row_ids: selectedIds(),
+        since: toUnix($("since").value),
+        until: toUnix($("until").value),
+        keyword: $("keyword").value.trim() || null,
+        max_posts: Number($("maxPosts").value) || 5000,
+        delay_ms: Math.max(0, Number($("delayMs").value) || 0),
+        page_parallel: Math.min(10, Math.max(1, Number($("pageParallel").value) || 3)),
+        use_batch: $("useBatch").checked,
+        ...extra,
+      };
+    }
+
+    $("presetSafe").onclick = () => {
+      $("useBatch").checked = true;
+      $("delayMs").value = 150;
+      $("pageParallel").value = 2;
+    };
+    $("presetBalanced").onclick = () => {
+      $("useBatch").checked = true;
+      $("delayMs").value = 40;
+      $("pageParallel").value = 3;
+    };
+    $("presetTurbo").onclick = () => {
+      $("useBatch").checked = true;
+      $("delayMs").value = 0;
+      $("pageParallel").value = 5;
+      $("maxPosts").value = 5000;
+    };
+
+    function renderReport(job) {
+      const done = ["ok", "fail", "partial", "stopped"].includes(job.status);
+      const sec = $("reportSection");
+      if (!done && !job.report) {
+        sec.style.display = "none";
+        return;
+      }
+      sec.style.display = "block";
+      const report = job.report;
+      const pages = report?.pages || job.pages || [];
+      const fails = report?.failed_posts || [];
+      // fallback: gather from pages
+      let failList = fails;
+      if (!failList.length) {
+        failList = [];
+        for (const pg of job.pages || []) {
+          for (const f of pg.failed_posts || []) {
+            failList.push({
+              page_name: pg.page_name,
+              page_id: pg.page_id,
+              ...f,
+            });
+          }
+        }
+      }
+      const t = report?.totals || {
+        ok: pNum(job, "ok"),
+        fail: pNum(job, "fail"),
+        pages: pages.length,
+        pages_with_fail: pages.filter((x) => (x.fail || 0) > 0).length,
+        failed_links: failList.length,
+      };
+      $("reportSummary").innerHTML =
+        `<b>Tổng:</b> OK <b style="color:var(--ok)">${t.ok || 0}</b> · ` +
+        `Lỗi <b style="color:var(--danger)">${t.fail || 0}</b> · ` +
+        `Page có lỗi <b>${t.pages_with_fail || 0}/${t.pages || pages.length}</b> · ` +
+        `Link fail <b>${t.failed_links ?? failList.length}</b>`;
+
+      // Per-page table
+      const sorted = [...pages].sort((a, b) => (b.fail || 0) - (a.fail || 0));
+      $("pageReport").innerHTML = sorted.length
+        ? sorted
+            .map((pg) => {
+              const name = esc(pg.page_name || pg.page_id || "?");
+              const fail = pg.fail || 0;
+              const ok = pg.ok || 0;
+              const color = fail ? "var(--danger)" : "var(--ok)";
+              const err = pg.error ? `<div class="meta" style="color:var(--danger)">${esc(pg.error)}</div>` : "";
+              return `<div class="post-row">
+                <div>
+                  <div class="msg"><b>${name}</b></div>
+                  <div class="meta">OK ${ok} · <span style="color:${color}">Lỗi ${fail}</span> · list ${pg.matched || pg.listed || 0}</div>
+                  ${err}
+                </div>
+                <div style="font-weight:800;color:${color};font-variant-numeric:tabular-nums">${fail}</div>
+              </div>`;
+            })
+            .join("")
+        : `<p class="muted" style="padding:.75rem">Chưa có dữ liệu page.</p>`;
+
+      // Failed links list (cap UI 500 for perf)
+      const show = failList.slice(0, 500);
+      if (!show.length) {
+        $("failLinks").innerHTML = `<p class="muted" style="padding:.75rem">Không có bài lỗi — hoặc job chưa xong.</p>`;
+      } else {
+        $("failLinks").innerHTML =
+          (failList.length > 500
+            ? `<div class="muted" style="padding:.5rem .75rem;font-size:.8rem">Hiển thị 500/${failList.length} — tải CSV/TXT để lấy full.</div>`
+            : "") +
+          show
+            .map((f) => {
+              const link = f.link || "#";
+              return `<div class="post-row">
+                <div>
+                  <div class="msg"><a href="${esc(link)}" target="_blank" rel="noopener" style="color:var(--accent-2)">${esc(link)}</a></div>
+                  <div class="meta">${esc(f.page_name || "")} · ${esc(f.post_id || "")} · ${esc((f.error || "").slice(0, 120))}</div>
+                  ${f.message ? `<div class="meta">${esc(f.message.slice(0, 100))}</div>` : ""}
+                </div>
+              </div>`;
+            })
+            .join("");
+      }
+
+      const hasFails = failList.length > 0;
+      $("btnCopyLinks").disabled = !hasFails;
+      const csv = $("btnCsv");
+      const txt = $("btnTxt");
+      if (job.id && hasFails) {
+        csv.href = `/api/delete-posts/jobs/${job.id}/failed.csv`;
+        txt.href = `/api/delete-posts/jobs/${job.id}/failed-links.txt`;
+        csv.style.pointerEvents = "";
+        txt.style.pointerEvents = "";
+        csv.style.opacity = "1";
+        txt.style.opacity = "1";
+        csv.setAttribute("download", "");
+        txt.setAttribute("download", "");
+      } else {
+        csv.href = "#";
+        txt.href = "#";
+        csv.style.pointerEvents = "none";
+        txt.style.pointerEvents = "none";
+        csv.style.opacity = "0.5";
+        txt.style.opacity = "0.5";
+      }
+
+      window.__lastFailLinks = failList.map((f) => f.link).filter(Boolean);
+    }
+
+    function pNum(job, key) {
+      return (job.pages || []).reduce((s, p) => s + (Number(p[key]) || 0), 0);
+    }
+
+    function applyJob(job) {
+      if (!job) return;
+      const p = job.progress || {};
+      $("pct").textContent = `${p.percent || 0}%`;
+      $("barFill").style.width = `${p.percent || 0}%`;
+      $("phaseLabel").textContent = p.label || job.status || "";
+      $("stListed").textContent = p.listed ?? 0;
+      $("stMatched").textContent = p.matched ?? 0;
+      $("stOk").textContent = p.ok ?? 0;
+      $("stFail").textContent = p.fail ?? 0;
+      const rateLimited =
+        job.status === "rate_limited" ||
+        p.rate_limited ||
+        p.phase === "rate_limited";
+      const banner = $("rlBanner");
+      if (rateLimited) {
+        banner.classList.add("on");
+        $("rlSec").textContent = String(p.rate_limit_remaining_sec ?? "—");
+        $("rlMsg").textContent = p.rate_limit_message || p.label || "";
+        $("phaseLabel").style.color = "#f5c96a";
+      } else {
+        banner.classList.remove("on");
+        $("phaseLabel").style.color = "";
+      }
+      const running = ["queued", "listing", "running", "rate_limited"].includes(job.status);
+      $("btnStop").disabled = !running;
+      $("btnDelete").disabled = running;
+      $("btnDry").disabled = running;
+      if (Array.isArray(job.recent) && job.recent.length) {
+        $("logBox").innerHTML = job.recent
+          .slice(0, 40)
+          .map((r) => `<div>[${esc((r.at || "").slice(11, 19))}] ${esc(r.text)}</div>`)
+          .join("");
+      }
+      renderReport(job);
+    }
+
+    function watchJob(id) {
+      if (es) { try { es.close(); } catch {} es = null; }
+      currentJobId = id;
+      es = new EventSource(`/api/delete-posts/jobs/${id}/stream`);
+      es.onmessage = (ev) => {
+        try {
+          const job = JSON.parse(ev.data);
+          applyJob(job);
+        } catch {}
+      };
+      es.addEventListener("done", () => {
+        try { es.close(); } catch {}
+        es = null;
+        $("btnStop").disabled = true;
+        $("btnDelete").disabled = false;
+        $("btnDry").disabled = false;
+      });
+      es.onerror = () => {
+        // fallback poll
+        pollJob(id);
+      };
+    }
+
+    async function pollJob(id) {
+      try {
+        const data = await api(`/api/delete-posts/jobs/${id}`);
+        applyJob(data.job);
+        if (["ok", "fail", "partial", "stopped"].includes(data.job?.status)) {
+          $("btnStop").disabled = true;
+          $("btnDelete").disabled = false;
+          $("btnDry").disabled = false;
+          return;
+        }
+        setTimeout(() => pollJob(id), 800);
+      } catch {
+        setTimeout(() => pollJob(id), 1500);
+      }
+    }
+
+    async function startJob(dry) {
+      const ids = selectedIds();
+      if (!ids.length) {
+        alert("Chọn ít nhất 1 Page");
+        return;
+      }
+      if (!dry) {
+        const ok = confirm(
+          `XÓA VĨNH VIỄN bài đăng trên ${ids.length} page?\n\nHành động không hoàn tác được.`
+        );
+        if (!ok) return;
+      }
+      try {
+        const data = await api("/api/delete-posts/start", {
+          method: "POST",
+          body: JSON.stringify(optsFromForm({ dry_run: dry })),
+        });
+        applyJob(data.job);
+        watchJob(data.job.id);
+      } catch (e) {
+        alert(e.message || String(e));
+      }
+    }
+
+    async function preview() {
+      const ids = selectedIds();
+      if (!ids.length) {
+        alert("Chọn ít nhất 1 Page để xem trước");
+        return;
+      }
+      $("previewList").innerHTML = `<p class="muted" style="padding:.75rem">Đang tải bài…</p>`;
+      try {
+        const q = new URLSearchParams({
+          page_row_id: String(ids[0]),
+          max_posts: String(Math.min(100, Number($("maxPosts").value) || 50)),
+        });
+        const since = toUnix($("since").value);
+        const until = toUnix($("until").value);
+        if (since) q.set("since", String(since));
+        if (until) q.set("until", String(until));
+        if ($("keyword").value.trim()) q.set("keyword", $("keyword").value.trim());
+        const data = await api(`/api/delete-posts/preview?${q}`);
+        const posts = data.posts || [];
+        if (!posts.length) {
+          $("previewList").innerHTML = `<p class="muted" style="padding:.75rem">Không có bài khớp filter trên page này.</p>`;
+          return;
+        }
+        $("previewList").innerHTML = `
+          <div class="muted" style="padding:.5rem .75rem;font-size:.8rem">
+            ${esc(data.page?.name)} · khớp ${data.total_matched}/${data.total_fetched}
+          </div>
+          ${posts.map((p) => `
+            <div class="post-row">
+              <div>
+                <div class="msg">${esc(p.message || "(không caption)")}</div>
+                <div class="meta">${esc(p.created_time || "")} · ${esc(p.id)}</div>
+              </div>
+              ${p.permalink_url ? `<a class="btn-ghost btn-sm" href="${esc(p.permalink_url)}" target="_blank" rel="noopener">Mở</a>` : ""}
+            </div>
+          `).join("")}
+        `;
+      } catch (e) {
+        $("previewList").innerHTML = `<p style="padding:.75rem;color:var(--danger)">${esc(e.message)}</p>`;
+      }
+    }
+
+    $("pageFilter").addEventListener("input", () => renderPages($("pageFilter").value));
+    $("chkAll").addEventListener("change", () => {
+      const on = $("chkAll").checked;
+      $("pageList").querySelectorAll("input[type=checkbox]").forEach((inp) => {
+        inp.checked = on;
+        inp.closest("label")?.classList.toggle("checked", on);
+      });
+    });
+    $("btnReloadPages").onclick = () => loadPages().catch((e) => alert(e.message));
+    $("btnPreview").onclick = () => preview();
+    $("btnDry").onclick = () => startJob(true);
+    $("btnDelete").onclick = () => startJob(false);
+    $("btnStop").onclick = async () => {
+      if (!currentJobId) return;
+      try {
+        const data = await api(`/api/delete-posts/jobs/${currentJobId}/stop`, { method: "POST", body: "{}" });
+        applyJob(data.job);
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+
+    $("btnCopyLinks").onclick = async () => {
+      const links = window.__lastFailLinks || [];
+      if (!links.length) return;
+      try {
+        await navigator.clipboard.writeText(links.join("\n"));
+        alert(`Đã copy ${links.length} link lỗi`);
+      } catch {
+        // fallback
+        const ta = document.createElement("textarea");
+        ta.value = links.join("\n");
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+        alert(`Đã copy ${links.length} link lỗi`);
+      }
+    };
+
+    loadPages().catch((e) => {
+      $("pageList").innerHTML = `<p style="padding:.75rem;color:var(--danger)">${esc(e.message)}</p>`;
+    });
+  </script>
+</body>
+</html>

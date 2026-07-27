@@ -23,6 +23,66 @@ function scopesFromEnv(envKey, fallback) {
   return fallback || config.facebook.scopes;
 }
 
+function isLocalRedirectUri(u) {
+  const s = String(u || "").trim();
+  if (!s) return true;
+  if (/localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(s)) return true;
+  // Facebook Valid OAuth Redirect URIs must be HTTPS in production/relay
+  if (/^http:\/\//i.test(s) && !/localhost|127\.0\.0\.1/i.test(s)) {
+    /* allow plain http only for true local */
+  }
+  return false;
+}
+
+/**
+ * Facebook OAuth redirect_uri MUST match exactly in:
+ *  1) dialog/oauth  2) code → token exchange  3) Meta App whitelist
+ * Relay mode: always public HTTPS (modelswiki.top), never 127.0.0.1 / localhost.
+ *
+ * Prefer live process.env over frozen config (config loads once at boot).
+ */
+export function resolveOauthRedirectUri(explicit) {
+  const envUri = String(process.env.FB_REDIRECT_URI || "").trim();
+  const cfgUri = String(config.facebook?.redirectUri || "").trim();
+  const raw = String(explicit || envUri || cfgUri || "").trim().replace(/\/$/, "");
+  const relayBase = String(
+    process.env.OAUTH_RELAY_URL || process.env.RELAY_PUBLIC_URL || ""
+  )
+    .trim()
+    .replace(/\/$/, "");
+  const relayOn = isOauthRelayMode();
+
+  const asCallback = (baseOrFull) => {
+    const s = String(baseOrFull || "").trim().replace(/\/$/, "");
+    if (!s) return "";
+    if (/\/auth\/facebook\/callback$/i.test(s)) return s;
+    // bare domain or origin
+    try {
+      const u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
+      return `${u.origin}/auth/facebook/callback`;
+    } catch {
+      return `${s}/auth/facebook/callback`;
+    }
+  };
+
+  if (relayOn) {
+    // Good: explicit/env already public HTTPS callback
+    if (raw && !isLocalRedirectUri(raw) && /^https:\/\//i.test(raw)) {
+      return asCallback(raw);
+    }
+    if (relayBase) return asCallback(relayBase);
+    // Last resort: keep raw if any
+    if (raw && !isLocalRedirectUri(raw)) return asCallback(raw);
+    console.warn(
+      "[oauth] OAUTH_RELAY=1 nhưng thiếu OAUTH_RELAY_URL / FB_REDIRECT_URI HTTPS — Connect sẽ fail"
+    );
+  }
+
+  if (raw) return raw;
+  if (relayBase) return asCallback(relayBase);
+  return `http://127.0.0.1:${config.port || 3847}/auth/facebook/callback`;
+}
+
 /**
  * @returns {Array<{
  *   key: string,
@@ -42,15 +102,13 @@ export function listMetaApps() {
   apps.push({
     key: "app1",
     name: process.env.FB_APP_NAME || process.env.FB_APP_NAME_1 || "App 1",
-    appId: String(config.facebook.appId || process.env.FB_APP_ID || "").trim(),
+    appId: String(process.env.FB_APP_ID || config.facebook.appId || "").trim(),
     appSecret: String(
-      config.facebook.appSecret || process.env.FB_APP_SECRET || ""
+      process.env.FB_APP_SECRET || config.facebook.appSecret || ""
     ).trim(),
-    redirectUri: String(
-      config.facebook.redirectUri ||
-        process.env.FB_REDIRECT_URI ||
-        `http://localhost:${config.port}/auth/facebook/callback`
-    ).trim(),
+    redirectUri: resolveOauthRedirectUri(
+      process.env.FB_REDIRECT_URI || config.facebook.redirectUri
+    ),
     scopes: scopesFromEnv("FB_SCOPES", scopes),
   });
 
@@ -64,12 +122,11 @@ export function listMetaApps() {
       name: process.env[`FB_APP_NAME_${n}`] || `App ${n}`,
       appId: idN,
       appSecret: String(process.env[`FB_APP_SECRET_${n}`] || "").trim(),
-      redirectUri: String(
+      redirectUri: resolveOauthRedirectUri(
         process.env[`FB_REDIRECT_URI_${n}`] ||
           process.env.FB_REDIRECT_URI ||
-          config.facebook.redirectUri ||
-          `http://localhost:${config.port}/auth/facebook/callback`
-      ).trim(),
+          config.facebook.redirectUri
+      ),
       scopes: scopesFromEnv(`FB_SCOPES_${n}`, scopes),
     });
   }
@@ -93,9 +150,9 @@ export function listMetaApps() {
           name: e.name || key,
           appId: String(e.appId || e.app_id || "").trim(),
           appSecret: String(e.appSecret || e.app_secret || envSecret || "").trim(),
-          redirectUri: String(
-            e.redirectUri || e.redirect_uri || config.facebook.redirectUri
-          ).trim(),
+          redirectUri: resolveOauthRedirectUri(
+            e.redirectUri || e.redirect_uri || process.env.FB_REDIRECT_URI
+          ),
           scopes: Array.isArray(e.scopes) ? e.scopes : scopes,
         });
       }

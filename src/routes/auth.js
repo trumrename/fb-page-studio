@@ -11,6 +11,7 @@ import {
   assertMetaAppConfigured,
   getMetaApp,
   listMetaAppsPublic,
+  resolveOauthRedirectUri,
 } from "../services/metaApps.js";
 import { isOauthRelayMode } from "../services/deployMode.js";
 
@@ -19,6 +20,8 @@ const router = Router();
 function createOAuthSession(metaAppKey = "app1", rerequest = false) {
   cleanupOldOauthStates();
   const app = assertMetaAppConfigured(metaAppKey);
+  // Canonical redirect — identical in dialog + token exchange (Meta requirement)
+  const redirectUri = resolveOauthRedirectUri(app.redirectUri);
   // state = nanoid.port.metaAppKey.appId
   // - port: relay 302 về 127.0.0.1:port
   // - metaAppKey: slot local (app1/app2 trên máy khách)
@@ -26,18 +29,18 @@ function createOAuthSession(metaAppKey = "app1", rerequest = false) {
   const state = `${nanoid(32)}.${config.port}.${app.key}.${app.appId || ""}`;
   getDb()
     .prepare(
-      `INSERT INTO oauth_states (state, meta_app_key) VALUES (?, ?)`
+      `INSERT INTO oauth_states (state, meta_app_key, redirect_uri) VALUES (?, ?, ?)`
     )
-    .run(state, app.key);
+    .run(state, app.key, redirectUri);
   const url = buildLoginUrl(state, {
     rerequest,
     app: {
       appId: app.appId,
-      redirectUri: app.redirectUri,
+      redirectUri,
       scopes: app.scopes,
     },
   });
-  return { state, url, app };
+  return { state, url, app: { ...app, redirectUri } };
 }
 
 function escapeHtml(s) {
@@ -90,8 +93,10 @@ router.get("/facebook", (req, res) => {
           "Meta App chưa cấu hình",
           e.message,
           metaAppKey === "app2"
-            ? "Trong .env thêm FB_APP_ID_2, FB_APP_SECRET_2 (và redirect URI của App 2 trên Meta)."
-            : "Đặt .env cạnh app: FB_APP_ID, FB_APP_SECRET, FB_REDIRECT_URI."
+            ? "Mở tab Cấu hình lần đầu → nhập App ID 2 (+ Secret để đẩy lên server). " +
+              "Hoặc để relay tự đồng bộ nếu server đã khai App 2."
+            : "Bản phát hành KHÔNG kèm App ID. Mở tab Cấu hình lần đầu → nhập App ID " +
+              "(+ Secret để đẩy lên server relay), hoặc bật relay online để tự đồng bộ."
         )
       );
   }
@@ -174,7 +179,9 @@ router.get("/facebook/callback", async (req, res) => {
 
     const db = getDb();
     const st = db
-      .prepare(`SELECT state, meta_app_key FROM oauth_states WHERE state = ?`)
+      .prepare(
+        `SELECT state, meta_app_key, redirect_uri FROM oauth_states WHERE state = ?`
+      )
       .get(state);
     if (!st) {
       return res.status(400).type("html").send(
@@ -203,27 +210,39 @@ router.get("/facebook/callback", async (req, res) => {
         errorPage(
           "Cần OAuth qua relay",
           "Máy này không có App Secret (đúng cho gói khách). Callback phải qua relay → ticket.",
-          "Giữ app mở, Connect lại. Relay phải bật RELAY_EXCHANGE=1 và có secret."
+          "Giữ app mở, Connect lại. Relay phải bật RELAY_EXCHANGE=1 và có secret. " +
+            "Nếu browser dừng ở modelswiki.top (không nhảy 127.0.0.1) → bật exchange mode trên server."
         )
       );
     }
+
+    // MUST use the same redirect_uri as the Facebook dialog (stored at session start)
+    const redirectUri =
+      String(st.redirect_uri || "").trim() ||
+      resolveOauthRedirectUri(app.redirectUri);
 
     const result = await connectFromOAuthCode(String(code), {
       metaAppKey: app.key,
       app: {
         appId: app.appId,
         appSecret: app.appSecret,
-        redirectUri: app.redirectUri,
+        redirectUri,
       },
     });
-    return sendConnectedPage(res, result, app);
+    return sendConnectedPage(res, result, { ...app, redirectUri });
   } catch (e) {
     console.error("[auth/callback]", e);
+    const msg = String(e.message || "unknown");
+    const isRedirectMismatch =
+      /redirect_uri|verification code|identical/i.test(msg);
     res.status(500).type("html").send(
       errorPage(
         "OAuth thất bại",
-        e.message || "unknown",
-        "Kiểm tra App Secret (gói nội bộ) hoặc relay ticket (gói khách). Redirect URI khớp Meta."
+        msg,
+        isRedirectMismatch
+          ? "redirect_uri dialog ≠ exchange. .env: FB_REDIRECT_URI=https://modelswiki.top/auth/facebook/callback " +
+              "và OAUTH_RELAY=1. Meta whitelist đúng URL. Connect lại 1 lần (code cũ không tái dùng)."
+          : "Kiểm tra App Secret (gói nội bộ) hoặc relay ticket (gói khách). Redirect URI khớp Meta."
       )
     );
   }

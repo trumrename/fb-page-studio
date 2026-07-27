@@ -7,7 +7,11 @@ import fs from "fs";
 import path from "path";
 import { Blob } from "buffer";
 import { graphBase } from "../config.js";
-import { noteGraphResponse } from "./rateLimit.js";
+import {
+  noteGraphResponse,
+  isNetworkTransientError,
+  estimateTransientWaitMs,
+} from "./rateLimit.js";
 import {
   appsecretProof,
   isInvalidAppSecretProofError,
@@ -19,99 +23,159 @@ function proofForToken(pageToken, metaAppKey = "") {
   return appsecretProof(pageToken, secret);
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function wrapFetchError(e, label = "Graph") {
+  const causeMsg = e?.cause?.message || e?.cause?.code || "";
+  const msg = e?.message || String(e);
+  const full = causeMsg && !msg.includes(causeMsg) ? `${msg} (${causeMsg})` : msg;
+  const err = new Error(
+    /fetch failed/i.test(full)
+      ? `fetch failed — không kết nối được Facebook (${label})`
+      : full
+  );
+  err.code = e?.code || e?.cause?.code || "FETCH_FAILED";
+  err.cause = e;
+  err.network = true;
+  return err;
+}
+
+/** Low-level: short auto-retry for network/fetch only. */
+async function withPublishRetry(fn) {
+  const maxAttempts = 3;
+  let lastErr;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      const networkish =
+        isNetworkTransientError(e) ||
+        (/fetch failed/i.test(String(e?.message || "")) && !e?.fb);
+      if (!networkish || attempt >= maxAttempts - 1) throw e;
+      const waitMs = estimateTransientWaitMs(e, {
+        attempt,
+        minMs: 2_000,
+        maxMs: 20_000,
+      });
+      await sleep(waitMs);
+    }
+  }
+  throw lastErr;
+}
+
 async function graphPostForm(urlPath, pageToken, fields = {}, fileField = null, metaAppKey = "") {
-  const tryOnce = async (withProof) => {
-    const url = `${graphBase()}${urlPath}`;
-    const form = new FormData();
-    form.append("access_token", pageToken);
-    if (withProof) {
-      const proof = proofForToken(pageToken, metaAppKey);
-      if (proof) form.append("appsecret_proof", proof);
+  return withPublishRetry(async () => {
+    const tryOnce = async (withProof) => {
+      const url = `${graphBase()}${urlPath}`;
+      const form = new FormData();
+      form.append("access_token", pageToken);
+      if (withProof) {
+        const proof = proofForToken(pageToken, metaAppKey);
+        if (proof) form.append("appsecret_proof", proof);
+      }
+      for (const [k, v] of Object.entries(fields)) {
+        if (v !== undefined && v !== null) form.append(k, String(v));
+      }
+      if (fileField) {
+        const { name, filePath } = fileField;
+        const buf = fs.readFileSync(filePath);
+        form.append(name, new Blob([buf]), path.basename(filePath));
+      }
+      let res;
+      try {
+        res = await fetch(url, { method: "POST", body: form });
+      } catch (e) {
+        throw wrapFetchError(e, "POST form");
+      }
+      noteGraphResponse(res);
+      return res.json();
+    };
+    let data = await tryOnce(true);
+    if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
+      data = await tryOnce(false);
     }
-    for (const [k, v] of Object.entries(fields)) {
-      if (v !== undefined && v !== null) form.append(k, String(v));
+    if (data.error) {
+      const err = new Error(data.error.message || "Graph publish error");
+      err.code = data.error.code;
+      err.fb = data.error;
+      throw err;
     }
-    if (fileField) {
-      const { name, filePath } = fileField;
-      const buf = fs.readFileSync(filePath);
-      form.append(name, new Blob([buf]), path.basename(filePath));
-    }
-    const res = await fetch(url, { method: "POST", body: form });
-    noteGraphResponse(res);
-    return res.json();
-  };
-  let data = await tryOnce(true);
-  if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
-    data = await tryOnce(false);
-  }
-  if (data.error) {
-    const err = new Error(data.error.message || "Graph publish error");
-    err.code = data.error.code;
-    err.fb = data.error;
-    throw err;
-  }
-  return data;
+    return data;
+  });
 }
 
 async function graphPostJson(urlPath, pageToken, body = {}, metaAppKey = "") {
-  const tryOnce = async (withProof) => {
-    const url = new URL(`${graphBase()}${urlPath}`);
-    url.searchParams.set("access_token", pageToken);
-    if (withProof) {
-      const proof = proofForToken(pageToken, metaAppKey);
-      if (proof) url.searchParams.set("appsecret_proof", proof);
+  return withPublishRetry(async () => {
+    const tryOnce = async (withProof) => {
+      const url = new URL(`${graphBase()}${urlPath}`);
+      url.searchParams.set("access_token", pageToken);
+      if (withProof) {
+        const proof = proofForToken(pageToken, metaAppKey);
+        if (proof) url.searchParams.set("appsecret_proof", proof);
+      }
+      let res;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      } catch (e) {
+        throw wrapFetchError(e, "POST json");
+      }
+      noteGraphResponse(res);
+      return res.json();
+    };
+    let data = await tryOnce(true);
+    if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
+      data = await tryOnce(false);
     }
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    noteGraphResponse(res);
-    return res.json();
-  };
-  let data = await tryOnce(true);
-  if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
-    data = await tryOnce(false);
-  }
-  if (data.error) {
-    const err = new Error(data.error.message || "Graph publish error");
-    err.code = data.error.code;
-    err.fb = data.error;
-    throw err;
-  }
-  return data;
+    if (data.error) {
+      const err = new Error(data.error.message || "Graph publish error");
+      err.code = data.error.code;
+      err.fb = data.error;
+      throw err;
+    }
+    return data;
+  });
 }
 
 async function graphGetJson(urlPath, pageToken, fields, metaAppKey = "") {
-  const tryOnce = async (withProof) => {
-    const url = new URL(`${graphBase()}${urlPath}`);
-    url.searchParams.set("access_token", pageToken);
-    if (withProof) {
-      const proof = proofForToken(pageToken, metaAppKey);
-      if (proof) url.searchParams.set("appsecret_proof", proof);
+  return withPublishRetry(async () => {
+    const tryOnce = async (withProof) => {
+      const url = new URL(`${graphBase()}${urlPath}`);
+      url.searchParams.set("access_token", pageToken);
+      if (withProof) {
+        const proof = proofForToken(pageToken, metaAppKey);
+        if (proof) url.searchParams.set("appsecret_proof", proof);
+      }
+      if (fields) url.searchParams.set("fields", fields);
+      let res;
+      try {
+        res = await fetch(url);
+      } catch (e) {
+        throw wrapFetchError(e, "GET");
+      }
+      noteGraphResponse(res);
+      return res.json();
+    };
+    let data = await tryOnce(true);
+    if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
+      data = await tryOnce(false);
     }
-    if (fields) url.searchParams.set("fields", fields);
-    const res = await fetch(url);
-    noteGraphResponse(res);
-    return res.json();
-  };
-  let data = await tryOnce(true);
-  if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
-    data = await tryOnce(false);
-  }
-  if (data.error) {
-    const err = new Error(data.error.message || "Graph read error");
-    err.code = data.error.code;
-    err.fb = data.error;
-    throw err;
-  }
-  return data;
+    if (data.error) {
+      const err = new Error(data.error.message || "Graph read error");
+      err.code = data.error.code;
+      err.fb = data.error;
+      throw err;
+    }
+    return data;
+  });
 }
 
-/**
- * Validate FB scheduled_publish_time rules:
- * must be between 10 minutes and 30 days from now (unix seconds).
- */
 export function validateScheduleUnix(unixSec) {
   const n = Number(unixSec);
   if (!Number.isFinite(n) || n <= 0) {

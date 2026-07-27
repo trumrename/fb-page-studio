@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Xóa bài Group · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    .del-grid { display:grid; grid-template-columns: 1.1fr 1fr; gap:1rem; }
+    @media (max-width: 980px) { .del-grid { grid-template-columns: 1fr; } }
+    .page-pick {
+      max-height: 260px; overflow:auto; border:1px solid var(--border);
+      border-radius:12px; background:rgba(0,0,0,.18);
+    }
+    .page-pick label {
+      display:flex; gap:.6rem; align-items:flex-start; padding:.55rem .7rem;
+      border-bottom:1px solid var(--border); cursor:pointer; font-size:.86rem;
+    }
+    .page-pick label:hover { background:rgba(55,163,255,.08); }
+    .page-pick label.checked { background:rgba(255,113,132,.08); }
+    .page-pick small { color:var(--muted); display:block; }
+    .post-list {
+      max-height: 360px; overflow:auto; border:1px solid var(--border);
+      border-radius:12px;
+    }
+    .post-row {
+      display:grid; grid-template-columns: 1fr auto; gap:.5rem;
+      padding:.65rem .75rem; border-bottom:1px solid var(--border); font-size:.82rem;
+    }
+    .post-row .msg { word-break:break-word; }
+    .post-row .meta { color:var(--muted); font-size:.75rem; margin-top:.25rem; }
+    .bar {
+      height:12px; border-radius:99px; background:rgba(255,255,255,.06);
+      border:1px solid var(--border); overflow:hidden; margin:.5rem 0;
+    }
+    .bar > i {
+      display:block; height:100%; width:0%;
+      background:linear-gradient(90deg,#ff7184,#c084fc);
+      transition:width .25s ease;
+    }
+    .log-box {
+      max-height:180px; overflow:auto; font-size:.78rem; font-family:ui-monospace,monospace;
+      background:rgba(0,0,0,.25); border-radius:10px; padding:.6rem .75rem;
+      border:1px solid var(--border); color:var(--muted);
+    }
+    .warn-box {
+      border:1px solid rgba(245,201,106,.4); background:rgba(245,201,106,.1);
+      border-radius:12px; padding:.75rem .9rem; font-size:.86rem; margin-bottom:1rem;
+    }
+    .field-row { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+    @media (max-width:640px){ .field-row { grid-template-columns:1fr; } }
+    label.field { display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem; }
+    input[type=text], input[type=number], input[type=datetime-local], select, textarea {
+      width:100%; padding:.55rem .7rem; border-radius:10px; border:1px solid var(--border);
+      background:rgba(0,0,0,.25); color:var(--text); font:inherit;
+    }
+    textarea { min-height:90px; resize:vertical; font-family:ui-monospace,monospace; font-size:.85rem; }
+    .chk { display:flex; align-items:center; gap:.45rem; font-size:.86rem; margin-top:.5rem; }
+    .rl-banner {
+      display:none; margin:.75rem 0 0; padding:.75rem .9rem; border-radius:12px;
+      border:1px solid rgba(245,201,106,.45); background:rgba(245,201,106,.12);
+      font-size:.88rem;
+    }
+    .rl-banner.on { display:block; }
+    .rl-banner .sec { font-weight:800; font-size:1.15rem; color:#ffe08a; }
+  </style>
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <h1>Xóa bài Group (Admin / Mod)</h1>
+            <div class="sub">User token · Graph feed · batch delete</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" class="btn-ghost btn-sm" id="btnLoadGroups">Tải list Group</button>
+          <button type="button" class="btn-ghost btn-sm" id="btnPreview">Xem trước</button>
+          <button type="button" class="btn-warn btn-sm" id="btnDry">Dry-run</button>
+          <button type="button" class="btn-primary" id="btnDelete" style="background:linear-gradient(135deg,#a855f7,#e11d48);border:0">Xóa Group</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="warn-box">
+          <b>Admin / Moderator:</b> nick Connect phải là Admin/Mod group.<br/>
+          <b>Meta đã gỡ Groups API (2024)</b> — list feed bằng Graph <b>không còn</b>
+          (<code>Unsupported get request</code> / <code>#100</code> bình thường; Make/Sprinklr cũng bỏ group).<br/>
+          <b>Cách làm được:</b> Group ID + dán/upload <b>link hoặc HTML</b> → <b>Parse ID</b> → <b>Xóa Group</b>
+          (xóa bằng DELETE + token admin, <b>không list feed</b>).<br/>
+          Xóa <b>không hoàn tác</b>.
+        </div>
+
+        <div class="del-grid">
+          <section class="panel">
+            <h2 class="panel-hd">1. Account + Group</h2>
+            <div class="panel-body">
+              <label class="field">Nick Admin/Mod (đã Connect)</label>
+              <select id="accountId"></select>
+
+              <label class="field" style="margin-top:.75rem">Dán Group ID (mỗi dòng / cách nhau bởi dấu phẩy)</label>
+              <textarea id="manualIds" placeholder="1260160745389877"></textarea>
+
+              <label class="field" style="margin-top:.75rem">Post ID / link / HTML (cách chính khi API chặn list)</label>
+              <textarea id="postIdsText" placeholder="Dán nhiều link hoặc Save as HTML rồi dán:&#10;https://www.facebook.com/groups/1260.../posts/123...&#10;1260160745389877_1234567890"></textarea>
+              <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin:.45rem 0;align-items:center">
+                <button type="button" class="btn-ghost btn-sm" id="btnParseIds">Parse ID</button>
+                <label class="btn-ghost btn-sm" style="cursor:pointer;margin:0">
+                  Upload .txt/.html
+                  <input type="file" id="fileIds" accept=".txt,.html,.htm,.csv" style="display:none" />
+                </label>
+                <span class="muted" id="parseStat" style="font-size:.8rem">Chưa parse</span>
+              </div>
+              <p class="muted" style="font-size:.78rem;margin:.15rem 0 .6rem;line-height:1.45">
+                <b>Quy trình nhanh:</b> Mở group trên Chrome (nick Admin) → scroll lấy bài →
+                copy link từng bài (hoặc Ctrl+S lưu HTML) → dán/upload → <b>Parse ID</b> → <b>Xóa Group</b>.
+                Có list ID → <b>không gọi list feed</b> (tránh lỗi #100).
+              </p>
+
+              <p class="muted" style="font-size:.8rem;margin:.6rem 0">Hoặc chọn từ list Graph (thường trống vì API deprecated):</p>
+              <div class="page-pick" id="groupList"><p class="muted" style="padding:.75rem">Bấm «Tải list Group»…</p></div>
+              <p class="muted" style="margin-top:.5rem;font-size:.8rem" id="groupNote"></p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-hd">2. Bộ lọc & tốc độ</h2>
+            <div class="panel-body">
+              <div class="field-row">
+                <div>
+                  <label class="field">Từ ngày</label>
+                  <input type="datetime-local" id="since" />
+                </div>
+                <div>
+                  <label class="field">Đến ngày</label>
+                  <input type="datetime-local" id="until" />
+                </div>
+              </div>
+              <div style="margin-top:.75rem">
+                <label class="field">Keyword</label>
+                <input type="text" id="keyword" placeholder="lọc caption / người đăng…" />
+              </div>
+              <div class="field-row" style="margin-top:.75rem">
+                <div>
+                  <label class="field">Max bài / group</label>
+                  <input type="number" id="maxPosts" value="2000" min="1" max="20000" />
+                </div>
+                <div>
+                  <label class="field">Delay (ms)</label>
+                  <input type="number" id="delayMs" value="100" min="0" max="5000" />
+                </div>
+              </div>
+              <div class="field-row" style="margin-top:.75rem">
+                <div>
+                  <label class="field">Group song song (1–5)</label>
+                  <input type="number" id="pageParallel" value="2" min="1" max="5" />
+                </div>
+                <div>
+                  <label class="field">Preset</label>
+                  <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+                    <button type="button" class="btn-ghost btn-sm" id="presetSafe">An toàn</button>
+                    <button type="button" class="btn-warn btn-sm" id="presetTurbo">Turbo</button>
+                  </div>
+                </div>
+              </div>
+              <div class="chk"><input type="checkbox" id="useBatch" checked /> <span>Graph Batch (50 DELETE / request)</span></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel section-gap">
+          <h2 class="panel-hd">3. Tiến trình</h2>
+          <div class="panel-body">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+              <div>
+                <div class="pct" id="pct">0%</div>
+                <div class="muted" id="phaseLabel" style="font-size:.85rem">Chưa chạy</div>
+              </div>
+              <div class="stats" style="margin:0;flex:1;min-width:240px">
+                <div class="stat"><div class="n" id="stListed">0</div><div class="l">List</div></div>
+                <div class="stat"><div class="n" id="stMatched">0</div><div class="l">Khớp</div></div>
+                <div class="stat"><div class="n" id="stOk">0</div><div class="l">Đã xóa</div></div>
+                <div class="stat"><div class="n" id="stFail">0</div><div class="l">Lỗi</div></div>
+              </div>
+              <button type="button" class="btn-ghost btn-sm" id="btnStop" disabled>Dừng</button>
+            </div>
+            <div class="bar"><i id="barFill"></i></div>
+            <div class="rl-banner" id="rlBanner">
+              <b>⚠ Facebook limit</b> — tạm dừng, còn <span class="sec" id="rlSec">—</span>s, tự resume.
+              <div class="muted" id="rlMsg" style="margin-top:.35rem;font-size:.8rem"></div>
+            </div>
+            <div class="log-box" id="logBox">Log…</div>
+          </div>
+        </section>
+
+        <section class="panel section-gap" id="reportSection" style="display:none">
+          <h2 class="panel-hd">4. Kết quả theo Group · bài lỗi</h2>
+          <div class="panel-body">
+            <div id="reportSummary" class="muted" style="margin-bottom:.75rem"></div>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem">
+              <button type="button" class="btn-ghost btn-sm" id="btnCopyLinks" disabled>Copy link lỗi</button>
+              <a class="btn btn-ghost btn-sm" id="btnCsv" href="#" style="pointer-events:none;opacity:.5">CSV lỗi</a>
+              <a class="btn btn-ghost btn-sm" id="btnTxt" href="#" style="pointer-events:none;opacity:.5">TXT link</a>
+            </div>
+            <div class="post-list" id="groupReport" style="max-height:240px;margin-bottom:1rem"></div>
+            <div class="post-list" id="failLinks" style="max-height:320px">
+              <p class="muted" style="padding:.75rem">Chưa có lỗi.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel section-gap">
+          <h2 class="panel-hd">5. Preview (group đầu tiên)</h2>
+          <div class="panel-body">
+            <div class="post-list" id="previewList">
+              <p class="muted" style="padding:.75rem">Bấm «Xem trước».</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="/js/shell.js"></script>
+  <script src="/js/update.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let accounts = [];
+    let graphGroups = [];
+    let currentJobId = null;
+    let es = null;
+
+    async function api(path, opts = {}) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+    function esc(s) {
+      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+    function toUnix(v) {
+      if (!v) return null;
+      const t = new Date(v).getTime();
+      return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+    }
+
+    async function loadAccounts() {
+      const data = await api("/api/delete-group-posts/accounts");
+      accounts = data.accounts || [];
+      $("accountId").innerHTML = accounts.length
+        ? accounts.map((a) => `<option value="${a.id}">${esc(a.name || "Account")} · #${a.id} · ${esc(a.meta_app_name || "")}</option>`).join("")
+        : `<option value="">— Chưa Connect Facebook —</option>`;
+    }
+
+    function renderGraphGroups() {
+      if (!graphGroups.length) {
+        $("groupList").innerHTML = `<p class="muted" style="padding:.75rem">List trống — dùng ô dán Group ID.</p>`;
+        return;
+      }
+      $("groupList").innerHTML = graphGroups.map((g) => `
+        <label>
+          <input type="checkbox" value="${esc(g.id)}" data-name="${esc(g.name || g.id)}" />
+          <span><b>${esc(g.name || g.id)}</b>
+          <small>${esc(g.id)} · ${g.administrator ? "admin" : "member"} · acc #${g.account_id}</small></span>
+        </label>
+      `).join("");
+      $("groupList").querySelectorAll("input").forEach((inp) => {
+        inp.addEventListener("change", () => inp.closest("label")?.classList.toggle("checked", inp.checked));
+      });
+    }
+
+    async function loadGroups() {
+      $("groupList").innerHTML = `<p class="muted" style="padding:.75rem">Đang tải…</p>`;
+      $("groupNote").textContent = "";
+      try {
+        const q = $("accountId").value ? `?account_id=${$("accountId").value}` : "";
+        const data = await api("/api/delete-group-posts/groups" + q);
+        graphGroups = data.groups || [];
+        renderGraphGroups();
+        const notes = (data.notes || []).join(" · ");
+        $("groupNote").textContent = data.warning || notes || `Tìm thấy ${graphGroups.length} group.`;
+      } catch (e) {
+        $("groupList").innerHTML = `<p style="padding:.75rem;color:var(--danger)">${esc(e.message)}</p>`;
+      }
+    }
+
+    function selectedGroups() {
+      const accountId = Number($("accountId").value);
+      const out = [];
+      const manual = String($("manualIds").value || "")
+        .split(/[\s,;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      for (const id of manual) {
+        out.push({ group_id: id, group_name: id, account_id: accountId });
+      }
+      $("groupList").querySelectorAll("input:checked").forEach((inp) => {
+        const gid = inp.value;
+        if (out.some((x) => x.group_id === gid)) return;
+        const g = graphGroups.find((x) => x.id === gid);
+        out.push({
+          group_id: gid,
+          group_name: inp.dataset.name || g?.name || gid,
+          account_id: g?.account_id || accountId,
+        });
+      });
+      return out;
+    }
+
+    function optsFromForm(extra = {}) {
+      return {
+        groups: selectedGroups(),
+        since: toUnix($("since").value),
+        until: toUnix($("until").value),
+        keyword: $("keyword").value.trim() || null,
+        max_posts: Number($("maxPosts").value) || 2000,
+        delay_ms: Math.max(0, Number($("delayMs").value) || 0),
+        page_parallel: Math.min(5, Math.max(1, Number($("pageParallel").value) || 2)),
+        use_batch: $("useBatch").checked,
+        post_ids_text: ($("postIdsText") && $("postIdsText").value) || "",
+        ...extra,
+      };
+    }
+
+    function renderReport(job) {
+      const done = ["ok", "fail", "partial", "stopped"].includes(job.status);
+      if (!done && !job.report) {
+        $("reportSection").style.display = "none";
+        return;
+      }
+      $("reportSection").style.display = "block";
+      const groups = job.report?.groups || job.groups || [];
+      let failList = job.report?.failed_posts || [];
+      if (!failList.length) {
+        for (const g of job.groups || []) {
+          for (const f of g.failed_posts || []) {
+            failList.push({ group_name: g.group_name, group_id: g.group_id, ...f });
+          }
+        }
+      }
+      const t = job.report?.totals || {};
+      $("reportSummary").innerHTML =
+        `<b>Tổng:</b> OK <b style="color:var(--ok)">${t.ok ?? 0}</b> · ` +
+        `Lỗi <b style="color:var(--danger)">${t.fail ?? 0}</b> · ` +
+        `Group lỗi <b>${t.groups_with_fail ?? 0}/${t.groups ?? groups.length}</b>`;
+
+      const sorted = [...groups].sort((a, b) => (b.fail || 0) - (a.fail || 0));
+      $("groupReport").innerHTML = sorted.map((g) => {
+        const fail = g.fail || 0;
+        const color = fail ? "var(--danger)" : "var(--ok)";
+        return `<div class="post-row">
+          <div>
+            <div class="msg"><b>${esc(g.group_name || g.group_id)}</b></div>
+            <div class="meta">OK ${g.ok || 0} · <span style="color:${color}">Lỗi ${fail}</span> · list ${g.matched || g.listed || 0}</div>
+            ${g.error ? `<div class="meta" style="color:var(--danger)">${esc(g.error)}</div>` : ""}
+          </div>
+          <div style="font-weight:800;color:${color}">${fail}</div>
+        </div>`;
+      }).join("") || `<p class="muted" style="padding:.75rem">—</p>`;
+
+      const show = failList.slice(0, 500);
+      $("failLinks").innerHTML = show.length
+        ? (failList.length > 500 ? `<div class="muted" style="padding:.5rem .75rem">500/${failList.length} — tải CSV full</div>` : "") +
+          show.map((f) => `<div class="post-row"><div>
+            <div class="msg"><a href="${esc(f.link || "#")}" target="_blank" rel="noopener" style="color:var(--accent-2)">${esc(f.link || f.post_id)}</a></div>
+            <div class="meta">${esc(f.group_name || "")} · ${esc((f.error || "").slice(0, 100))}</div>
+          </div></div>`).join("")
+        : `<p class="muted" style="padding:.75rem">Không có bài lỗi.</p>`;
+
+      window.__lastFailLinks = failList.map((f) => f.link).filter(Boolean);
+      $("btnCopyLinks").disabled = !window.__lastFailLinks.length;
+      if (job.id && window.__lastFailLinks.length) {
+        $("btnCsv").href = `/api/delete-group-posts/jobs/${job.id}/failed.csv`;
+        $("btnTxt").href = `/api/delete-group-posts/jobs/${job.id}/failed-links.txt`;
+        ["btnCsv", "btnTxt"].forEach((id) => {
+          $(id).style.pointerEvents = "";
+          $(id).style.opacity = "1";
+        });
+      }
+    }
+
+    function applyJob(job) {
+      if (!job) return;
+      const p = job.progress || {};
+      $("pct").textContent = `${p.percent || 0}%`;
+      $("barFill").style.width = `${p.percent || 0}%`;
+      $("phaseLabel").textContent = p.label || job.status || "";
+      $("stListed").textContent = p.listed ?? 0;
+      $("stMatched").textContent = p.matched ?? 0;
+      $("stOk").textContent = p.ok ?? 0;
+      $("stFail").textContent = p.fail ?? 0;
+      const rateLimited = job.status === "rate_limited" || p.rate_limited;
+      $("rlBanner").classList.toggle("on", !!rateLimited);
+      if (rateLimited) {
+        $("rlSec").textContent = String(p.rate_limit_remaining_sec ?? "—");
+        $("rlMsg").textContent = p.rate_limit_message || p.label || "";
+      }
+      const running = ["queued", "listing", "running", "rate_limited"].includes(job.status);
+      $("btnStop").disabled = !running;
+      $("btnDelete").disabled = running;
+      $("btnDry").disabled = running;
+      if (job.recent?.length) {
+        $("logBox").innerHTML = job.recent.slice(0, 40)
+          .map((r) => `<div>[${esc((r.at || "").slice(11, 19))}] ${esc(r.text)}</div>`).join("");
+      }
+      renderReport(job);
+    }
+
+    function watchJob(id) {
+      if (es) { try { es.close(); } catch {} }
+      currentJobId = id;
+      es = new EventSource(`/api/delete-group-posts/jobs/${id}/stream`);
+      es.onmessage = (ev) => { try { applyJob(JSON.parse(ev.data)); } catch {} };
+      es.addEventListener("done", () => { try { es.close(); } catch {} es = null; });
+      es.onerror = () => pollJob(id);
+    }
+
+    async function pollJob(id) {
+      try {
+        const data = await api(`/api/delete-group-posts/jobs/${id}`);
+        applyJob(data.job);
+        if (!["ok", "fail", "partial", "stopped"].includes(data.job?.status)) {
+          setTimeout(() => pollJob(id), 900);
+        }
+      } catch {
+        setTimeout(() => pollJob(id), 1500);
+      }
+    }
+
+    async function startJob(dry) {
+      const groups = selectedGroups();
+      if (!groups.length) {
+        alert("Dán Group ID hoặc chọn group + chọn account Admin/Mod");
+        return;
+      }
+      if (!Number($("accountId").value) && groups.some((g) => !g.account_id)) {
+        alert("Chọn nick Admin/Mod");
+        return;
+      }
+      if (!dry && !confirm(`XÓA bài trong ${groups.length} group?\nKhông hoàn tác.`)) return;
+      try {
+        const data = await api("/api/delete-group-posts/start", {
+          method: "POST",
+          body: JSON.stringify(optsFromForm({ dry_run: dry })),
+        });
+        applyJob(data.job);
+        watchJob(data.job.id);
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function preview() {
+      const groups = selectedGroups();
+      if (!groups.length) { alert("Chọn/dán 1 group"); return; }
+      const g = groups[0];
+      $("previewList").innerHTML = `<p class="muted" style="padding:.75rem">Đang tải…</p>`;
+      try {
+        const q = new URLSearchParams({
+          group_id: g.group_id,
+          account_id: String(g.account_id || $("accountId").value),
+          max_posts: String(Math.min(50, Number($("maxPosts").value) || 50)),
+        });
+        if ($("keyword").value.trim()) q.set("keyword", $("keyword").value.trim());
+        const data = await api(`/api/delete-group-posts/preview?${q}`);
+        const posts = data.posts || [];
+        $("previewList").innerHTML = posts.length
+          ? posts.map((p) => `<div class="post-row"><div>
+              <div class="msg">${esc(p.message || "(trống)")}</div>
+              <div class="meta">${esc(p.from || "")} · ${esc(p.created_time || "")} · ${esc(p.id)}</div>
+            </div>
+            ${p.permalink_url ? `<a class="btn-ghost btn-sm" href="${esc(p.permalink_url)}" target="_blank">Mở</a>` : ""}
+            </div>`).join("")
+          : `<p class="muted" style="padding:.75rem">Không có bài / API không trả feed.</p>`;
+      } catch (e) {
+        $("previewList").innerHTML = `<p style="padding:.75rem;color:var(--danger)">${esc(e.message)}</p>`;
+      }
+    }
+
+    $("presetSafe").onclick = () => { $("delayMs").value = 150; $("pageParallel").value = 1; $("useBatch").checked = true; };
+    $("presetTurbo").onclick = () => { $("delayMs").value = 50; $("pageParallel").value = 3; $("useBatch").checked = true; };
+    $("btnLoadGroups").onclick = () => loadGroups();
+    $("btnPreview").onclick = () => preview();
+    $("btnDry").onclick = () => startJob(true);
+    $("btnDelete").onclick = () => startJob(false);
+
+    async function parseIds() {
+      const groups = selectedGroups();
+      const gid = groups[0]?.group_id || ($("manualIds").value || "").split(/[\s,;]+/).filter(Boolean)[0] || "";
+      const text = $("postIdsText").value || "";
+      if (!text.trim()) { alert("Dán link / HTML vào ô Post ID trước"); return; }
+      try {
+        const data = await api("/api/delete-group-posts/parse-ids", {
+          method: "POST",
+          body: JSON.stringify({ text, group_id: gid }),
+        });
+        if (data.ids?.length) {
+          $("postIdsText").value = data.ids.join("\n");
+        }
+        $("parseStat").textContent = data.tip || `${data.count || 0} id`;
+        $("parseStat").style.color = data.count ? "var(--ok)" : "var(--danger)";
+      } catch (e) {
+        $("parseStat").textContent = e.message;
+        $("parseStat").style.color = "var(--danger)";
+      }
+    }
+    $("btnParseIds").onclick = () => parseIds();
+    $("fileIds").onchange = async (ev) => {
+      const f = ev.target.files?.[0];
+      if (!f) return;
+      const text = await f.text();
+      $("postIdsText").value = ($("postIdsText").value ? $("postIdsText").value + "\n" : "") + text;
+      await parseIds();
+      ev.target.value = "";
+    };
+    $("btnStop").onclick = async () => {
+      if (!currentJobId) return;
+      try {
+        const data = await api(`/api/delete-group-posts/jobs/${currentJobId}/stop`, { method: "POST", body: "{}" });
+        applyJob(data.job);
+      } catch (e) { alert(e.message); }
+    };
+    $("btnCopyLinks").onclick = async () => {
+      const links = window.__lastFailLinks || [];
+      if (!links.length) return;
+      try { await navigator.clipboard.writeText(links.join("\n")); }
+      catch {
+        const ta = document.createElement("textarea");
+        ta.value = links.join("\n"); document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); ta.remove();
+      }
+      alert(`Đã copy ${links.length} link`);
+    };
+
+    loadAccounts().catch((e) => alert(e.message));
+  </script>
+</body>
+</html>

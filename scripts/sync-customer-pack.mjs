@@ -111,7 +111,9 @@ function pickCustomerRelayUrl() {
 
 const relayUrl = pickCustomerRelayUrl();
 const redirect = `${String(relayUrl).replace(/\/$/, "")}/auth/facebook/callback`;
-const appId = srcEnv.FB_APP_ID || "";
+// KHÔNG ship App ID trong gói phát hành — khách tự điền trong tool.
+// Muốn bake ID cho bản nội bộ: PACK_BAKE_APP_ID=<id> node scripts/sync-customer-pack.mjs
+const appId = String(process.env.PACK_BAKE_APP_ID || "").trim();
 
 // Public-only .env for first run (NO SECRET)
 // Prefer baked template (build/customer-default.env) so Setup + pack always match.
@@ -120,7 +122,7 @@ let publicEnv;
 if (fs.existsSync(bakedPath)) {
   publicEnv = fs
     .readFileSync(bakedPath, "utf8")
-    .replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${appId || "1418846112578001"}`)
+    .replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${appId}`)
     .replace(/^OAUTH_RELAY_URL=.*$/m, `OAUTH_RELAY_URL=${String(relayUrl).replace(/\/$/, "")}`)
     .replace(/^FB_REDIRECT_URI=.*$/m, `FB_REDIRECT_URI=${redirect}`)
     .replace(/^# version=.*$/m, `# version=${pkg.version}`);
@@ -192,11 +194,17 @@ fs.writeFileSync(
     "  2) Mở EXE — tự tạo .env cạnh EXE (OAUTH_RELAY + HTTPS domain)",
     "  3) Connect Facebook",
     "",
+    "META APP ID — TỰ ĐIỀN (gói này KHÔNG kèm sẵn):",
+    "  · Mở tool → tab \"Cấu hình lần đầu\" → nhập App ID (+ App Secret nếu có)",
+    "    App Secret sẽ được đẩy lên server relay, KHÔNG lưu trên máy bạn.",
+    "  · Hoặc bỏ trống: nếu server relay đã khai App thì tool tự đồng bộ App ID",
+    "    khi mở (lấy từ /api/apps — server không trả secret).",
+    "",
     "KHÔNG dùng http://localhost làm FB_REDIRECT_URI (Facebook chặn).",
     "KHÔNG cần Ngrok. KHÔNG cần App Secret trên máy bạn.",
     "Login Facebook qua domain relay HTTPS của nhà cung cấp.",
     "",
-    "Gói này KHÔNG chứa: FB_APP_SECRET, Ngrok token, license-private.pem",
+    "Gói này KHÔNG chứa: FB_APP_ID, FB_APP_SECRET, Ngrok token, license-private.pem",
     "",
     `version ${pkg.version}`,
     `oauth_relay_url=${String(relayUrl).replace(/\/$/, "")}`,
@@ -298,7 +306,8 @@ fs.writeFileSync(
     "Gói khách — không secret:",
     ...files.map((f) => ` - ${f}`),
     "",
-    "CẤM trong gói khách: FB_APP_SECRET, NGROK_AUTHTOKEN, license-private.pem, data/app.db, .env đầy secret",
+    "CẤM trong gói khách: FB_APP_ID, FB_APP_SECRET, NGROK_AUTHTOKEN, license-private.pem, data/app.db, .env đầy secret",
+    "App ID: khách tự điền trong tab Cấu hình lần đầu (hoặc relay tự đồng bộ /api/apps)",
     "Connect: OAUTH_RELAY + relay RELAY_EXCHANGE=1",
     "",
   ].join("\n"),
@@ -327,4 +336,11 @@ for (const f of files) {
 }
 
 console.log("pack-customer (an toàn) sẵn sàng:", out);
-console.log("version", pkg.version, "| App ID", appId ? "có" : "THIẾU — điền FB_APP_ID trên máy admin trước khi sync");
+console.log(
+  "version",
+  pkg.version,
+  "| App ID",
+  appId
+    ? `bake sẵn (${appId}) — chỉ dùng cho bản nội bộ`
+    : "để trống (đúng cho bản phát hành — khách tự điền trong tab Cấu hình lần đầu)"
+);

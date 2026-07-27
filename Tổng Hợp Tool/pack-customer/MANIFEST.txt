@@ -2,10 +2,12 @@ Gói khách — không secret:
  - .env.example
  - .env.may-khach.mau
  - .env.public
- - FB-Page-Studio-Desktop-v1.2.40.exe
- - FB-Page-Studio-Desktop-v1.2.40.exe.sha256.txt
- - FB-Page-Studio-Setup-v1.2.40.exe
- - FB-Page-Studio-Setup-v1.2.40.exe.sha256.txt
+ - CHANGELOG-1.2.47.md
+ - DIEN-APP-ID-SECRET.txt
+ - FB-Page-Studio-Desktop-v1.2.50.exe
+ - FB-Page-Studio-Desktop-v1.2.50.exe.sha256.txt
+ - FB-Page-Studio-Setup-v1.2.50.exe
+ - FB-Page-Studio-Setup-v1.2.50.exe.sha256.txt
  - HUONG-DAN-MAY-MOI.md
  - HUONG-DAN-OAUTH-RELAY.md
  - MANIFEST.txt
@@ -13,5 +15,6 @@ Gói khách — không secret:
  - README-KHACH.txt
  - VERSION.txt
 
-CẤM trong gói khách: FB_APP_SECRET, NGROK_AUTHTOKEN, license-private.pem, data/app.db, .env đầy secret
+CẤM trong gói khách: FB_APP_ID, FB_APP_SECRET, NGROK_AUTHTOKEN, license-private.pem, data/app.db, .env đầy secret
+App ID: khách tự điền trong tab Cấu hình lần đầu (hoặc relay tự đồng bộ /api/apps)
 Connect: OAUTH_RELAY + relay RELAY_EXCHANGE=1

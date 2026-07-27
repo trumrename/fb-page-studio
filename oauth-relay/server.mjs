@@ -38,7 +38,9 @@ for (const p of [
 }
 
 const listenPort = Number(process.env.PORT || process.env.RELAY_PORT || 8080);
-const listenHost = process.env.LISTEN_HOST || "0.0.0.0";
+// Mặc định loopback: relay chạy sau tunnel (cloudflared) nối 127.0.0.1.
+// Chỉ đặt 0.0.0.0 khi CỐ Ý mở ra LAN/Internet trực tiếp.
+const listenHost = process.env.LISTEN_HOST || "127.0.0.1";
 const defaultLocalPort = Number(process.env.DEFAULT_LOCAL_PORT || 3847);
 const publicName =
   process.env.RELAY_PUBLIC_URL ||
@@ -50,6 +52,9 @@ const exchangeMode =
 
 const tickets = new Map(); // ticket -> { access_token, expires_in, meta_app_key, app_id, exp }
 const TICKET_TTL_MS = 120_000;
+// Số Meta App tối đa quét trong .env (FB_APP_ID_2 … FB_APP_ID_N).
+// Dùng CHUNG cho mọi hàm quét slot để tránh app "tàng hình" với client.
+const MAX_APPS = 50;
 
 function parseState(state) {
   const s = String(state || "");
@@ -71,9 +76,11 @@ function parseState(state) {
   if (parts.length >= 4 && /^\d{5,30}$/.test(parts[3])) {
     appId = parts[3];
   } else {
-    for (const p of parts) {
-      if (/^\d{5,30}$/.test(p)) {
-        appId = p;
+    // Fallback: bỏ qua index 1 (port) để port 5 chữ số không bị nhận nhầm là App ID.
+    for (let i = 0; i < parts.length; i++) {
+      if (i === 1) continue;
+      if (/^\d{5,30}$/.test(parts[i])) {
+        appId = parts[i];
         break;
       }
     }
@@ -219,7 +226,7 @@ function allServerAppsWithSecrets() {
   };
   const e1 = envAppCreds("app1");
   if (e1.appId) add("app1", e1.appId, e1.appSecret, e1.name);
-  for (let n = 2; n <= 40; n++) {
+  for (let n = 2; n <= MAX_APPS; n++) {
     const e = envAppCreds(`app${n}`);
     if (e.appId) add(`app${n}`, e.appId, e.appSecret, e.name);
   }
@@ -278,7 +285,7 @@ function listRelayAppsPublic() {
   };
   const e1 = envAppCreds("app1");
   if (e1.appId) add("app1", e1.appId, e1.name);
-  for (let n = 2; n <= 20; n++) {
+  for (let n = 2; n <= MAX_APPS; n++) {
     const e = envAppCreds(`app${n}`);
     if (e.appId) add(`app${n}`, e.appId, e.name);
   }
@@ -292,14 +299,46 @@ function listRelayAppsPublic() {
 
 function nextAppKey() {
   const used = new Set(listRelayAppsPublic().map((a) => a.key));
-  for (let n = 1; n <= 50; n++) {
+  for (let n = 1; n <= MAX_APPS; n++) {
     const k = `app${n}`;
     if (!used.has(k)) return k;
   }
   return `app${Date.now()}`;
 }
 
+/** Host công khai của relay (để chặn Origin chéo site). */
+function publicHost() {
+  try {
+    const raw = String(publicName).replace(/\/$/, "");
+    const withProto = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    return new URL(withProto).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Chặn CSRF: request từ trình duyệt cross-site luôn kèm header Origin.
+ * Tool local (Node/Electron fetch) KHÔNG gửi Origin → cho qua.
+ * Nếu có Origin và khác host public của relay → từ chối.
+ */
+function isCrossSiteBrowser(req) {
+  const origin = String(req.headers["origin"] || "").trim();
+  if (!origin) return false; // không phải trình duyệt / same-origin
+  try {
+    const oh = new URL(origin).host.toLowerCase();
+    const ph = publicHost();
+    return !ph || oh !== ph;
+  } catch {
+    return true; // Origin dị dạng → coi như không tin cậy
+  }
+}
+
 function requireAdmin(req) {
+  // Chống CSRF kể cả server nhà: từ chối POST từ website lạ (có Origin chéo site).
+  if (isCrossSiteBrowser(req)) {
+    return { ok: false, error: "Từ chối: request cross-site (Origin không hợp lệ)." };
+  }
   // Server nhà: cho phép khách đẩy App ID+Secret không token (tự ghi .env)
   if (allowOpenRegister) return { ok: true, open: true };
   if (!adminToken) {
@@ -375,12 +414,18 @@ async function exchangeCode(code, metaAppKey, appIdHint = "") {
 function putTicket(payload) {
   const ticket = crypto.randomBytes(24).toString("hex");
   tickets.set(ticket, { ...payload, exp: Date.now() + TICKET_TTL_MS });
-  // GC
-  for (const [k, v] of tickets) {
-    if (v.exp < Date.now()) tickets.delete(k);
-  }
   return ticket;
 }
+
+// GC ticket hết hạn theo chu kỳ (thay vì quét toàn bộ Map mỗi lần cấp).
+// unref() để timer không giữ process sống khi không còn việc khác.
+const ticketGcTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of tickets) {
+    if (v.exp < now) tickets.delete(k);
+  }
+}, TICKET_TTL_MS);
+ticketGcTimer.unref?.();
 
 function htmlPage(title, body) {
   return `<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"/>
@@ -526,11 +571,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === "/api/admin/apps" && req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
+    // Chỉ cho preflight từ chính domain relay — không quảng bá "*" cho route ghi .env.
+    const origin = String(req.headers["origin"] || "").trim();
+    const headers = {
       "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, X-Relay-Admin-Token, Authorization",
-    });
+      Vary: "Origin",
+    };
+    if (!isCrossSiteBrowser(req) && origin) {
+      headers["Access-Control-Allow-Origin"] = origin;
+    }
+    res.writeHead(204, headers);
     res.end();
     return;
   }

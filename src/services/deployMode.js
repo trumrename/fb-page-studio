@@ -103,7 +103,18 @@ export function deployPublicInfo() {
     oauth_relay: relay,
     listen_host: getListenHost(),
     app_base_url: config.appBaseUrl,
-    oauth_redirect_uri: config.facebook.redirectUri,
+    // Live env — avoid frozen config localhost when OAUTH_RELAY is on
+    oauth_redirect_uri: (() => {
+      const env = String(process.env.FB_REDIRECT_URI || "").trim();
+      const relay = String(
+        process.env.OAUTH_RELAY_URL || process.env.RELAY_PUBLIC_URL || ""
+      )
+        .trim()
+        .replace(/\/$/, "");
+      if (env && !/localhost|127\.0\.0\.1/i.test(env)) return env.replace(/\/$/, "");
+      if (relay) return `${relay}/auth/facebook/callback`;
+      return config.facebook.redirectUri;
+    })(),
     trusted_hosts: trustedPublicHostnames(),
     ngrok_autostart_default: shouldAutostartNgrok(),
     media_upload: isCentralDeploy() || process.env.ALLOW_MEDIA_UPLOAD === "1",

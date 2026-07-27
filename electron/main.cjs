@@ -235,7 +235,7 @@ function seedCustomerEnvInUserDir(userDir) {
       "NGROK_AUTHTOKEN=",
       "OAUTH_RELAY_URL=https://modelswiki.top",
       "FB_REDIRECT_URI=https://modelswiki.top/auth/facebook/callback",
-      "FB_APP_ID=1418846112578001",
+      "FB_APP_ID=",
       "FB_APP_NAME=App 1",
       "FB_GRAPH_VERSION=v21.0",
       "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
@@ -287,9 +287,16 @@ function seedCustomerEnvInUserDir(userDir) {
     if (!bad) return;
 
     const keepKey = (cur.match(/^TOKEN_ENCRYPTION_KEY=(.*)$/m) || [])[1] || "";
-    const keepAppId = (cur.match(/^FB_APP_ID=(.*)$/m) || [])[1] || "1418846112578001";
+    // Giữ App ID người dùng tự điền (nếu có). KHÔNG bơm App ID mặc định.
+    const keepAppId = String((cur.match(/^FB_APP_ID=(.*)$/m) || [])[1] || "").trim();
+    const keepAppId2 = String((cur.match(/^FB_APP_ID_2=(.*)$/m) || [])[1] || "").trim();
     let next = template;
-    next = next.replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${String(keepAppId).trim() || "1418846112578001"}`);
+    next = next.replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${keepAppId}`);
+    if (keepAppId2) {
+      next = /^FB_APP_ID_2=/m.test(next)
+        ? next.replace(/^FB_APP_ID_2=.*$/m, `FB_APP_ID_2=${keepAppId2}`)
+        : `${next}\nFB_APP_ID_2=${keepAppId2}\n`;
+    }
     if (String(keepKey).trim()) {
       next = next.replace(/^TOKEN_ENCRYPTION_KEY=.*$/m, `TOKEN_ENCRYPTION_KEY=${String(keepKey).trim()}`);
     } else {

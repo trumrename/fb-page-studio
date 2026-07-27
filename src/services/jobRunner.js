@@ -15,6 +15,16 @@ import {
 } from "./poster.js";
 import { scheduleOnePost } from "./schedule.js";
 import { getReportPaths } from "./reportExport.js";
+import {
+  isTransientGraphError,
+  isGraphRateLimitError,
+  isNetworkTransientError,
+  estimateTransientWaitMs,
+  waitWhileRateLimited,
+} from "./rateLimit.js";
+
+/** Auto-retry per task for Meta temp / throttle / network (bulk schedule & post). */
+const TASK_TRANSIENT_MAX_ATTEMPTS = 8;
 
 const bus = new EventEmitter();
 bus.setMaxListeners(50);
@@ -619,7 +629,7 @@ async function runJob(jobId) {
       task.message = "Đã đến giờ · đang đăng trực tiếp qua Facebook API…";
       recompute(job);
       emit(job);
-      const result = await executeTask(task);
+      const result = await executeTaskWithRetry(job, task);
       task.result = summarizeResult(result);
       task.percent = 100;
       if (result?.ok === false || result?.scheduled === false) {
@@ -635,6 +645,9 @@ async function runJob(jobId) {
       } else {
         task.status = "ok";
         task.message = successMessage(task, result);
+        if (result?.auto_retries) {
+          task.message += ` · tự retry ${result.auto_retries} lần`;
+        }
         notify(
           job,
           "success",
@@ -948,6 +961,120 @@ async function executeTask(task) {
   }
   throw new Error(`Unknown task kind: ${kind}`);
 }
+
+/** Normalize task fail payloads / thrown errors for transient detection. */
+function asTransientProbe(resultOrErr) {
+  if (!resultOrErr) return null;
+  if (resultOrErr instanceof Error) return resultOrErr;
+  if (typeof resultOrErr === "object") {
+    return {
+      message: resultOrErr.error || resultOrErr.message || "",
+      code: resultOrErr.code ?? resultOrErr.fb?.code,
+      fb: resultOrErr.fb || resultOrErr.error_fb || null,
+      http_status: resultOrErr.http_status || resultOrErr.status,
+    };
+  }
+  return { message: String(resultOrErr) };
+}
+
+function isRetryableTaskOutcome(resultOrErr) {
+  return isTransientGraphError(asTransientProbe(resultOrErr));
+}
+
+/**
+ * Run one post/schedule task with automatic retries on:
+ * - Meta "Please retry your request later" / unexpected error
+ * - rate / throttle limits
+ * - network "fetch failed"
+ */
+async function executeTaskWithRetry(job, task) {
+  const maxAttempts = TASK_TRANSIENT_MAX_ATTEMPTS;
+  let lastResult = null;
+  let lastError = null;
+  let autoRetries = 0;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (job.stop_requested) {
+      const err = new Error("Đã dừng khi đang retry Facebook");
+      err.code = "STOPPED";
+      throw err;
+    }
+    try {
+      if (attempt > 0) {
+        task.percent = Math.min(55, 35 + attempt * 2);
+        task.message = `Tự thử lại ${attempt + 1}/${maxAttempts}…`;
+        recompute(job);
+        emit(job);
+      }
+      const result = await executeTask(task);
+      lastResult = result;
+      const failed = result?.ok === false || result?.scheduled === false;
+      if (!failed) {
+        if (autoRetries > 0 && result && typeof result === "object") {
+          result.auto_retries = autoRetries;
+        }
+        return result;
+      }
+      if (!isRetryableTaskOutcome(result) || attempt >= maxAttempts - 1) {
+        if (autoRetries > 0 && result && typeof result === "object") {
+          result.error = `${result.error || "Thất bại"} (đã tự retry ${autoRetries} lần)`;
+        }
+        return result;
+      }
+      lastError = new Error(result.error || "Thất bại tạm thời");
+      lastError.fb = result.fb || null;
+      lastError.code = result.fb?.code || result.code;
+    } catch (e) {
+      lastError = e;
+      if (!isRetryableTaskOutcome(e) || attempt >= maxAttempts - 1) {
+        if (autoRetries > 0) {
+          e.message = `${e.message || e} (đã tự retry ${autoRetries} lần)`;
+        }
+        throw e;
+      }
+    }
+
+    autoRetries += 1;
+    const probe = asTransientProbe(lastError || lastResult);
+    const waitMs = estimateTransientWaitMs(probe, { attempt });
+    const isLimit = isGraphRateLimitError(probe);
+    const isNet = isNetworkTransientError(probe);
+    const kindLabel = isLimit ? "limit/throttle" : isNet ? "mạng" : "lỗi tạm FB";
+    task.retry_count = autoRetries;
+    task.message = `⚠ ${kindLabel}: chờ ~${Math.ceil(waitMs / 1000)}s rồi tự thử lại (${attempt + 1}/${maxAttempts})`;
+    task.percent = Math.min(50, 30 + attempt * 2);
+    recompute(job);
+    emit(job);
+    notify(
+      job,
+      "warn",
+      `Tự retry · ${task.page_name}`,
+      `${task.label}: ${kindLabel} — chờ ${Math.ceil(waitMs / 1000)}s (lần ${attempt + 1}/${maxAttempts})`
+    );
+
+    const w = await waitWhileRateLimited(waitMs, {
+      attempt: attempt + 1,
+      shouldStop: () => job.stop_requested,
+      message: task.message,
+      onTick: (tick) => {
+        task.message = `⚠ ${kindLabel}: còn ${tick.remaining_sec}s… rồi tự thử lại (${attempt + 1}/${maxAttempts})`;
+        task.wait_remaining_seconds = tick.remaining_sec;
+        recompute(job);
+        if (tick.remaining_sec % 5 === 0 || tick.remaining_sec <= 3) emit(job);
+      },
+    });
+    if (w.stopped) {
+      const err = new Error("Đã dừng khi đang chờ retry Facebook");
+      err.code = "STOPPED";
+      throw err;
+    }
+    delete task.wait_remaining_seconds;
+  }
+
+  if (lastResult) return lastResult;
+  throw lastError || new Error("Hết số lần tự retry Facebook");
+}
+
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));

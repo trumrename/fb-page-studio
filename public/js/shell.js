@@ -12,6 +12,8 @@
     path === "/posting.html" && hash === "#rotationWorkspace" ? "rotation" :
     path === "/posting.html" ? "configuration" :
     path === "/index.html" ? "connections" :
+    path === "/delete-posts.html" ? "delete_posts" :
+    path === "/delete-group-posts.html" ? "delete_groups" :
     path === "/antispam.html" ? "safety" :
     path === "/license.html" ? "license" : "default";
   document.body.dataset.view = view;
@@ -21,6 +23,8 @@
     ["/index.html", "1", "Kết nối Meta", "App, Profile và Page"],
     ["/posting.html#configWorkspace", "2", "Cấu hình Page", "Media, caption và giới hạn"],
     ["/posting.html#rotationWorkspace", "3", "Lập lịch & chạy", "Chạy ngay hoặc hẹn giờ"],
+    ["/delete-posts.html", "⌫", "Xóa bài Page", "Xóa feed Fanpage siêu nhanh"],
+    ["/delete-group-posts.html", "⊟", "Xóa bài Group", "Admin/Mod xóa feed Group"],
     ["/app.html#jobSection", "4", "Tiến trình", "Phần trăm, OK và lỗi"],
     ["/antispam.html", "5", "An toàn Anti-spam", "Quota và cooldown"],
     ["/app.html#logsSection", "6", "Báo cáo", "Lịch sử và file xuất"],
@@ -55,6 +59,8 @@
     connections: ["KẾT NỐI", "Quản lý Meta App, Profile và Page", "violet"],
     configuration: ["CẤU HÌNH PAGE", "Thiết lập nội dung và giới hạn từng Page", "cyan"],
     rotation: ["LẬP LỊCH & CHẠY", "Xếp vòng đăng, thời gian và bắt đầu job", "green"],
+    delete_posts: ["XÓA BÀI", "Xóa bài Fanpage hàng loạt bằng Graph API", "red"],
+    delete_groups: ["XÓA GROUP", "Xóa bài Group với quyền Admin/Mod", "red"],
     progress: ["TIẾN TRÌNH", "Theo dõi phần trăm, nhiệm vụ và lỗi", "orange"],
     safety: ["AN TOÀN", "Kiểm soát quota, cooldown và anti-spam", "red"],
     reports: ["BÁO CÁO", "Đối soát Facebook và lịch sử đăng", "yellow"],
@@ -72,6 +78,8 @@
     const titles = {
       overview: "Tổng quan hệ thống", connections: "Kết nối Meta & Page",
       configuration: "Cấu hình nội dung Page", rotation: "Lập lịch và bắt đầu chạy",
+      delete_posts: "Xóa bài Fanpage siêu nhanh",
+      delete_groups: "Xóa bài Group (Admin/Mod)",
       progress: "Tiến trình công việc", safety: "An toàn Anti-spam",
       reports: "Báo cáo và đối soát", license: "License thiết bị",
     };

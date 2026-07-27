@@ -171,6 +171,16 @@ check(
     !/FB_APP_SECRET=\s*[A-Za-z0-9]{10,}/.test(customerEnvEx) &&
     !/NGROK_AUTHTOKEN=\s*[A-Za-z0-9]{10,}/.test(customerEnvEx)
 );
+// v1.2.45: bản phát hành không được bake App ID — khách tự điền / relay tự sync.
+const bakedEnvTemplate = read(path.join("build", "customer-default.env"));
+check(
+  "release templates ship with NO Meta App ID / Secret",
+  !/^FB_APP_ID(?:_\d+)?\s*=\s*\d/m.test(customerEnvEx) &&
+    !/^FB_APP_SECRET(?:_\d+)?\s*=\s*\S/m.test(customerEnvEx) &&
+    !/^FB_APP_ID(?:_\d+)?\s*=\s*\d/m.test(bakedEnvTemplate) &&
+    !/^FB_APP_SECRET(?:_\d+)?\s*=\s*\S/m.test(bakedEnvTemplate) &&
+    read("src/services/customerEnv.js").includes('DEFAULT_CUSTOMER_APP_ID = ""')
+);
 check(
   "obsolete BAT files cannot collect tokens or delete builds",
   // Ngrok token helper BATs removed from UI path; if reintroduced they must not prompt tokens or wipe disks.

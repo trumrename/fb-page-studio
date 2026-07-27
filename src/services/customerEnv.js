@@ -9,7 +9,11 @@ import { getBundleRoot, getEnvPath, isPackaged } from "../paths.js";
 
 export const DEFAULT_OAUTH_RELAY_URL = "https://modelswiki.top";
 export const DEFAULT_FB_REDIRECT_URI = `${DEFAULT_OAUTH_RELAY_URL}/auth/facebook/callback`;
-export const DEFAULT_CUSTOMER_APP_ID = "1418846112578001";
+/**
+ * KHÔNG hardcode App ID trong bản phát hành.
+ * Máy khách tự điền trong UI (Cấu hình lần đầu) hoặc nhận từ relay /api/apps.
+ */
+export const DEFAULT_CUSTOMER_APP_ID = "";
 
 /** Bundled template locations (asar / resources / pack). */
 export function customerDefaultEnvCandidates() {
@@ -141,10 +145,23 @@ export function healLocalhostRedirectEnv() {
   }
 
   const keepKey = (text.match(/^TOKEN_ENCRYPTION_KEY=(.*)$/m) || [])[1] || "";
-  const keepAppId = (text.match(/^FB_APP_ID=(.*)$/m) || [])[1]?.trim() || DEFAULT_CUSTOMER_APP_ID;
+  // Giữ App ID người dùng đã tự điền (nếu có). Không bơm ID mặc định.
+  const keepAppId = (text.match(/^FB_APP_ID=(.*)$/m) || [])[1]?.trim() || "";
+  const keepAppId2 = (text.match(/^FB_APP_ID_2=(.*)$/m) || [])[1]?.trim() || "";
 
   let next = readCustomerDefaultEnvText();
-  next = next.replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${keepAppId || DEFAULT_CUSTOMER_APP_ID}`);
+  if (/^FB_APP_ID=/m.test(next)) {
+    next = next.replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${keepAppId}`);
+  } else if (keepAppId) {
+    next += `\nFB_APP_ID=${keepAppId}\n`;
+  }
+  if (keepAppId2) {
+    if (/^FB_APP_ID_2=/m.test(next)) {
+      next = next.replace(/^FB_APP_ID_2=.*$/m, `FB_APP_ID_2=${keepAppId2}`);
+    } else {
+      next += `\nFB_APP_ID_2=${keepAppId2}\n`;
+    }
+  }
   if (keepKey.trim()) {
     next = next.replace(/^TOKEN_ENCRYPTION_KEY=.*$/m, `TOKEN_ENCRYPTION_KEY=${keepKey.trim()}`);
   } else {

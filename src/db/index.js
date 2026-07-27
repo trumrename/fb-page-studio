@@ -259,6 +259,10 @@ function migrateMetaAppColumns(database) {
       `ALTER TABLE oauth_states ADD COLUMN meta_app_key TEXT DEFAULT 'app1'`
     );
   }
+  // Exact redirect_uri used in Facebook dialog — must match code exchange
+  if (!oauthCols.includes("redirect_uri")) {
+    database.exec(`ALTER TABLE oauth_states ADD COLUMN redirect_uri TEXT`);
+  }
 
   // Rebuild unique once: flag file / check index
   const flag = database

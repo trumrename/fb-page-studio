@@ -186,7 +186,19 @@ export async function connectFromOAuthCode(code, opts = {}) {
     );
   }
 
-  const short = await exchangeCodeForToken(code, creds);
+  let short;
+  try {
+    short = await exchangeCodeForToken(code, creds);
+  } catch (e) {
+    const m = String(e.message || e);
+    if (/redirect_uri|verification code|identical/i.test(m)) {
+      throw new Error(
+        `${m} — redirect_uri khi đổi code phải = dialog: «${creds.redirectUri || "?"}». ` +
+          `Kiểm tra FB_REDIRECT_URI / OAUTH_RELAY_URL (modelswiki.top) và Meta Valid OAuth Redirect URIs.`
+      );
+    }
+    throw e;
+  }
   if (!short.access_token) {
     throw new Error("No access_token from code exchange");
   }
