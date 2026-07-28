@@ -3,12 +3,12 @@ Gói DEV (máy admin) — KHÔNG zip gửi khách:
  - .env.mau-dev.txt
  - CHANGELOG-1.2.49.md
  - CHAY-NGROK-DOMAIN-CO-DINH.bat
- - FB-Page-Studio-Desktop-v1.2.64.exe
- - FB-Page-Studio-Desktop-v1.2.64.exe.sha256.txt
+ - FB-Page-Studio-Desktop-v1.2.65.exe
+ - FB-Page-Studio-Desktop-v1.2.65.exe.sha256.txt
  - FB-Page-Studio-Desktop.exe
  - FB-Page-Studio-Desktop.exe.sha256.txt
- - FB-Page-Studio-Setup-v1.2.64.exe
- - FB-Page-Studio-Setup-v1.2.64.exe.sha256.txt
+ - FB-Page-Studio-Setup-v1.2.65.exe
+ - FB-Page-Studio-Setup-v1.2.65.exe.sha256.txt
  - MANIFEST-DEV.txt
  - README-DEV.md
  - VERSION.txt

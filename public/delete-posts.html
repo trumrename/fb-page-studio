@@ -116,10 +116,15 @@
                   <input type="datetime-local" id="since" step="60" />
                 </div>
                 <div>
-                  <label class="field">Đến ngày (tùy chọn)</label>
+                  <label class="field">Đến ngày (tùy chọn) · chỉ xóa bài ≤ giờ này</label>
                   <input type="datetime-local" id="until" step="60" />
                 </div>
               </div>
+              <p class="muted" style="margin:.45rem 0 0;font-size:.78rem;line-height:1.45">
+                <b>Từ / Đến:</b> chỉ xóa bài có <code>created_time</code> trong khoảng.
+                Bài sau «Đến ngày» <b>không</b> bị xóa. Để trống cả hai = xóa mọi object list được (full wipe).
+                Gợi ý «đến hết ngày 15»: chọn <code>15/xx 23:59</code>.
+              </p>
               <div style="margin-top:.75rem">
                 <label class="field">Keyword trong caption (tùy chọn)</label>
                 <input type="text" id="keyword" placeholder="VD: sale, test, outdated…" />
@@ -251,7 +256,24 @@
 
     function toUnix(localVal) {
       if (!localVal) return null;
-      const t = new Date(localVal).getTime();
+      // datetime-local "YYYY-MM-DDTHH:mm" as local wall clock
+      const m = String(localVal).trim().match(
+        /^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::(\d{2}))?/
+      );
+      let t;
+      if (m) {
+        t = new Date(
+          Number(m[1]),
+          Number(m[2]) - 1,
+          Number(m[3]),
+          Number(m[4]),
+          Number(m[5]),
+          Number(m[6] || 0),
+          0
+        ).getTime();
+      } else {
+        t = new Date(localVal).getTime();
+      }
       if (!Number.isFinite(t)) return null;
       return Math.floor(t / 1000);
     }

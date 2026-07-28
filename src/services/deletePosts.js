@@ -87,6 +87,69 @@ function matchKeyword(post, keyword) {
   return hay.includes(kw);
 }
 
+/**
+ * Normalize since/until from UI (unix seconds | ISO | number string) → unix seconds.
+ * @returns {number|null}
+ */
+export function toUnixSeconds(raw) {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    // already unix (seconds) if small enough; ms if > 1e12
+    return raw > 1e12 ? Math.floor(raw / 1000) : Math.floor(raw);
+  }
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (/^\d{9,12}$/.test(s)) return Number(s);
+  if (/^\d{13,}$/.test(s)) return Math.floor(Number(s) / 1000);
+  const t = Date.parse(s);
+  if (!Number.isFinite(t)) return null;
+  return Math.floor(t / 1000);
+}
+
+/**
+ * Client-side time filter (Graph since/until is unreliable on /videos / reels).
+ * - since: keep posts with created_time >= since (inclusive)
+ * - until: keep posts with created_time <= until (inclusive end of selected second)
+ * Posts without created_time: drop when any time filter is set (safer than deleting outside range).
+ */
+export function postInTimeRange(post, sinceUnix, untilUnix) {
+  const hasSince = sinceUnix != null && Number.isFinite(Number(sinceUnix));
+  const hasUntil = untilUnix != null && Number.isFinite(Number(untilUnix));
+  if (!hasSince && !hasUntil) return true;
+  const raw = post?.created_time;
+  if (!raw) return false; // unknown time + filter → do not delete
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return false;
+  const sec = Math.floor(ms / 1000);
+  if (hasSince && sec < Number(sinceUnix)) return false;
+  if (hasUntil && sec > Number(untilUnix)) return false;
+  return true;
+}
+
+export function filterPostsByOptions(posts, opts = {}) {
+  const sinceU = toUnixSeconds(opts.since);
+  const untilU = toUnixSeconds(opts.until);
+  let out = Array.isArray(posts) ? posts : [];
+  if (sinceU != null || untilU != null) {
+    out = out.filter((p) => postInTimeRange(p, sinceU, untilU));
+  }
+  if (opts.keyword) {
+    out = out.filter((p) => matchKeyword(p, opts.keyword));
+  }
+  return out;
+}
+
+/** True when date/keyword filters mean we must NOT run unbounded multi-pass wipe. */
+export function hasContentFilters(opts = {}) {
+  return Boolean(
+    opts.keyword ||
+      toUnixSeconds(opts.since) != null ||
+      toUnixSeconds(opts.until) != null ||
+      (Array.isArray(opts.explicit_post_ids) && opts.explicit_post_ids.length) ||
+      (Array.isArray(opts.post_ids) && opts.post_ids.length)
+  );
+}
+
 /** Build a human-openable Facebook URL for a post id. */
 export function buildPostUrl(postId, pageId = "", permalink = "") {
   if (permalink && /^https?:\/\//i.test(permalink)) return permalink;
@@ -170,18 +233,22 @@ function finalizeReport(job) {
 export async function previewPagePosts(pageRowId, opts = {}) {
   const page = loadPageForDelete(pageRowId);
   const maxPosts = Math.max(0, Number(opts.max_posts) || Number(opts.maxPosts) || 200);
+  const sinceU = toUnixSeconds(opts.since);
+  const untilU = toUnixSeconds(opts.until);
   const posts = await listPagePosts(page.page_id, page.page_token, {
     maxPosts: maxPosts || 200,
-    since: opts.since || undefined,
-    until: opts.until || undefined,
+    since: sinceU ?? undefined,
+    until: untilU ?? undefined,
     metaAppKey: page.meta_app_key,
     listMode: "full", // preview needs richer edges for UI
   });
 
-  let filtered = posts;
-  if (opts.keyword) {
-    filtered = posts.filter((p) => matchKeyword(p, opts.keyword));
-  }
+  // Graph since/until often ignored on /videos — filter again by created_time
+  const filtered = filterPostsByOptions(posts, {
+    since: sinceU,
+    until: untilU,
+    keyword: opts.keyword,
+  });
 
   return {
     page: {
@@ -191,6 +258,8 @@ export async function previewPagePosts(pageRowId, opts = {}) {
     },
     total_fetched: posts.length,
     total_matched: filtered.length,
+    since_unix: sinceU,
+    until_unix: untilU,
     posts: filtered.map((p) => ({
       id: p.id,
       message: (p.message || p.story || "").slice(0, 240),
@@ -538,10 +607,12 @@ async function listOnePage(job, pageState, toDelete) {
         });
       }
     } else {
+      const sinceU = toUnixSeconds(job.options.since);
+      const untilU = toUnixSeconds(job.options.until);
       const posts = await listPagePosts(page.page_id, page.page_token, {
         maxPosts: job.options.max_posts || 0,
-        since: job.options.since || undefined,
-        until: job.options.until || undefined,
+        since: sinceU ?? undefined,
+        until: untilU ?? undefined,
         metaAppKey: page.meta_app_key,
         listMode: job.options.list_mode || "wipe",
         shouldStop: () => job.stop_requested,
@@ -569,9 +640,20 @@ async function listOnePage(job, pageState, toDelete) {
           pushRecent(job, `${page.name} · edges: ${parts}`);
         }
       }
-      const filtered = job.options.keyword
-        ? posts.filter((p) => matchKeyword(p, job.options.keyword))
-        : posts;
+      // Client filter: Graph often ignores since/until on /videos & reels
+      const filtered = filterPostsByOptions(posts, {
+        since: sinceU,
+        until: untilU,
+        keyword: job.options.keyword,
+      });
+      const dropped =
+        (Array.isArray(posts) ? posts.length : 0) - filtered.length;
+      if (dropped > 0 && (sinceU != null || untilU != null || job.options.keyword)) {
+        pushRecent(
+          job,
+          `${page.name}: bỏ ${dropped} object ngoài khoảng ngày/keyword (lọc local)`
+        );
+      }
       pageState.matched = filtered.length;
       ids = filtered.map((p) => p.id);
       for (const p of filtered) {
@@ -678,9 +760,14 @@ async function deleteOnePage(job, pageState, toDelete) {
     });
 
     // Pass 2+3: re-list + delete leftovers (videos/reels often only on /videos)
-    // Always when full wipe (max=0) and no keyword/explicit filter
+    // ONLY true full wipe: no keyword, no date range, no explicit ids.
+    // Bug fixed: previously multi-pass re-listed WITHOUT since/until → xóa hết
+    // kể cả bài sau "đến ngày" đã chọn.
     const fullWipe =
-      !job.options.keyword &&
+      !hasContentFilters({
+        ...job.options,
+        explicit_post_ids: job.explicit_post_ids,
+      }) &&
       !job.explicit_post_ids?.length &&
       (job.options.max_posts === 0 || job.options.max_posts >= 5000);
 
@@ -722,16 +809,26 @@ async function deleteOnePage(job, pageState, toDelete) {
             job,
             `${page.name}: quét lại pass ${pass} (videos/reels/photos)…`
           );
-          const again = await listPagePosts(page.page_id, page.page_token, {
+          const sinceU = toUnixSeconds(job.options.since);
+          const untilU = toUnixSeconds(job.options.until);
+          const againRaw = await listPagePosts(page.page_id, page.page_token, {
             maxPosts: 0,
+            since: sinceU ?? undefined,
+            until: untilU ?? undefined,
             metaAppKey: page.meta_app_key,
             // Pass 2+: still wipe edges only (videos leftovers) unless user chose full
             listMode: job.options.list_mode || "wipe",
             shouldStop: () => job.stop_requested,
             onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
           });
-          if (again?._edgeStats) {
-            const parts = Object.entries(again._edgeStats)
+          // Safety: never multi-pass-delete outside date filter
+          const again = filterPostsByOptions(againRaw || [], {
+            since: sinceU,
+            until: untilU,
+            keyword: job.options.keyword,
+          });
+          if (againRaw?._edgeStats) {
+            const parts = Object.entries(againRaw._edgeStats)
               .filter(([, n]) => n > 0)
               .map(([k, n]) => `${k}:${n}`)
               .join(", ");
@@ -741,7 +838,7 @@ async function deleteOnePage(job, pageState, toDelete) {
             (result.items || []).filter((x) => x.ok).map((x) => x.post_id)
           );
           const stillThere = [
-            ...new Set((again || []).map((p) => String(p.id)).filter(Boolean)),
+            ...new Set(again.map((p) => String(p.id)).filter(Boolean)),
           ].filter((id) => !okSet.has(id));
 
           if (!stillThere.length) {

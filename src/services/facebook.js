@@ -1088,6 +1088,36 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     return tb - ta;
   });
 
+  // Graph since/until often ignored on /videos & reels — enforce by created_time.
+  // until is inclusive (created_time unix <= until).
+  const sinceU =
+    opts.since != null && opts.since !== ""
+      ? Number(opts.since) > 1e12
+        ? Math.floor(Number(opts.since) / 1000)
+        : Number(opts.since)
+      : null;
+  const untilU =
+    opts.until != null && opts.until !== ""
+      ? Number(opts.until) > 1e12
+        ? Math.floor(Number(opts.until) / 1000)
+        : Number(opts.until)
+      : null;
+  if (
+    (Number.isFinite(sinceU) && sinceU > 0) ||
+    (Number.isFinite(untilU) && untilU > 0)
+  ) {
+    const before = posts.length;
+    posts = posts.filter((p) => {
+      if (!p.created_time) return false;
+      const sec = Math.floor(Date.parse(p.created_time) / 1000);
+      if (!Number.isFinite(sec)) return false;
+      if (Number.isFinite(sinceU) && sinceU > 0 && sec < sinceU) return false;
+      if (Number.isFinite(untilU) && untilU > 0 && sec > untilU) return false;
+      return true;
+    });
+    edgeStats.time_filtered_out = before - posts.length;
+  }
+
   if (maxPosts > 0 && posts.length > maxPosts) {
     posts = posts.slice(0, maxPosts);
   }

@@ -1,6 +1,6 @@
 {
   "name": "fb-page-studio",
-  "version": "1.2.64",
+  "version": "1.2.65",
   "description": "FB Page Studio — Multi Meta App · Rotation so-le · License keys · Graph API",
   "author": "trumrename",
   "type": "module",
@@ -37,7 +37,7 @@
     "release:strict": "npm test && npm run build:desktop && npm run pack:customer && npm run pack:dev && npm run pack:internal && npm run release:asset && npm run pack:customer:zip && npm run release:verify",
     "native:node": "npm rebuild better-sqlite3",
     "native:electron": "node scripts/install-electron-native.mjs",
-    "test": "npm run native:node && node scripts/test-requirements.mjs && node scripts/test-caption-pool.mjs && node scripts/test-clean-runtime.mjs",
+    "test": "npm run native:node && node scripts/test-requirements.mjs && node scripts/test-caption-pool.mjs && node scripts/test-clean-runtime.mjs && node scripts/test-delete-date-filter.mjs",
     "test:probe": "npm run native:node && node scripts/full-functional-probe.mjs",
     "test:all": "npm test && npm run test:probe",
     "test:clean-runtime": "npm run native:node && node scripts/test-clean-runtime.mjs",
