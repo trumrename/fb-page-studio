@@ -363,14 +363,72 @@ async function readJsonBody(req) {
   return JSON.parse(raw);
 }
 
-function redirectUri() {
-  const fromEnv = String(process.env.FB_REDIRECT_URI || "").trim();
-  if (fromEnv) return fromEnv;
-  const base = String(publicName).replace(/\/$/, "");
-  return `${base}/auth/facebook/callback`;
+/**
+ * Canonical Facebook callback URI (no trailing slash).
+ * Meta requires EXACT match between dialog and code exchange.
+ */
+function normalizeCallbackUri(raw) {
+  let s = String(raw || "").trim();
+  if (!s) return "";
+  // strip trailing slash(es) on full URL
+  s = s.replace(/\/+$/, "");
+  if (/\/auth\/facebook\/callback$/i.test(s)) return s;
+  try {
+    const withProto = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+    const u = new URL(withProto);
+    if (!u.hostname || /localhost|127\.0\.0\.1/i.test(u.hostname)) return "";
+    return `${u.protocol}//${u.host}/auth/facebook/callback`;
+  } catch {
+    return "";
+  }
 }
 
-async function exchangeCode(code, metaAppKey, appIdHint = "") {
+function redirectUri() {
+  const fromEnv = normalizeCallbackUri(process.env.FB_REDIRECT_URI);
+  if (fromEnv) return fromEnv;
+  const base = String(publicName || "").trim().replace(/\/$/, "");
+  return normalizeCallbackUri(base) || `${base}/auth/facebook/callback`;
+}
+
+/**
+ * Prefer the public URL Facebook actually hit (Cloudflare tunnel headers).
+ * This prevents env typo / trailing slash / http vs https mismatch with the dialog.
+ */
+function redirectUriFromRequest(req, requestUrl) {
+  const xfProto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  const xfHost = String(
+    req.headers["x-forwarded-host"] || req.headers["cf-connecting-host"] || ""
+  )
+    .split(",")[0]
+    .trim();
+  const hostHeader = String(req.headers["host"] || "")
+    .split(",")[0]
+    .trim();
+  const host = xfHost || hostHeader;
+  const isLocal =
+    !host ||
+    /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host) ||
+    /^0\.0\.0\.0(:\d+)?$/i.test(host);
+
+  if (!isLocal && host) {
+    const proto = xfProto === "http" || xfProto === "https" ? xfProto : "https";
+    let path = String(requestUrl?.pathname || "/auth/facebook/callback");
+    if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+    // Facebook sometimes lands on /?code= when misconfigured — still exchange with canonical path
+    if (path === "/" || !path) path = "/auth/facebook/callback";
+    if (!/\/auth\/facebook\/callback$/i.test(path)) {
+      path = "/auth/facebook/callback";
+    }
+    const built = normalizeCallbackUri(`${proto}://${host}${path}`);
+    if (built) return built;
+  }
+  return redirectUri();
+}
+
+async function exchangeCode(code, metaAppKey, appIdHint = "", redirectOverride = "") {
   const { appId, appSecret } = appCreds(metaAppKey, appIdHint);
   if (!appId || !appSecret) {
     throw new Error(
@@ -379,7 +437,19 @@ async function exchangeCode(code, metaAppKey, appIdHint = "") {
         " — khách cần đẩy App ID+Secret lên server trước."
     );
   }
-  const uri = redirectUri();
+  // Exact URI Facebook redirected to (or env fallback). Never invent a second URI.
+  const uri =
+    normalizeCallbackUri(redirectOverride) ||
+    redirectUri();
+  const envUri = redirectUri();
+  if (envUri && uri !== envUri) {
+    console.warn(
+      `[relay-exchange] redirect_uri request≠env\n  request: ${uri}\n  env:     ${envUri}`
+    );
+  }
+  console.log(
+    `[relay-exchange] code→token appId=${appId} slot=${metaAppKey} redirect_uri=${uri}`
+  );
   const url = new URL(`https://graph.facebook.com/${graphVersion()}/oauth/access_token`);
   url.searchParams.set("client_id", appId);
   url.searchParams.set("client_secret", appSecret);
@@ -388,7 +458,13 @@ async function exchangeCode(code, metaAppKey, appIdHint = "") {
   const res = await fetch(url);
   const data = await res.json();
   if (data.error) {
-    throw new Error(data.error.message || "Graph exchange failed");
+    const msg = data.error.message || "Graph exchange failed";
+    // Code is single-use; double Connect / F5 often surfaces as redirect_uri error.
+    const hint = /redirect_uri|verification code|identical/i.test(msg)
+      ? ` | redirect_uri dùng khi đổi code: «${uri}». ` +
+        `Phải trùng URI dialog + Meta whitelist. Code OAuth chỉ dùng 1 lần — không F5, không bấm Connect 2 lần.`
+      : "";
+    throw new Error(`${msg}${hint}`);
   }
   let access = data.access_token;
   let expiresIn = data.expires_in;
@@ -541,10 +617,11 @@ const server = http.createServer(async (req, res) => {
         [ek.id]: appId,
         [ek.secret]: appSecret,
         [ek.name]: name,
-        // giữ redirect chuẩn nếu chưa có
+        // luôn chuẩn hóa callback (không trailing slash) — khớp Meta dialog
         FB_REDIRECT_URI:
-          String(process.env.FB_REDIRECT_URI || "").trim() ||
-          `${String(publicName).replace(/\/$/, "")}/auth/facebook/callback`,
+          normalizeCallbackUri(process.env.FB_REDIRECT_URI) ||
+          normalizeCallbackUri(publicName) ||
+          redirectUri(),
       });
 
       console.log(`[relay-admin] upsert app ${key} id=${appId} → .env ${envPath}`);
@@ -621,7 +698,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (exchangeMode && code) {
-        const tok = await exchangeCode(code, metaAppKey, stateAppId);
+        // URI Facebook actually hit (via Cloudflare) — must match dialog + Graph exchange
+        const usedRedirect = redirectUriFromRequest(req, url);
+        const tok = await exchangeCode(code, metaAppKey, stateAppId, usedRedirect);
         const ticket = putTicket({
           access_token: tok.access_token,
           expires_in: tok.expires_in,
@@ -632,7 +711,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(302, { Location: target, "Cache-Control": "no-store" });
         res.end();
         console.log(
-          `[relay-exchange] ticket → 127.0.0.1:${port} slot=${metaAppKey} metaId=${stateAppId || tok.app_id}`
+          `[relay-exchange] ticket → 127.0.0.1:${port} slot=${metaAppKey} metaId=${stateAppId || tok.app_id} redirect=${usedRedirect}`
         );
         return;
       }
