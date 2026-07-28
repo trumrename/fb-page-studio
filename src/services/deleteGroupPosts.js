@@ -791,7 +791,9 @@ async function deleteOneGroup(job, state, toDelete) {
       );
       const r = await deletePagePostsFast(remaining, tok.token, {
         useBatch: job.options.use_batch,
-        concurrency: job.options.concurrency,
+        concurrency: job.options.concurrency || 12,
+        batchParallel: job.options.batch_parallel || 6,
+        adaptive: job.options.adaptive !== false,
         delayMs: job.options.delay_ms,
         metaAppKey: tok.metaAppKey || acc.meta_app_key,
         shouldStop: () => job.stop_requested,
@@ -805,7 +807,11 @@ async function deleteOneGroup(job, state, toDelete) {
             clearRateLimitUi(job, `${state.group_name}: ${info.done}/${info.total}`);
           }
           job.progress.phase = "deleting";
-          job.progress.label = `${state.group_name}: ${tok.label} ${info.done}/${info.total}`;
+          const par =
+            info.batch_parallel != null
+              ? ` · //${info.batch_parallel}${info.adaptive ? "/" + (info.batch_parallel_max || "") + " adaptive" : ""}`
+              : "";
+          job.progress.label = `${state.group_name}: ${tok.label} ${info.done}/${info.total}${par}`;
           emit(job);
         },
       });

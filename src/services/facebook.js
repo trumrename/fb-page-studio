@@ -8,7 +8,16 @@ import {
   classifyDeleteBatchItem,
   withRateLimitRetry,
   estimateRateLimitWaitMs,
+  estimateTransientWaitMs,
   waitWhileRateLimited,
+  waitGlobalGraphPause,
+  noteGlobalRateLimit,
+  isGlobalGraphPaused,
+  getUsagePeakPercent,
+  suggestedBatchParallel,
+  suggestedInterBatchDelayMs,
+  parallelAfterRateLimit,
+  rampBatchParallel,
 } from "./rateLimit.js";
 
 /**
@@ -676,263 +685,425 @@ export async function deletePagePost(postId, pageToken, opts = {}) {
 }
 
 /**
- * Normalize a Graph object (post / video / photo) into a common shape for delete UI.
+ * List posts published by the Page (paginated).
+ * Prefer /published_posts (page-authored). Falls back to /posts then /feed.
+ *
+ * @param {string} pageId
+ * @param {string} pageToken
+ * @param {{
+ *   limit?: number,
+ *   maxPosts?: number,
+ *   since?: string|number,
+ *   until?: string|number,
+ *   fields?: string,
+ *   onBatch?: (posts: object[], total: number) => void,
+ *   metaAppKey?: string,
+ *   appSecret?: string,
+ * }} [opts]
  */
-function normalizeDeletableItem(raw, source) {
-  if (!raw || raw.id == null) return null;
-  const id = String(raw.id);
-  const message =
-    raw.message ||
-    raw.story ||
-    raw.description ||
-    raw.title ||
-    raw.name ||
-    "";
-  const mediaType =
-    raw.attachments?.data?.[0]?.media_type ||
-    raw.attachments?.data?.[0]?.type ||
-    (source === "videos" || source === "live_videos" || source === "video_reels"
-      ? "video"
-      : source === "photos"
-        ? "photo"
-        : raw.status_type || null);
-  return {
-    id,
-    message,
-    story: raw.story || null,
-    created_time: raw.created_time || raw.updated_time || null,
-    permalink_url: raw.permalink_url || raw.link || null,
-    full_picture: raw.full_picture || raw.picture || null,
-    status_type: raw.status_type || mediaType || source,
-    content_source: source,
-    media_type: mediaType,
-    is_published: raw.is_published,
-    raw,
-  };
-}
-
 /**
- * Paginate one Graph edge into a list of normalized deletable items.
- */
-async function listEdgeItems(endpoint, pageToken, query, graphOpts, rlOpts, opts) {
-  const items = [];
-  let data = await withRateLimitRetry(
-    () => graphGet(endpoint, pageToken, query, graphOpts),
-    rlOpts
-  );
-  while (true) {
-    if (opts.shouldStop?.()) break;
-    const batch = data.data || [];
-    for (const row of batch) {
-      items.push(row);
-      if (opts._hardCap > 0 && items.length >= opts._hardCap) return items;
-    }
-    if (opts.onEdgeBatch) opts.onEdgeBatch(endpoint, items.length);
-    const next = data.paging?.next;
-    if (!next) break;
-    data = await withRateLimitRetry(
-      () => graphFetchAbsolute(next, pageToken, graphOpts),
-      { ...rlOpts, label: `list next ${endpoint}` }
-    );
-  }
-  return items;
-}
-
-/**
- * List ALL deletable Page content for bulk wipe.
+ * List Page content for bulk-delete.
  *
- * IMPORTANT: union many edges (not "first success only"). Videos often live on
- * /videos and are missing from /published_posts alone.
- *
- * Sources (default full wipe):
- *  - published_posts, posts, feed
- *  - videos, live_videos, video_reels (when available)
- *  - photos (uploaded)
- *  - scheduled_posts
- *
- * @returns {Promise<object[]>} deduped by id
+ * Meta 2024–2026 + community:
+ * - Avoid overlapping edges (feed ≈ posts ≈ published_posts) — each page of
+ *   pagination is a full API call and burns Platform/BUC quota.
+ * - Default listMode "wipe": published_posts + videos + video_reels only;
+ *   pass-2 re-list catches leftovers without burning 9 edges × N pages.
+ * - listMode "full": all edges (preview / deep scan).
+ * - On #4: stop calling more edges; rely on global pause (rateLimit.js).
  */
 export async function listPagePosts(pageId, pageToken, opts = {}) {
   const pid = String(pageId || "").trim();
   if (!pid) throw new Error("Thiếu page_id");
   const pageLimit = Math.min(100, Math.max(1, Number(opts.limit) || 100));
-  // 0 = unlimited (full wipe). Positive = soft cap after union.
-  const maxPosts = Math.max(0, Number(opts.maxPosts) || 0);
-  const includeVideos = opts.include_videos !== false && opts.includeVideos !== false;
-  const includePhotos = opts.include_photos !== false && opts.includePhotos !== false;
-  const includeScheduled =
-    opts.include_scheduled !== false && opts.includeScheduled !== false;
+  const maxPosts = Math.max(0, Number(opts.maxPosts) || 0); // 0 = no cap after merge
+  // wipe (default for delete) | full (preview / deep)
+  const listMode = String(opts.listMode || opts.list_mode || "wipe").toLowerCase();
   const graphOpts = {
     metaAppKey: opts.metaAppKey,
     appSecret: opts.appSecret,
   };
-  const postFields =
-    opts.fields ||
-    "id,message,story,created_time,permalink_url,full_picture,status_type,is_published,attachments{media_type,type,url,title}";
-  const videoFields =
-    "id,description,title,created_time,updated_time,permalink_url,picture,length,from";
-  const photoFields = "id,name,created_time,link,picture,from";
 
-  const feedQuery = { fields: postFields, limit: pageLimit };
-  if (opts.since != null && opts.since !== "") feedQuery.since = opts.since;
-  if (opts.until != null && opts.until !== "") feedQuery.until = opts.until;
-
-  /** @type {{ edge: string, query: object, source: string, optional?: boolean }[]} */
-  const sources = [
-    { edge: `/${pid}/published_posts`, query: { ...feedQuery }, source: "published_posts" },
-    { edge: `/${pid}/posts`, query: { ...feedQuery }, source: "posts", optional: true },
-    { edge: `/${pid}/feed`, query: { ...feedQuery }, source: "feed", optional: true },
+  // Minimal fields first — Meta: high complexity_score burns total_cputime faster
+  const postFieldSets = [
+    "id,created_time,message,permalink_url",
+    "id,created_time,message",
+    "id,created_time",
+    "id",
   ];
-  if (includeVideos) {
-    sources.push(
-      {
-        edge: `/${pid}/videos`,
-        query: { fields: videoFields, type: "uploaded", limit: pageLimit },
-        source: "videos",
-      },
-      // without type= — some pages only return items on the default edge
-      {
-        edge: `/${pid}/videos`,
-        query: { fields: videoFields, limit: pageLimit },
-        source: "videos_all",
-        optional: true,
-      },
-      {
-        edge: `/${pid}/live_videos`,
-        query: {
-          fields: "id,title,description,created_time,status,permalink_url",
-          limit: pageLimit,
-        },
-        source: "live_videos",
-        optional: true,
-      },
-      {
-        edge: `/${pid}/video_reels`,
-        query: { fields: videoFields, limit: pageLimit },
-        source: "video_reels",
-        optional: true,
-      }
+  if (opts.fields) {
+    postFieldSets.unshift(opts.fields);
+  }
+  // Rich only in full mode (preview UI)
+  if (listMode === "full") {
+    postFieldSets.unshift(
+      "id,message,story,created_time,permalink_url,status_type,attachments{media_type,type,target}",
+      "id,message,created_time,permalink_url,status_type"
     );
   }
-  if (includePhotos) {
-    sources.push({
-      edge: `/${pid}/photos`,
-      query: { fields: photoFields, type: "uploaded", limit: pageLimit },
-      source: "photos",
-      optional: true,
-    });
-  }
-  if (includeScheduled) {
-    sources.push({
-      edge: `/${pid}/scheduled_posts`,
-      query: {
-        fields: "id,message,created_time,scheduled_publish_time,permalink_url",
-        limit: pageLimit,
+  const videoFieldSets = [
+    "id,created_time,description,permalink_url",
+    "id,created_time,permalink_url",
+    "id,created_time",
+    "id",
+  ];
+
+  /** @type {Array<{ path: string, fieldSets: string[], kind: string, extraQuery?: Record<string,string|number> }>} */
+  let edges;
+  if (listMode === "full") {
+    edges = [
+      { path: `/${pid}/published_posts`, fieldSets: postFieldSets, kind: "published_posts" },
+      { path: `/${pid}/posts`, fieldSets: postFieldSets, kind: "posts" },
+      { path: `/${pid}/feed`, fieldSets: postFieldSets, kind: "feed" },
+      { path: `/${pid}/videos`, fieldSets: videoFieldSets, kind: "videos" },
+      {
+        path: `/${pid}/videos`,
+        fieldSets: videoFieldSets,
+        kind: "videos_uploaded",
+        extraQuery: { type: "uploaded" },
       },
-      source: "scheduled_posts",
-      optional: true,
-    });
+      { path: `/${pid}/video_reels`, fieldSets: videoFieldSets, kind: "video_reels" },
+      { path: `/${pid}/live_videos`, fieldSets: videoFieldSets, kind: "live_videos" },
+      {
+        path: `/${pid}/photos`,
+        fieldSets: ["id,created_time,link", "id,created_time", "id"],
+        kind: "photos",
+      },
+      {
+        path: `/${pid}/scheduled_posts`,
+        fieldSets: postFieldSets,
+        kind: "scheduled_posts",
+      },
+    ];
+  } else {
+    // wipe: 3 non-overlapping high-value edges (Meta: avoid overlapping data)
+    edges = [
+      { path: `/${pid}/published_posts`, fieldSets: postFieldSets, kind: "published_posts" },
+      { path: `/${pid}/videos`, fieldSets: videoFieldSets, kind: "videos" },
+      { path: `/${pid}/video_reels`, fieldSets: videoFieldSets, kind: "video_reels" },
+    ];
   }
 
-  const byId = new Map();
-  const sourceHits = {};
-  let hardErrors = 0;
-  let lastHardError = null;
+  // List: few local retries — global pause handles cool-down length
+  const rlOpts = {
+    maxAttempts: Math.min(3, Number(opts.listMaxAttempts) || 2),
+    shouldStop: opts.shouldStop,
+    label: `list page content ${pid}`,
+    onRateLimit: opts.onRateLimit,
+    onlyRateLimit: false,
+  };
+  let hitAppLimit = false; // code 4 — skip remaining edges after we have data
 
-  for (const src of sources) {
-    if (opts.shouldStop?.()) break;
-    const rlOpts = {
-      maxAttempts: 10,
-      shouldStop: opts.shouldStop,
-      label: `list ${src.source} ${pid}`,
-      onRateLimit: opts.onRateLimit,
+  /** @type {Map<string, object>} id -> item */
+  const byId = new Map();
+  const edgeStats = {};
+  const edgeErrors = [];
+
+  function addItem(item) {
+    const id = String(item?.id || "").trim();
+    if (!id || byId.has(id)) return false;
+    byId.set(id, item);
+    return true;
+  }
+
+  function normalizeItem(raw, kind) {
+    if (!raw || !raw.id) return [];
+    const out = [];
+    const base = {
+      ...raw,
+      _source: kind,
+      message: raw.message || raw.story || raw.description || raw.title || raw.name || "",
+      created_time: raw.created_time || null,
+      permalink_url: raw.permalink_url || raw.link || null,
     };
+    out.push({ ...base, id: String(raw.id) });
+    // Also pageId_objectId form sometimes used on feed
+    if (String(raw.id).indexOf("_") < 0 && /^\d+$/.test(String(raw.id))) {
+      out.push({
+        ...base,
+        id: `${pid}_${raw.id}`,
+        _source: `${kind}+page_compound`,
+      });
+    }
+    const extras = [
+      raw.post_id,
+      raw.object_id,
+      raw.object_story_id,
+      raw.video?.id,
+      raw.video_id,
+    ].filter(Boolean);
+    for (const ex of extras) {
+      const eid = String(ex);
+      if (eid && eid !== String(raw.id)) {
+        out.push({
+          ...base,
+          id: eid,
+          _source: `${kind}+linked`,
+        });
+        if (eid.indexOf("_") < 0) {
+          out.push({
+            ...base,
+            id: `${pid}_${eid}`,
+            _source: `${kind}+linked_compound`,
+          });
+        }
+      }
+    }
     try {
-      const rawItems = await listEdgeItems(
-        src.edge,
-        pageToken,
-        src.query,
-        graphOpts,
-        rlOpts,
+      const atts = raw.attachments?.data || [];
+      for (const a of atts) {
+        if (a?.target?.id && String(a.target.id) !== String(raw.id)) {
+          out.push({
+            id: String(a.target.id),
+            message: base.message,
+            created_time: base.created_time,
+            permalink_url: a.url || base.permalink_url,
+            _source: `${kind}+attachment_target`,
+            status_type: a.media_type || a.type || null,
+          });
+        }
+        // nested subattachments (album / multi-video)
+        const subs = a?.subattachments?.data || [];
+        for (const s of subs) {
+          if (s?.target?.id) {
+            out.push({
+              id: String(s.target.id),
+              message: base.message,
+              created_time: base.created_time,
+              permalink_url: s.url || base.permalink_url,
+              _source: `${kind}+subattachment`,
+            });
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return out;
+  }
+
+  async function paginateEdge(edge, fields) {
+    const query = {
+      fields,
+      limit: pageLimit,
+      ...(edge.extraQuery || {}),
+    };
+    if (opts.since != null && opts.since !== "") query.since = opts.since;
+    if (opts.until != null && opts.until !== "") query.until = opts.until;
+
+    let data = await withRateLimitRetry(
+      () => graphGet(edge.path, pageToken, query, graphOpts),
+      {
+        ...rlOpts,
+        maxAttempts: 3,
+        label: `list ${edge.kind} ${pid}`,
+      }
+    );
+    let count = 0;
+    let pages = 0;
+    while (true) {
+      if (opts.shouldStop?.()) break;
+      pages++;
+      const batch = data.data || [];
+      for (const raw of batch) {
+        for (const item of normalizeItem(raw, edge.kind)) {
+          if (addItem(item)) count++;
+        }
+      }
+      if (opts.onBatch) {
+        opts.onBatch(batch, byId.size, { edge: edge.kind, edge_new: count });
+      }
+      const next = data.paging?.next;
+      if (!next) break;
+      // hard safety: 500 pages * 100 = 50k per edge
+      if (pages >= 500) break;
+      if (maxPosts > 0 && byId.size >= maxPosts * 5) break;
+      data = await withRateLimitRetry(
+        () => graphFetchAbsolute(next, pageToken, graphOpts),
         {
-          shouldStop: opts.shouldStop,
-          // per-edge safety cap high enough for full wipes; final maxPosts applied after union
-          _hardCap: maxPosts > 0 ? Math.max(maxPosts * 3, 50000) : 0,
-          onEdgeBatch: (_edge, n) => {
-            sourceHits[src.source] = n;
-            if (opts.onBatch) {
-              opts.onBatch([], byId.size + n, {
-                source: src.source,
-                source_count: n,
-                unique: byId.size,
-              });
-            }
-          },
+          ...rlOpts,
+          maxAttempts: 3,
+          label: `list ${edge.kind} next ${pid}`,
         }
       );
-      let added = 0;
-      for (const row of rawItems) {
-        const item = normalizeDeletableItem(row, src.source);
-        if (!item) continue;
-        if (!byId.has(item.id)) {
-          byId.set(item.id, item);
-          added++;
-        } else {
-          // merge source tags
-          const prev = byId.get(item.id);
-          prev.content_source = `${prev.content_source}+${src.source}`;
-          if (!prev.permalink_url && item.permalink_url) {
-            prev.permalink_url = item.permalink_url;
-          }
-          if (!prev.message && item.message) prev.message = item.message;
+    }
+    return count;
+  }
+
+  async function paginateEdgeWithFieldFallback(edge) {
+    let lastErr = null;
+    for (const fields of edge.fieldSets) {
+      try {
+        return await paginateEdge(edge, fields);
+      } catch (e) {
+        lastErr = e;
+        if (e.code === "STOPPED") throw e;
+        // App limit (#4): do not burn more field retries
+        if (isGraphRateLimitError(e) || e.rate_limit || e.code === 4) {
+          e._appLimit = true;
+          throw e;
         }
+        const msg = String(e.message || e);
+        // try simpler fields
+        if (
+          /nonexisting field|unknown field|invalid parameter|(#100)|(#12)/i.test(
+            msg
+          )
+        ) {
+          continue;
+        }
+        // permission / unsupported — stop trying field sets for this edge
+        if (
+          e.code === 200 ||
+          e.code === 10 ||
+          /permission|unsupported get request|does not exist/i.test(msg)
+        ) {
+          throw e;
+        }
+        continue;
       }
-      sourceHits[src.source] = rawItems.length;
-      if (opts.onBatch) {
-        opts.onBatch([], byId.size, {
-          source: src.source,
-          source_count: rawItems.length,
-          added,
-          unique: byId.size,
-        });
-      }
+    }
+    if (lastErr) throw lastErr;
+    return 0;
+  }
+
+  // After #4: only keep going on empty list; otherwise soft-skip (pass-2 delete re-lists)
+  const essentialKinds = new Set(["published_posts", "videos"]);
+
+  for (const edge of edges) {
+    if (opts.shouldStop?.()) break;
+    // Wait any global pause before starting next edge (no parallel edge burn)
+    if (isGlobalGraphPaused()) {
+      const g = await waitGlobalGraphPause({
+        shouldStop: opts.shouldStop,
+        onTick: opts.onRateLimit,
+      });
+      if (g.stopped) break;
+    }
+    if (hitAppLimit && !essentialKinds.has(edge.kind) && byId.size >= 5) {
+      edgeStats[`${edge.kind}_skipped`] = 0;
+      continue;
+    }
+    if (hitAppLimit && byId.size >= 20 && edge.kind !== "published_posts" && edge.kind !== "videos") {
+      edgeStats[`${edge.kind}_skipped_after_limit`] = 0;
+      continue;
+    }
+    try {
+      const n = await paginateEdgeWithFieldFallback(edge);
+      edgeStats[edge.kind] = (edgeStats[edge.kind] || 0) + n;
+      // Spread traffic (Meta: avoid spikes) — longer gap after heavy pages
+      await sleep(listMode === "wipe" ? 120 : 250);
     } catch (e) {
       if (e.code === "STOPPED") throw e;
-      if (isGraphRateLimitError(e) || e.rate_limit) throw e;
-      sourceHits[src.source] = `error: ${e.message || e}`;
-      if (!src.optional) {
-        hardErrors++;
-        lastHardError = e;
+      if (isGraphRateLimitError(e) || e.rate_limit || e.code === 4 || e._appLimit) {
+        hitAppLimit = true;
+        noteGlobalRateLimit(e);
+        edgeErrors.push(`${edge.kind}: limit #${e.code || 4}`);
+        edgeStats.rate_limited_early = 1;
+        if (byId.size === 0) {
+          // Need at least one edge — wait GLOBAL then one minimal retry
+          await waitGlobalGraphPause({
+            shouldStop: opts.shouldStop,
+            onTick: opts.onRateLimit,
+          });
+          try {
+            const n = await paginateEdge(
+              edge,
+              edge.fieldSets[edge.fieldSets.length - 1]
+            );
+            edgeStats[edge.kind] = (edgeStats[edge.kind] || 0) + n;
+          } catch (e2) {
+            edgeErrors.push(
+              `${edge.kind}_retry: ${String(e2.message || e2).slice(0, 100)}`
+            );
+          }
+        }
+        // Have some IDs → stop listing more edges (pass-2 / final wipe handles rest)
+        continue;
       }
-      // optional edges (videos/photos/reels) often 100/200 — skip
+      edgeErrors.push(`${edge.kind}: ${String(e.message || e).slice(0, 140)}`);
       continue;
     }
   }
 
-  if (!byId.size && hardErrors && lastHardError) {
-    throw lastHardError;
+  // Enrich multi-id is expensive — skip on wipe + after limit (community: fewer calls)
+  const plainIds = [...byId.keys()].filter(
+    (id) => id.indexOf("_") < 0 && /^\d{5,}$/.test(id)
+  );
+  if (
+    plainIds.length &&
+    !opts.shouldStop?.() &&
+    !hitAppLimit &&
+    listMode === "full" &&
+    !isGlobalGraphPaused()
+  ) {
+    try {
+      for (let i = 0; i < plainIds.length; i += 40) {
+        if (opts.shouldStop?.()) break;
+        const chunk = plainIds.slice(i, i + 40);
+        try {
+          const data = await withRateLimitRetry(
+            () =>
+              graphGet(
+                "/",
+                pageToken,
+                {
+                  ids: chunk.join(","),
+                  fields: "id,post_id,object_id,permalink_url,created_time",
+                },
+                graphOpts
+              ),
+            { ...rlOpts, label: `enrich ids ${pid}` }
+          );
+          for (const [vid, obj] of Object.entries(data || {})) {
+            if (!obj || obj.error) continue;
+            for (const item of normalizeItem(obj, "enrich")) {
+              addItem(item);
+            }
+            if (vid.indexOf("_") < 0) {
+              addItem({
+                id: `${pid}_${vid}`,
+                message: obj.description || obj.message || "",
+                created_time: obj.created_time || null,
+                permalink_url: obj.permalink_url || null,
+                _source: "enrich+page_compound",
+              });
+            }
+          }
+        } catch {
+          /* enrich optional */
+        }
+      }
+      edgeStats.enrich = (edgeStats.enrich || 0) + 1;
+    } catch {
+      /* ignore */
+    }
   }
+  edgeStats.list_mode = listMode;
 
-  let out = [...byId.values()].sort((a, b) => {
-    const ta = a.created_time ? Date.parse(a.created_time) : 0;
-    const tb = b.created_time ? Date.parse(b.created_time) : 0;
+  let posts = [...byId.values()];
+  posts.sort((a, b) => {
+    const ta = Date.parse(a.created_time || 0) || 0;
+    const tb = Date.parse(b.created_time || 0) || 0;
     return tb - ta;
   });
 
-  if (maxPosts > 0 && out.length > maxPosts) {
-    out = out.slice(0, maxPosts);
+  if (maxPosts > 0 && posts.length > maxPosts) {
+    posts = posts.slice(0, maxPosts);
   }
 
-  // attach debug counts for callers/UI (non-enumerable so JSON map stays clean)
-  Object.defineProperty(out, "_source_hits", {
-    value: sourceHits,
-    enumerable: false,
-  });
-  Object.defineProperty(out, "_unique", {
-    value: out.length,
-    enumerable: false,
-  });
-  return out;
+  posts._edgeStats = edgeStats;
+  posts._edgeErrors = edgeErrors;
+
+  if (!posts.length && edgeErrors.length) {
+    const err = new Error(
+      `Không lấy được bài Page. Edges: ${edgeErrors.slice(0, 5).join(" | ")}`
+    );
+    err.edgeErrors = edgeErrors;
+    throw err;
+  }
+
+  return posts;
 }
 
 /**
@@ -1015,12 +1186,20 @@ export async function graphBatch(accessToken, batch, opts = {}) {
 
 /**
  * Delete many posts quickly via batch (chunks of 50) or concurrent singles.
- * On Facebook rate-limit: pause (countdown) then auto-resume retries.
+ *
+ * Community / Meta best practices (max throughput):
+ * - Graph batch ≤50 DELETE; each sub-call counts toward Platform Rate Limit.
+ * - Multiple independent batch HTTP POSTs in parallel (live adaptive slots).
+ * - Read X-App-Usage; lower parallel before hard #4; stop completely on limit.
+ * - Shared pause across workers (one countdown UI); ramp parallel after recover.
+ * - Spread traffic (inter-batch delay) when usage high.
  *
  * @param {string[]} postIds
  * @param {string} pageToken
  * @param {{
  *   concurrency?: number,
+ *   batchParallel?: number,
+ *   adaptive?: boolean,
  *   useBatch?: boolean,
  *   delayMs?: number,
  *   onProgress?: (info: object) => void,
@@ -1033,8 +1212,20 @@ export async function graphBatch(accessToken, batch, opts = {}) {
 export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
   const ids = [...new Set((postIds || []).map((x) => String(x || "").trim()).filter(Boolean))];
   const useBatch = opts.useBatch !== false;
-  const concurrency = Math.min(20, Math.max(1, Number(opts.concurrency) || 8));
+  // Single-DELETE worker pool (fallback mode)
+  const concurrency = Math.min(24, Math.max(1, Number(opts.concurrency) || 12));
+  // Max concurrent Graph batch HTTP requests (adaptive ceiling). Community: 4–8 common.
+  const maxBatchParallel = Math.min(
+    12,
+    Math.max(1, Number(opts.batchParallel ?? opts.batch_parallel ?? 6) || 6)
+  );
+  const adaptive = opts.adaptive !== false;
+  let liveParallel = adaptive
+    ? suggestedBatchParallel(maxBatchParallel)
+    : maxBatchParallel;
+  let healthyStreak = 0;
   let delayMs = Math.max(0, Number(opts.delayMs) || 0);
+  const baseDelayMs = delayMs;
   const graphOpts = {
     metaAppKey: opts.metaAppKey,
     appSecret: opts.appSecret,
@@ -1047,6 +1238,8 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
     errorCounts[key] = (errorCounts[key] || 0) + 1;
   };
 
+  /** @type {Map<string, {post_id:string, ok:boolean, error?:string, gone?:boolean}>} */
+  const itemMap = new Map();
   const results = {
     total: ids.length,
     ok: 0,
@@ -1054,10 +1247,37 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
     gone: 0,
     rate_limit_pauses: 0,
     error_summary: /** @type {Array<{message:string,count:number}>} */ ([]),
-    items: /** @type {Array<{post_id:string, ok:boolean, error?:string}>} */ ([]),
+    get items() {
+      return [...itemMap.values()];
+    },
+  };
+
+  // Shared pause for ALL parallel workers (one countdown, not N spam)
+  let sharedPauseUntil = 0;
+  let lastUiLimitAt = 0;
+
+  const liveLabel = () =>
+    adaptive
+      ? `//${liveParallel}/${maxBatchParallel} adaptive`
+      : `//${liveParallel} batch`;
+
+  const recount = () => {
+    let ok = 0;
+    let fail = 0;
+    let gone = 0;
+    for (const it of itemMap.values()) {
+      if (it.ok) {
+        ok++;
+        if (it.gone) gone++;
+      } else fail++;
+    }
+    results.ok = ok;
+    results.fail = fail;
+    results.gone = gone;
   };
 
   const report = (extra = {}) => {
+    recount();
     if (opts.onProgress) {
       opts.onProgress({
         total: results.total,
@@ -1065,8 +1285,13 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         fail: results.fail,
         gone: results.gone,
         done: results.ok + results.fail,
+        pending: Math.max(0, results.total - results.ok - results.fail),
         rate_limit_pauses: results.rate_limit_pauses,
         error_summary: topErrors(),
+        batch_parallel: liveParallel,
+        batch_parallel_max: maxBatchParallel,
+        adaptive,
+        usage_peak: getUsagePeakPercent(),
         ...extra,
       });
     }
@@ -1079,15 +1304,47 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
       .map(([message, count]) => ({ message, count }));
 
   const markOk = (postId, gone = false) => {
-    results.ok++;
-    if (gone) results.gone++;
-    results.items.push({ post_id: postId, ok: true, gone: gone || undefined });
+    const id = String(postId);
+    const prev = itemMap.get(id);
+    if (prev?.ok) return;
+    itemMap.set(id, { post_id: id, ok: true, gone: gone || undefined });
+    recount();
   };
 
   const markFail = (postId, msg) => {
-    results.fail++;
+    const id = String(postId);
+    const prev = itemMap.get(id);
+    if (prev?.ok) return; // never downgrade success
+    itemMap.set(id, { post_id: id, ok: false, error: msg });
     noteError(msg);
-    results.items.push({ post_id: postId, ok: false, error: msg });
+    recount();
+  };
+
+  const onRateLimitHit = () => {
+    if (!adaptive) return;
+    liveParallel = parallelAfterRateLimit(liveParallel);
+    healthyStreak = 0;
+    delayMs = Math.max(delayMs, suggestedInterBatchDelayMs(Math.max(baseDelayMs, 80)));
+  };
+
+  const onHealthyBatch = () => {
+    if (!adaptive) return;
+    healthyStreak++;
+    // Proactive: also respect current usage header
+    const usageCap = suggestedBatchParallel(maxBatchParallel);
+    if (liveParallel > usageCap) {
+      liveParallel = usageCap;
+      healthyStreak = 0;
+      return;
+    }
+    if (healthyStreak >= 2) {
+      const next = rampBatchParallel(liveParallel, maxBatchParallel, healthyStreak);
+      if (next > liveParallel) {
+        liveParallel = next;
+        healthyStreak = 0;
+      }
+    }
+    delayMs = suggestedInterBatchDelayMs(baseDelayMs);
   };
 
   const notifyLimit = (info) => {
@@ -1095,53 +1352,102 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
       results.rate_limit_pauses,
       info.attempt || 1
     );
-    if (opts.onRateLimit) opts.onRateLimit(info);
-    report({
-      phase: "rate_limited",
-      rate_limit: true,
-      ...info,
-    });
+    if (info.rate_limit !== false && (info.code === 4 || info.code === 17 || info.code === 32 || info.rate_limit || /limit|throttl/i.test(String(info.error || info.message || "")))) {
+      onRateLimitHit();
+    }
+    const now = Date.now();
+    // Debounce UI: max 1 banner update / 2s across all workers
+    if (!info.ticking || now - lastUiLimitAt >= 2000) {
+      lastUiLimitAt = now;
+      const msgBase = String(info.message || "").replace(
+        /\/\/\d+(?:\/\d+)?(?:\s+adaptive)?(?:\s+batch)?/g,
+        liveLabel()
+      );
+      if (opts.onRateLimit) {
+        opts.onRateLimit({
+          ...info,
+          batch_parallel: liveParallel,
+          batch_parallel_max: maxBatchParallel,
+          adaptive,
+          message: msgBase,
+        });
+      }
+      report({
+        phase: "rate_limited",
+        rate_limit: true,
+        ...info,
+        batch_parallel: liveParallel,
+        message: msgBase,
+      });
+    }
   };
+
+  async function waitSharedPause() {
+    while (Date.now() < sharedPauseUntil) {
+      if (opts.shouldStop?.()) return true;
+      await sleep(Math.min(1000, sharedPauseUntil - Date.now()));
+    }
+    return false;
+  }
 
   if (!ids.length) return results;
 
   async function waitRetry(sampleErr, attempt, retryCount, label) {
     const isRl = isGraphRateLimitError(sampleErr);
-    const waitMs = isRl
-      ? estimateRateLimitWaitMs(sampleErr, { attempt })
-      : Math.min(
-          120_000,
-          Math.max(3_000, 4_000 * Math.pow(1.6, Math.min(attempt, 8)))
-        );
+    if (isRl) onRateLimitHit();
+    let waitMs;
+    if (isRl) {
+      waitMs = estimateRateLimitWaitMs(sampleErr, {
+        attempt,
+        minMs: retryCount <= 3 ? 8_000 : retryCount <= 12 ? 15_000 : 20_000,
+        maxMs: retryCount <= 3 ? 40_000 : retryCount <= 12 ? 90_000 : 120_000,
+      });
+    } else {
+      waitMs = estimateTransientWaitMs(sampleErr, {
+        attempt,
+        minMs: retryCount <= 5 ? 1_500 : 3_000,
+        maxMs: retryCount <= 10 ? 25_000 : 60_000,
+      });
+    }
+    // Extend shared pause so ALL workers wait the same window (no //4//5//6 spam)
+    const until = Date.now() + waitMs;
+    if (until > sharedPauseUntil) sharedPauseUntil = until;
+
     notifyLimit({
       attempt: attempt + 1,
       wait_ms: waitMs,
       remaining_sec: Math.ceil(waitMs / 1000),
-      resume_at: new Date(Date.now() + waitMs).toISOString(),
+      resume_at: new Date(sharedPauseUntil).toISOString(),
       error: sampleErr?.message || String(sampleErr || "retry"),
       code: sampleErr?.code,
+      rate_limit: isRl,
       label,
       message: isRl
-        ? `⚠ FB limit — tạm dừng ~${Math.ceil(waitMs / 1000)}s, còn ${retryCount} bài sẽ xóa lại`
-        : `⚠ Lỗi tạm thời FB — chờ ~${Math.ceil(waitMs / 1000)}s rồi thử lại ${retryCount} bài`,
+        ? `⚠ FB limit — tạm dừng ~${Math.ceil((sharedPauseUntil - Date.now()) / 1000)}s, còn ${retryCount} bài (${liveLabel()})`
+        : `⚠ Lỗi tạm FB — chờ ~${Math.ceil(waitMs / 1000)}s, còn ${retryCount} bài (${liveLabel()})`,
     });
-    const w = await waitWhileRateLimited(waitMs, {
-      attempt: attempt + 1,
-      shouldStop: opts.shouldStop,
-      onTick: (tick) => {
-        notifyLimit({
-          attempt: attempt + 1,
-          wait_ms: tick.wait_ms,
-          remaining_sec: tick.remaining_sec,
-          remaining_ms: tick.remaining_ms,
-          error: sampleErr?.message || "retry",
-          code: sampleErr?.code,
-          label,
-          message: `⚠ Tạm dừng do FB — còn ${tick.remaining_sec}s… (còn ${retryCount} bài)`,
-          ticking: true,
-        });
-      },
-    });
+
+    const w = await waitWhileRateLimited(
+      Math.max(1000, sharedPauseUntil - Date.now()),
+      {
+        attempt: attempt + 1,
+        shouldStop: opts.shouldStop,
+        onTick: (tick) => {
+          notifyLimit({
+            attempt: attempt + 1,
+            wait_ms: tick.wait_ms,
+            remaining_sec: tick.remaining_sec,
+            remaining_ms: tick.remaining_ms,
+            error: sampleErr?.message || "retry",
+            code: sampleErr?.code,
+            rate_limit: isRl,
+            label,
+            message: `⚠ Tạm dừng do FB — còn ${tick.remaining_sec}s… (còn ${retryCount} bài · ${liveLabel()})`,
+            ticking: true,
+          });
+        },
+      }
+    );
     return w;
   }
 
@@ -1155,6 +1461,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
 
     while (pending.length && attempt < maxRounds) {
       if (opts.shouldStop?.()) break;
+      if (await waitSharedPause()) break;
 
       let responses;
       try {
@@ -1166,7 +1473,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
               graphOpts
             ),
           {
-            maxAttempts: 12,
+            maxAttempts: 4,
             shouldStop: opts.shouldStop,
             label: `batch DELETE ×${pending.length}`,
             onRateLimit: notifyLimit,
@@ -1242,13 +1549,17 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         markFail(postId, cls.message || cls.error?.message || "delete failed");
       }
 
-      // Adaptive slowdown if many retries in this batch
+      // Adaptive: heavy retries → slow + cut parallel; clean round → ramp
       if (retryIds.length >= pending.length * 0.3) {
         delayMs = Math.min(2000, Math.max(delayMs, 80) + 40);
+        if (adaptive && retryIsLimit) onRateLimitHit();
+        else if (adaptive && liveParallel > 1) {
+          liveParallel = Math.max(1, liveParallel - 1);
+          healthyStreak = 0;
+        }
       }
       if (okInRound > 0 && retryIds.length === 0) {
-        // healthy — gently reduce delay floor
-        delayMs = Math.max(Number(opts.delayMs) || 0, Math.floor(delayMs * 0.9));
+        onHealthyBatch();
       }
 
       if (!retryIds.length) {
@@ -1295,13 +1606,72 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
   }
 
   if (useBatch) {
+    // Split into chunks of 50; spawn up to maxBatchParallel workers.
+    // Adaptive: workers with id > liveParallel idle (shared pause still works).
+    const chunks = [];
     for (let i = 0; i < ids.length; i += 50) {
-      if (opts.shouldStop?.()) break;
-      const chunk = ids.slice(i, i + 50);
-      await processChunk(chunk);
-      report({ phase: "delete", last_batch: chunk.length, delay_ms: delayMs });
-      if (delayMs) await sleep(delayMs);
+      chunks.push(ids.slice(i, i + 50));
     }
+    let cursor = 0;
+    const workerCount = Math.min(maxBatchParallel, chunks.length || 1);
+    report({
+      phase: "delete",
+      batch_parallel: liveParallel,
+      batch_parallel_max: maxBatchParallel,
+      adaptive,
+      usage_peak: getUsagePeakPercent(),
+      total_chunks: chunks.length,
+      label: `Xóa ${liveLabel()} ×50 · ${chunks.length} chunk · ${ids.length} id`,
+    });
+
+    async function batchWorker(workerId) {
+      while (cursor < chunks.length) {
+        if (opts.shouldStop?.()) return;
+        // Slot gate: only first `liveParallel` workers pull new chunks
+        if (workerId > liveParallel) {
+          // Proactive usage check while idle
+          if (adaptive) {
+            const cap = suggestedBatchParallel(maxBatchParallel);
+            if (cap > liveParallel && healthyStreak >= 1) {
+              liveParallel = Math.min(maxBatchParallel, liveParallel + 1);
+            }
+          }
+          await sleep(80);
+          continue;
+        }
+        if (await waitSharedPause()) return;
+        // Re-check after pause — may have collapsed parallel
+        if (workerId > liveParallel) continue;
+
+        const my = cursor++;
+        if (my >= chunks.length) return;
+        const chunk = chunks[my];
+        await processChunk(chunk);
+        // Soft usage throttle between batches (Meta: avoid spikes)
+        const gap = adaptive
+          ? suggestedInterBatchDelayMs(delayMs)
+          : delayMs;
+        report({
+          phase: "delete",
+          last_batch: chunk.length,
+          delay_ms: gap,
+          batch_parallel: liveParallel,
+          batch_parallel_max: maxBatchParallel,
+          adaptive,
+          usage_peak: getUsagePeakPercent(),
+          worker: workerId,
+          chunk_index: my + 1,
+          chunk_total: chunks.length,
+          label: `Xóa ${liveLabel()} · chunk ${my + 1}/${chunks.length}`,
+        });
+        if (gap) await sleep(gap);
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: workerCount }, (_, w) => batchWorker(w + 1))
+    );
+    recount();
 
     // Final sweep: re-try permanent fails once, slowly (often recovers limit ghosts)
     const failedIds = results.items.filter((x) => !x.ok).map((x) => x.post_id);
@@ -1349,39 +1719,25 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
       }
 
       if (sweepOk.size) {
-        // Rebuild tallies
-        const kept = [];
-        let ok = 0;
-        let fail = 0;
-        let gone = 0;
-        const newErrorCounts = {};
-        for (const it of results.items) {
-          if (!it.ok && sweepOk.has(it.post_id)) {
-            ok++;
-            kept.push({ post_id: it.post_id, ok: true });
-          } else if (it.ok) {
-            ok++;
-            if (it.gone) gone++;
-            kept.push(it);
-          } else {
-            fail++;
-            const key = String(it.error || "unknown").slice(0, 160);
-            newErrorCounts[key] = (newErrorCounts[key] || 0) + 1;
-            kept.push(it);
-          }
-        }
-        results.items = kept;
-        results.ok = ok;
-        results.fail = fail;
-        results.gone = gone;
+        for (const id of sweepOk) markOk(id);
         Object.keys(errorCounts).forEach((k) => delete errorCounts[k]);
-        Object.assign(errorCounts, newErrorCounts);
+        for (const it of itemMap.values()) {
+          if (!it.ok) noteError(it.error || "unknown");
+        }
         report({ phase: "final_sweep_done", recovered: sweepOk.size });
       }
     }
 
-    results.error_summary = topErrors();
-    return results;
+    recount();
+    return {
+      total: results.total,
+      ok: results.ok,
+      fail: results.fail,
+      gone: results.gone,
+      rate_limit_pauses: results.rate_limit_pauses,
+      error_summary: topErrors(),
+      items: [...itemMap.values()],
+    };
   }
 
   // Concurrent single DELETEs
@@ -1402,8 +1758,16 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
   await Promise.all(
     Array.from({ length: Math.min(concurrency, ids.length) }, () => worker())
   );
-  results.error_summary = topErrors();
-  return results;
+  recount();
+  return {
+    total: results.total,
+    ok: results.ok,
+    fail: results.fail,
+    gone: results.gone,
+    rate_limit_pauses: results.rate_limit_pauses,
+    error_summary: topErrors(),
+    items: [...itemMap.values()],
+  };
 }
 
 export function sleep(ms) {
