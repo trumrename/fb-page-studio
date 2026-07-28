@@ -3,11 +3,10 @@ Gói khách — không secret:
  - .env.may-khach.mau
  - .env.public
  - CHANGELOG-1.2.47.md
- - DIEN-APP-ID-SECRET.txt
- - FB-Page-Studio-Desktop-v1.2.54.exe
- - FB-Page-Studio-Desktop-v1.2.54.exe.sha256.txt
- - FB-Page-Studio-Setup-v1.2.54.exe
- - FB-Page-Studio-Setup-v1.2.54.exe.sha256.txt
+ - FB-Page-Studio-Desktop-v1.2.61.exe
+ - FB-Page-Studio-Desktop-v1.2.61.exe.sha256.txt
+ - FB-Page-Studio-Setup-v1.2.61.exe
+ - FB-Page-Studio-Setup-v1.2.61.exe.sha256.txt
  - HUONG-DAN-MAY-MOI.md
  - HUONG-DAN-OAUTH-RELAY.md
  - MANIFEST.txt
