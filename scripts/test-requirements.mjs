@@ -221,6 +221,17 @@ check(
 check("UI run-now Media/Posted/Caption pickers", ["btnRotPickMedia", "btnRotPickPosted", "btnRotPickCaptions", "btnRotApplyFolders"].every((x) => posting.includes(x)));
 check("UI live job progress + notifications", ["liveJobBar", "liveJobPct", "liveResources", "liveNotifs", "watchLiveJob"].every((x) => posting.includes(x)));
 check("bulk schedule uses live job runner", posting.includes('"/api/jobs/bulk-schedule"') && posting.includes("watchLiveJob(r.job.id)"));
+check(
+  "bulk Start at has apply button and local datetime parse",
+  posting.includes("btnBulkStartApply") &&
+    posting.includes("parseLocalDateTimeValue") &&
+    posting.includes("commitBulkStart") &&
+    posting.includes("updateBulkStartHint")
+);
+check(
+  "renderBulkResult guards non-object input",
+  posting.includes('typeof r !== "object"')
+);
 check("posting stops when config save fails", posting.includes("if (!(await saveConfig())) return"));
 check("unsupported Story control is disabled", posting.includes('id="story_enabled" disabled'));
 check("UI profile Meta App badge", posting.includes("meta_app_name") && posting.includes("appKey"));

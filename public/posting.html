@@ -277,8 +277,15 @@
             <div id="bulkFixed">
               <div class="row2" style="margin-top:.25rem">
                 <div>
-                  <label>Start at</label>
-                  <input type="datetime-local" id="bulkStart" />
+                  <label>Start at · giờ bắt đầu (máy local)</label>
+                  <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap">
+                    <input type="datetime-local" id="bulkStart" step="60" style="min-width:13.5rem;flex:1" />
+                    <button type="button" class="btn-ok btn-sm" id="btnBulkStartApply" title="Khóa giờ đã chọn vào form + lưu workspace">Áp dụng giờ</button>
+                    <button type="button" class="btn-ghost btn-sm" id="btnBulkStartPlus2h">+2 giờ</button>
+                  </div>
+                  <div id="bulkStartHint" class="muted" style="margin-top:.3rem;font-size:.78rem;line-height:1.4">
+                    Chọn giờ trên picker → bấm <b>Áp dụng giờ</b> (Windows/Electron đôi khi đóng picker không ghi giá trị).
+                  </div>
                 </div>
                 <div class="row2">
                   <div>
@@ -298,7 +305,7 @@
                 </div>
               </div>
               <input type="hidden" id="bulkInterval" value="120" />
-              <label>Hoặc list thời điểm (mỗi dòng · YYYY-MM-DD HH:mm)</label>
+              <label>Hoặc list thời điểm (mỗi dòng · YYYY-MM-DD HH:mm) — nếu có list thì bỏ qua Start at</label>
               <textarea id="bulkTimes" placeholder="2026-07-18 09:00&#10;2026-07-18 19:00"></textarea>
             </div>
 
@@ -677,13 +684,13 @@
       "bulkForceActive", "bulkStart", "bulkCount", "bulkInterval", "bulkTimes",
       "bulkIntervalMin", "bulkIntervalMax", "bulkIgnoreQuota",
       "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder",
-      "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder",
+      "metaMaxScheduledPerDay", "metaPublishWindowDays", "metaMinIntervalMinutes",
+      "metaIgnoreGraphLimit", "allow30DaysMax", "bulkPrefHours",
     ];
     const rotationWorkspaceControlIds = [
       "rotMode", "rotDays", "rotPostType", "rotAppStrategy", "rotNowPerDay",
       "rotNowPostType", "rotNowMediaMode", "rotNowMediaPattern", "rotNowGapMin", "rotNowGapMax",
-      "rotNowContinuous", "rotTaskGapMin", "rotTaskGapMax",
-      "rotTaskGapMin", "rotTaskGapMax", "rotWindows", "rotPerDay",
+      "rotNowContinuous", "rotTaskGapMin", "rotTaskGapMax", "rotWindows", "rotPerDay",
       "rotFirstStart", "rotFirstEnd", "rotGapMin", "rotGapMax", "rotJitMin",
       "rotJitMax", "rotAutoMeta", "rotG1", "rotG2", "rotOnlyEnabled",
       "rotPageTargetSelected", "rotPageTargetAll", "rotNowTimeGap", "rotNowTimeWindows",
@@ -760,19 +767,108 @@
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
-    /**
-     * "Start at" được lưu trong workspace state, nên khi mở lại tool hôm sau
-     * giá trị cũ (đã ở quá khứ) bị phục hồi → mọi mốc giờ bị Facebook loại
-     * (cần ≥ 10 phút kể từ hiện tại) → "Không còn slot hợp lệ" trên mọi page.
-     * Luôn đẩy về tương lai nếu giá trị đang ở quá khứ.
-     */
-    function ensureBulkStartFuture() {
+    /** Parse datetime-local as local wall-clock (không phụ thuộc timezone string). */
+    function parseLocalDateTimeValue(v) {
+      const m = String(v || "").trim().match(
+        /^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::(\d{2}))?$/
+      );
+      if (!m) return NaN;
+      return new Date(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4]),
+        Number(m[5]),
+        Number(m[6] || 0),
+        0
+      ).getTime();
+    }
+
+    function formatVnLocal(ms) {
+      if (!Number.isFinite(ms)) return "(chưa chọn)";
+      return new Date(ms).toLocaleString("vi-VN", {
+        hour12: false,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    function updateBulkStartHint(extra = "", warn = false) {
+      const h = $("bulkStartHint");
       const el = $("bulkStart");
-      if (!el) return;
-      const minMs = Date.now() + 15 * 60 * 1000;
-      const cur = el.value ? new Date(el.value).getTime() : NaN;
+      if (!h || !el) return;
+      const t = parseLocalDateTimeValue(el.value);
+      const label = formatVnLocal(t);
+      h.className = warn ? "fail" : "muted";
+      h.style.cssText = "margin-top:.3rem;font-size:.78rem;line-height:1.4";
+      h.innerHTML =
+        `Đang dùng: <b>${esc(label)}</b>` +
+        (el.value ? ` · form=<code>${esc(el.value.replace("T", " "))}</code>` : "") +
+        (extra ? ` · ${extra}` : "");
+    }
+
+    function updateOneScheduleHint(extra = "", warn = false) {
+      const h = $("oneScheduleHint");
+      const el = $("oneScheduleAt");
+      if (!h || !el) return;
+      const t = parseLocalDateTimeValue(el.value);
+      h.className = warn ? "fail" : "muted";
+      h.textContent =
+        `Đang dùng: ${formatVnLocal(t)}` + (extra ? ` · ${extra}` : "");
+    }
+
+    /**
+     * "Start at" lưu trong workspace — hôm sau có thể quá khứ.
+     * Facebook cần ≥ ~10 phút. Ép min + cập nhật hint (không đụng khi user đang gõ
+     * trừ khi silent=false hoặc force).
+     */
+    function ensureBulkStartFuture({ silent = true } = {}) {
+      const el = $("bulkStart");
+      if (!el) return false;
+      const minMs = Date.now() + 10 * 60 * 1000;
+      el.min = defaultBulkStartValue(10 * 60 * 1000);
+      const cur = parseLocalDateTimeValue(el.value);
+      let fixed = false;
       if (!Number.isFinite(cur) || cur < minMs) {
         el.value = defaultBulkStartValue();
+        fixed = true;
+        if (!silent) {
+          flash(
+            "Start at phải ≥ 10 phút sau hiện tại (giới hạn Facebook) — đã chỉnh lại",
+            false
+          );
+        }
+      }
+      updateBulkStartHint(
+        fixed ? "đã auto-đẩy vì giờ quá khứ / trống" : "sẵn sàng hẹn",
+        fixed
+      );
+      return fixed;
+    }
+
+    function commitBulkStart({ silent = false } = {}) {
+      ensureBulkStartFuture({ silent });
+      queueWorkspaceSave(50);
+      const shown = ($("bulkStart")?.value || "").replace("T", " ");
+      if (!silent && shown) flash(`Đã áp dụng Start at: ${shown}`, true);
+      updateBulkStartHint("đã khóa vào form + workspace");
+    }
+
+    function ensureOneScheduleFuture({ silent = true } = {}) {
+      const el = $("oneScheduleAt");
+      if (!el) return;
+      const minMs = Date.now() + 10 * 60 * 1000;
+      el.min = defaultBulkStartValue(10 * 60 * 1000);
+      const cur = parseLocalDateTimeValue(el.value);
+      if (!Number.isFinite(cur) || cur < minMs) {
+        el.value = defaultBulkStartValue();
+        if (!silent) flash("Thời điểm hẹn 1 bài phải ≥ 10 phút sau hiện tại", false);
+        updateOneScheduleHint("đã auto-đẩy", true);
+      } else {
+        updateOneScheduleHint("sẵn sàng");
       }
     }
 
@@ -784,7 +880,7 @@
         else el.value = values[id] ?? "";
       }
       $("bulkMode")?.dispatchEvent(new Event("change"));
-      ensureBulkStartFuture();
+      ensureBulkStartFuture({ silent: true });
       rotToggleMode();
       $("rotAppStrategy")?.dispatchEvent(new Event("change"));
     }
@@ -1376,7 +1472,11 @@
         <div class="row2">
           <div>
             <label>Thời điểm</label>
-            <input type="datetime-local" id="oneScheduleAt" />
+            <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap">
+              <input type="datetime-local" id="oneScheduleAt" step="60" style="min-width:13.5rem;flex:1" />
+              <button type="button" class="btn-ghost btn-sm" id="btnOneSchedulePlus2h">+2 giờ</button>
+            </div>
+            <div id="oneScheduleHint" class="muted" style="margin-top:.25rem;font-size:.78rem"></div>
           </div>
           <div>
             <label>Loại</label>
@@ -1430,10 +1530,10 @@
         pickFolderInto("posted_folder", "Chọn folder đã đăng (posted)");
       $("btnPickCaptions").onclick = () =>
         pickFolderInto("captions_folder", "Chọn kho tiêu đề / caption (.txt .csv)");
-      const d = new Date(Date.now() + 2 * 60 * 60 * 1000);
-      const pad = (n) => String(n).padStart(2, "0");
-      $("oneScheduleAt").value =
-        `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      if ($("oneScheduleAt")) {
+        $("oneScheduleAt").value = defaultBulkStartValue();
+        ensureOneScheduleFuture({ silent: true });
+      }
       setConfigSaveState("Đã lưu trong dữ liệu", "saved");
     }
 
@@ -1560,9 +1660,15 @@
 
     async function scheduleOne() {
       if (!selectedId) return;
+      ensureOneScheduleFuture({ silent: false });
       const local = $("oneScheduleAt").value;
       if (!local) return flash("Chọn thời điểm", false);
-      const unix = Math.floor(new Date(local).getTime() / 1000);
+      const ms = parseLocalDateTimeValue(local);
+      if (!Number.isFinite(ms)) return flash("Thời điểm không hợp lệ", false);
+      if (ms < Date.now() + 10 * 60 * 1000) {
+        return flash("Thời điểm phải ≥ 10 phút sau hiện tại (Facebook)", false);
+      }
+      const unix = Math.floor(ms / 1000);
       try {
         const r = await api(`/api/posting/schedule/${selectedId}`, {
           method: "POST",
@@ -1593,7 +1699,7 @@
         dry_run: !!dryRun,
         ignore_page_quota: $("bulkIgnoreQuota")?.checked || false,
       };
-      if (mode === "fixed") ensureBulkStartFuture();
+      if (mode === "fixed") ensureBulkStartFuture({ silent: true });
       if (mode === "active_times") {
         body.days_ahead = Number($("bulkDays").value) || 3;
         body.posts_per_day = Number($("bulkPerDay").value) || 2;
@@ -1609,16 +1715,25 @@
         // lọc sạch và báo "Không còn slot hợp lệ". Lọc + cảnh báo ngay tại UI.
         const minMs = Date.now() + 10 * 60 * 1000;
         const lines = rawLines.filter((s) => {
-          const t = new Date(s.replace(" ", "T")).getTime();
+          const t = parseLocalDateTimeValue(s.replace(" ", "T"));
           return Number.isFinite(t) && t >= minMs;
         });
         const droppedPast = rawLines.length - lines.length;
         if (droppedPast > 0) {
           flash(`Đã bỏ ${droppedPast} mốc giờ đã qua trong "list thời điểm" (Facebook cần ≥10 phút kể từ hiện tại)`, false);
         }
-        if (lines.length) body.times = lines;
-        else {
-          body.start_at = $("bulkStart").value ? $("bulkStart").value.replace("T", " ") : null;
+        if (lines.length) {
+          body.times = lines;
+          if ($("bulkStart")?.value) {
+            // list thời điểm thắng Start at — tránh user tưởng Start at đang dùng
+            updateBulkStartHint("bị bỏ qua vì đã có list thời điểm", true);
+          }
+        } else {
+          ensureBulkStartFuture({ silent: true });
+          const startVal = $("bulkStart")?.value || "";
+          body.start_at = startVal
+            ? startVal.replace("T", " ")
+            : null;
           body.count_per_page = Number($("bulkCount").value) || 1;
           const iMin = Number($("bulkIntervalMin")?.value) || 120;
           const iMaxRaw = Number($("bulkIntervalMax")?.value) || iMin;
@@ -1634,6 +1749,9 @@
 
     function renderBulkResult(r) {
       const box = $("bulkResult");
+      if (!box) return;
+      // Guard: never pass innerHTML string (old bug on meta control change)
+      if (!r || typeof r !== "object") return;
       const antiOn = r.anti_spam_enabled !== false && r.anti_spam_enabled !== 0;
       const metaOn = r.meta_scheduled || (r.plan && r.plan[0]?.active?.meta_scheduled);
       const antiLine =
@@ -1826,16 +1944,47 @@
       const m = $("bulkMode").value;
       $("bulkActive").style.display = m === "active_times" ? "block" : "none";
       $("bulkFixed").style.display = m === "fixed" ? "block" : "none";
+      if (m === "fixed") ensureBulkStartFuture({ silent: true });
     };
     $("btnDryRun").onclick = () => runBulk(true);
     $("btnBulkSchedule").onclick = () => runBulk(false);
 
-    // Load meta scheduled controls
-    $("metaMaxScheduledPerDay")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
-    $("metaPublishWindowDays")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
-    $("metaMinIntervalMinutes")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
-    $("metaIgnoreGraphLimit")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
-    $("allow30DaysMax")?.addEventListener("change", () => renderBulkResult($("bulkResult").innerHTML));
+    // Start at: commit rõ ràng (Windows/Electron picker hay mất giá trị khi đóng)
+    $("btnBulkStartApply")?.addEventListener("click", () => commitBulkStart({ silent: false }));
+    $("btnBulkStartPlus2h")?.addEventListener("click", () => {
+      if ($("bulkStart")) $("bulkStart").value = defaultBulkStartValue(2 * 60 * 60 * 1000);
+      commitBulkStart({ silent: false });
+    });
+    $("bulkStart")?.addEventListener("input", () => {
+      updateBulkStartHint("đang chỉnh — bấm «Áp dụng giờ» để khóa", false);
+    });
+    $("bulkStart")?.addEventListener("change", () => {
+      // Picker đóng với giá trị mới
+      ensureBulkStartFuture({ silent: false });
+      queueWorkspaceSave(100);
+      updateBulkStartHint("đã nhận từ picker", false);
+    });
+    $("bulkStart")?.addEventListener("blur", () => {
+      ensureBulkStartFuture({ silent: true });
+    });
+
+    $("btnOneSchedulePlus2h")?.addEventListener("click", () => {
+      if ($("oneScheduleAt")) $("oneScheduleAt").value = defaultBulkStartValue(2 * 60 * 60 * 1000);
+      ensureOneScheduleFuture({ silent: true });
+    });
+    $("oneScheduleAt")?.addEventListener("change", () => ensureOneScheduleFuture({ silent: false }));
+    $("oneScheduleAt")?.addEventListener("input", () => updateOneScheduleHint("đang chỉnh…"));
+
+    // Meta scheduled: chỉ lưu workspace (không gọi renderBulkResult sai kiểu)
+    for (const mid of [
+      "metaMaxScheduledPerDay",
+      "metaPublishWindowDays",
+      "metaMinIntervalMinutes",
+      "metaIgnoreGraphLimit",
+      "allow30DaysMax",
+    ]) {
+      $(mid)?.addEventListener("change", () => queueWorkspaceSave(150));
+    }
     $("btnAntiChip")?.addEventListener("click", () => toggleAntiSpam());
     $("btnBulkAntiToggle")?.addEventListener("click", () => toggleAntiSpam());
     $("btnBulkPrefHours")?.addEventListener("click", async () => {
@@ -1888,7 +2037,10 @@
     });
 
     (() => {
-      $("bulkStart").value = defaultBulkStartValue();
+      if ($("bulkStart") && !$("bulkStart").value) {
+        $("bulkStart").value = defaultBulkStartValue();
+      }
+      ensureBulkStartFuture({ silent: true });
     })();
 
     /* ── Rotation so-le ── */
