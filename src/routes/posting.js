@@ -269,23 +269,30 @@ router.post("/reconcile-scheduled", async (req, res) => {
   }
 });
 
-/** GET /api/posting/logs/csv — download post log CSV */
+/** GET /api/posting/logs/csv — download post log CSV (empty file ok) */
 router.get("/logs/csv", (_req, res) => {
   const file = getPostLogCsvPath();
   if (!fs.existsSync(file)) {
-    return res.status(404).json({ error: "Chưa có log đăng bài" });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="post_logs.csv"'
+    );
+    return res.status(200).send("\uFEFFcreated_at,page_name,post_type,status,error\n");
   }
   res.download(file, "post_logs.csv");
 });
 
 /**
- * delivery_mode chuẩn hoá cho cả dữ liệu cũ (chưa có cột):
- *  - có cột delivery_mode → dùng nguyên
- *  - chưa có / rỗng: scheduled_publish_time not null → fb_scheduled, else direct
+ * delivery_mode chuẩn hoá cho cả dữ liệu cũ (chưa có cột / rỗng):
+ *  - có giá trị valid → dùng
+ *  - scheduled_publish_time not null → fb_scheduled
+ *  - else direct
+ * Dùng COALESCE để an toàn nếu cột NULL trên row cũ.
  */
 const DELIVERY_MODE_SQL = `
   CASE
-    WHEN delivery_mode IN ('direct','scheduled_direct','fb_scheduled') THEN delivery_mode
+    WHEN COALESCE(delivery_mode,'') IN ('direct','scheduled_direct','fb_scheduled') THEN delivery_mode
     WHEN scheduled_publish_time IS NOT NULL AND scheduled_publish_time <> '' THEN 'fb_scheduled'
     ELSE 'direct'
   END`;

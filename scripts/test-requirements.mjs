@@ -291,6 +291,15 @@ check("Electron native module uses reproducible prebuilt instead of local Visual
 check("portable first run persists beside outer EXE instead of Temp extraction", electronMain.includes("process.env.PORTABLE_EXECUTABLE_DIR") && electronMain.includes("never inside Electron's temporary extraction directory") && electronMain.includes("Không cần tự tạo file .env"));
 check("legacy small FolderBrowserDialog cannot return", !folderPicker.includes("FolderBrowserDialog") && folderPicker.includes("System.Windows.Forms.OpenFileDialog"));
 check("fresh database post_logs includes scheduled publish time", /CREATE TABLE IF NOT EXISTS post_logs[\s\S]{0,1200}scheduled_publish_time TEXT/.test(read("src/db/index.js")));
+check(
+  "fresh database post_logs includes delivery_mode for history/stats",
+  /CREATE TABLE IF NOT EXISTS post_logs[\s\S]{0,1400}delivery_mode TEXT/.test(read("src/db/index.js")) &&
+    read("src/db/index.js").includes("logColsAfter")
+);
+check(
+  "full functional probe script exists",
+  fs.existsSync(path.join(root, "scripts", "full-functional-probe.mjs"))
+);
 check("fresh database Page config includes active/preferred hours", /CREATE TABLE IF NOT EXISTS page_post_config[\s\S]{0,1200}active_hours_json TEXT[\s\S]{0,300}preferred_hours_json TEXT/.test(read("src/db/index.js")));
 check("clean runtime smoke test is part of npm test", fs.existsSync(path.join(root, "scripts/test-clean-runtime.mjs")) && JSON.parse(read("package.json")).scripts.test.includes("test-clean-runtime.mjs"));
 check("navigation tabs map to distinct workspaces", shell.includes('dataset.view = view') && shell.includes('itemHash === hash') && css.includes('body[data-view="rotation"]') && css.includes('body[data-view="reports"]'));

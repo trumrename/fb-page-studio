@@ -132,21 +132,6 @@ function migrate(database) {
     );
   }
 
-  // post_logs: scheduled time
-  const logCols = database
-    .prepare(`PRAGMA table_info(post_logs)`)
-    .all()
-    .map((c) => c.name);
-  if (logCols.length && !logCols.includes("scheduled_publish_time")) {
-    database.exec(
-      `ALTER TABLE post_logs ADD COLUMN scheduled_publish_time TEXT`
-    );
-  }
-  // Phân loại nguồn đăng: direct | scheduled_direct | fb_scheduled
-  if (logCols.length && !logCols.includes("delivery_mode")) {
-    database.exec(`ALTER TABLE post_logs ADD COLUMN delivery_mode TEXT`);
-  }
-
   // Multi Meta App: tag each account with meta_app_key (app1 / app2)
   migrateMetaAppColumns(database);
 
@@ -194,6 +179,7 @@ function migrate(database) {
       comment_text TEXT,
       comment_id TEXT,
       scheduled_publish_time TEXT,
+      delivery_mode TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -214,6 +200,21 @@ function migrate(database) {
     );
     CREATE INDEX IF NOT EXISTS idx_follower_history_page_day ON page_follower_history(page_row_id, snapshot_day);
   `);
+
+  // post_logs extras — MUST run after CREATE TABLE (fresh DBs previously skipped
+  // ALTER because logCols was empty before the table existed → history/stats 500).
+  const logColsAfter = database
+    .prepare(`PRAGMA table_info(post_logs)`)
+    .all()
+    .map((c) => c.name);
+  if (logColsAfter.length && !logColsAfter.includes("scheduled_publish_time")) {
+    database.exec(
+      `ALTER TABLE post_logs ADD COLUMN scheduled_publish_time TEXT`
+    );
+  }
+  if (logColsAfter.length && !logColsAfter.includes("delivery_mode")) {
+    database.exec(`ALTER TABLE post_logs ADD COLUMN delivery_mode TEXT`);
+  }
 
   const configCols = database.prepare(`PRAGMA table_info(page_post_config)`).all().map((c) => c.name);
   if (!configCols.includes("caption_slot_index")) {
