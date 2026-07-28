@@ -1,17 +1,26 @@
 # FB Page Studio
 
-Tool **multi-account / multi-page** dùng **Facebook Graph API chính thống** (v1.2.20).
+Tool **multi-account / multi-page** dùng **Facebook Graph API chính thống**.
+
+## ⬇ Tải bản mới nhất (bấm là tải)
+
+| | Link cố định (luôn latest) |
+|--|--|
+| **Setup cài đặt** | **[FB-Page-Studio-Setup.exe](https://github.com/trumrename/fb-page-studio/releases/latest/download/FB-Page-Studio-Setup.exe)** |
+| Portable | [FB-Page-Studio-Desktop.exe](https://github.com/trumrename/fb-page-studio/releases/latest/download/FB-Page-Studio-Desktop.exe) |
+| Trang release | https://github.com/trumrename/fb-page-studio/releases/latest |
+
+Chi tiết: **[DOWNLOAD.md](./DOWNLOAD.md)**
 
 - OAuth multi-account · multi Meta App · list page · followers · export  
 - Đăng feed (text/ảnh/video) · caption pool · anti-spam  
 - **Direct Local** (tool canh giờ) hoặc **hẹn giờ Facebook**  
-- Job tiến trình + **đăng lại task lỗi**  
-- **1 file `.exe` portable** + cập nhật từ GitHub Releases  
+- Xóa hàng loạt bài Fanpage / Group · cập nhật từ GitHub Releases  
 
 ## Khách (không cần Node)
 
-1. Tải Release: `FB-Page-Studio-Desktop-v1.2.20.exe` hoặc ZIP `FB-Page-Studio-v1.2.20-Windows.zip`  
-2. Chạy EXE → thiết lập Meta App + Ngrok trong UI  
+1. Bấm link Setup ở trên → cài / cài đè  
+2. Chạy app → Connect Facebook (OAuth `modelswiki.top`)  
 3. Dán license key (hoặc trial)  
 
 Chi tiết: `pack-customer/README-KHACH.txt` · `HUONG-DAN-MAY-MOI.md`

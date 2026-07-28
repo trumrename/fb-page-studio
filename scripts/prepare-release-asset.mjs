@@ -55,8 +55,30 @@ if (setupSrc) {
   fs.mkdirSync(releaseDir, { recursive: true });
   fs.copyFileSync(setupDest, path.join(releaseDir, setupName));
   fs.copyFileSync(`${setupDest}.sha256.txt`, path.join(releaseDir, `${setupName}.sha256.txt`));
+
+  // Stable names for permanent "latest" download URLs (no version in path):
+  // https://github.com/…/releases/latest/download/FB-Page-Studio-Setup.exe
+  const stableSetup = "FB-Page-Studio-Setup.exe";
+  const stableDesktop = "FB-Page-Studio-Desktop.exe";
+  fs.copyFileSync(setupDest, path.join(releaseDir, stableSetup));
+  fs.writeFileSync(
+    path.join(releaseDir, `${stableSetup}.sha256.txt`),
+    `${setupHash}  ${stableSetup}\n`,
+    "utf8"
+  );
+  fs.copyFileSync(target, path.join(releaseDir, stableDesktop));
+  fs.writeFileSync(
+    path.join(releaseDir, `${stableDesktop}.sha256.txt`),
+    `${digest}  ${stableDesktop}\n`,
+    "utf8"
+  );
+  // Also copy versioned portable into release-assets
+  fs.copyFileSync(target, path.join(releaseDir, versionedName));
+  fs.copyFileSync(checksumFile, path.join(releaseDir, `${versionedName}.sha256.txt`));
+
   console.log(`Setup installer: ${setupDest}`);
   console.log(`Setup SHA-256: ${setupHash}`);
+  console.log(`Stable latest links ready: ${stableSetup}, ${stableDesktop}`);
 } else {
   console.warn("⚠ Chưa thấy NSIS Setup EXE — kiểm tra electron-builder nsis target");
 }

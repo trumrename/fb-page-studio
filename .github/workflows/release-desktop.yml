@@ -50,11 +50,22 @@ jobs:
           $desktopSha = "$desktop.sha256.txt"
           $setup = "dist-desktop-oauth/FB-Page-Studio-Setup-v$version.exe"
           $setupSha = "$setup.sha256.txt"
+          $rel = "Tổng Hợp Tool/release-assets"
           $assets = @($desktop, $desktopSha)
           if (Test-Path $setup) { $assets += @($setup, $setupSha) }
+          # Permanent "click = always latest" names (GitHub /releases/latest/download/…)
+          foreach ($n in @(
+            "FB-Page-Studio-Setup.exe",
+            "FB-Page-Studio-Setup.exe.sha256.txt",
+            "FB-Page-Studio-Desktop.exe",
+            "FB-Page-Studio-Desktop.exe.sha256.txt"
+          )) {
+            $p = Join-Path $rel $n
+            if (Test-Path $p) { $assets += $p }
+          }
           gh release view $env:GITHUB_REF_NAME 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:GITHUB_REF_NAME @assets --clobber
           } else {
-            gh release create $env:GITHUB_REF_NAME @assets --generate-notes --title "FB Page Studio $env:GITHUB_REF_NAME"
+            gh release create $env:GITHUB_REF_NAME @assets --generate-notes --title "FB Page Studio $env:GITHUB_REF_NAME" --latest
           }
