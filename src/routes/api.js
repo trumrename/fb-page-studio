@@ -62,7 +62,10 @@ import {
   getDailyReportFile,
 } from "../services/dailyReports.js";
 import { getNgrokStatus, startNgrok, stopNgrok } from "../services/ngrokManager.js";
-import { listMetaAppsPublic } from "../services/metaApps.js";
+import {
+  listMetaAppsPublic,
+  resolveOauthRedirectUri,
+} from "../services/metaApps.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -252,7 +255,8 @@ router.put("/setup/first-run", async (req, res) => {
     const localSecret2 = keepSecretLocal || (app2Secret && !app2Pushed) ? app2Secret : "";
     const updates = {
       PORT: String(config.port || 3847),
-      APP_BASE_URL: "http://127.0.0.1:3847",
+      // Always local for portable EXE UI/media — public domain is only FB_REDIRECT_URI
+      APP_BASE_URL: `http://127.0.0.1:${config.port || 3847}`,
       OAUTH_RELAY: "1",
       OAUTH_RELAY_URL: relayUrl,
       FB_APP_ID: app1Id,
@@ -597,15 +601,19 @@ router.get("/setup/domain", (_req, res) => {
   const relayUrl = String(process.env.OAUTH_RELAY_URL || "").trim().replace(/\/$/, "");
   const relayMode =
     String(process.env.OAUTH_RELAY || "").trim() === "1" ||
-    String(process.env.OAUTH_RELAY || "").toLowerCase() === "true";
+    String(process.env.OAUTH_RELAY || "").toLowerCase() === "true" ||
+    String(process.env.OAUTH_RELAY || "").toLowerCase() === "relay";
   // In relay mode "origin" for OAuth is the public relay, not 127.0.0.1.
   const origin = relayMode && relayUrl ? relayUrl : config.appBaseUrl;
+  const redirectUri = resolveOauthRedirectUri(
+    process.env.FB_REDIRECT_URI || config.facebook.redirectUri
+  );
   res.json({
     origin,
     app_base_url: config.appBaseUrl,
     oauth_relay: relayMode,
     oauth_relay_url: relayUrl || null,
-    redirect_uri: config.facebook.redirectUri,
+    redirect_uri: redirectUri,
     port: config.port,
     app2_configured: Boolean(process.env.FB_APP_ID_2),
     env_exists: fs.existsSync(getEnvPath()),
@@ -617,32 +625,59 @@ router.put("/setup/domain", async (req, res) => {
     const origin = normalizeOAuthOrigin(req.body?.domain || req.body?.origin);
     const redirectUri = `${origin}/auth/facebook/callback`;
     const envPath = getEnvPath();
+    const relayMode =
+      String(process.env.OAUTH_RELAY || "").trim() === "1" ||
+      String(process.env.OAUTH_RELAY || "").toLowerCase() === "true" ||
+      String(process.env.OAUTH_RELAY || "").toLowerCase() === "relay";
+    // Portable + OAuth relay: Facebook callback is public domain, but the EXE UI
+    // must stay on 127.0.0.1 — never set APP_BASE_URL to modelswiki.top.
+    const localBase = `http://127.0.0.1:${config.port || 3847}`;
     const updates = {
-      APP_BASE_URL: origin,
       FB_REDIRECT_URI: redirectUri,
     };
+    if (relayMode) {
+      updates.OAUTH_RELAY = "1";
+      updates.OAUTH_RELAY_URL = origin;
+      updates.APP_BASE_URL = localBase;
+      updates.NGROK_AUTOSTART = "0";
+    } else {
+      // Ngrok / custom tunnel: public origin is also the app base for browser access
+      updates.APP_BASE_URL = origin;
+    }
     // App 2 must use the same callback unless the user deliberately configures
     // a different one later. This avoids App 2 silently keeping an old domain.
     if (process.env.FB_APP_ID_2 || process.env.FB_REDIRECT_URI_2) {
       updates.FB_REDIRECT_URI_2 = redirectUri;
     }
     writeEnvValues(envPath, updates);
-    process.env.APP_BASE_URL = origin;
     process.env.FB_REDIRECT_URI = redirectUri;
+    if (updates.OAUTH_RELAY_URL) process.env.OAUTH_RELAY_URL = updates.OAUTH_RELAY_URL;
+    if (updates.OAUTH_RELAY) process.env.OAUTH_RELAY = updates.OAUTH_RELAY;
+    if (updates.APP_BASE_URL) {
+      process.env.APP_BASE_URL = updates.APP_BASE_URL;
+      config.appBaseUrl = updates.APP_BASE_URL;
+    }
     if (updates.FB_REDIRECT_URI_2) process.env.FB_REDIRECT_URI_2 = redirectUri;
-    config.appBaseUrl = origin;
     config.facebook.redirectUri = redirectUri;
     let ngrok = getNgrokStatus();
-    if (process.env.NGROK_AUTHTOKEN && String(process.env.NGROK_AUTOSTART || "1") !== "0") {
+    if (
+      !relayMode &&
+      process.env.NGROK_AUTHTOKEN &&
+      String(process.env.NGROK_AUTOSTART || "1") !== "0"
+    ) {
       ngrok = await startNgrok({ origin, port: config.port });
     }
     res.json({
       ok: true,
       origin,
       redirect_uri: redirectUri,
+      app_base_url: config.appBaseUrl,
+      oauth_relay: relayMode,
       port: config.port,
       app2_updated: Boolean(updates.FB_REDIRECT_URI_2),
-      ngrok_command: `ngrok http --url=${origin} 127.0.0.1:${config.port}`,
+      ngrok_command: relayMode
+        ? null
+        : `ngrok http --url=${origin} 127.0.0.1:${config.port}`,
       ngrok_status: ngrok.status,
     });
   } catch (e) {

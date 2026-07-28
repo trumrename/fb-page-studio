@@ -26,7 +26,11 @@ function createOAuthSession(metaAppKey = "app1", rerequest = false) {
   // - port: relay 302 về 127.0.0.1:port
   // - metaAppKey: slot local (app1/app2 trên máy khách)
   // - appId: Meta App ID thật — server chọn đúng secret (nhiều khách cùng "App 1")
-  const state = `${nanoid(32)}.${config.port}.${app.key}.${app.appId || ""}`;
+  // state = nanoid.port.metaAppKey[.appId]
+  // appId tells relay which Meta secret to use (multi-tenant). Omit when empty.
+  const state = app.appId
+    ? `${nanoid(32)}.${config.port}.${app.key}.${app.appId}`
+    : `${nanoid(32)}.${config.port}.${app.key}`;
   getDb()
     .prepare(
       `INSERT INTO oauth_states (state, meta_app_key, redirect_uri) VALUES (?, ?, ?)`
@@ -103,7 +107,10 @@ router.get("/facebook", (req, res) => {
 
   const rerequest =
     req.query.rerequest === "1" || req.query.rerequest === "true";
-  const { url } = createOAuthSession(app.key, rerequest);
+  // Session stores the exact redirect_uri used in dialog + later code exchange
+  const session = createOAuthSession(app.key, rerequest);
+  const { url } = session;
+  const redirectUri = session.app.redirectUri || app.redirectUri;
 
   if (req.query.json === "1" || req.query.format === "json") {
     return res.json({
@@ -111,7 +118,8 @@ router.get("/facebook", (req, res) => {
       url,
       meta_app_key: app.key,
       meta_app_name: app.name,
-      redirect_uri: app.redirectUri,
+      redirect_uri: redirectUri,
+      app_id: app.appId || null,
       tip: "Mở URL trong Chrome/Edge. Nhập pass + mã 2FA nếu có.",
     });
   }
@@ -142,7 +150,7 @@ ol{color:#9aa0a6;line-height:1.6;padding-left:1.2rem}
     <li>Nhập <b>mã 2FA</b> nếu nick bật</li>
     <li>Cho phép quyền Page → đợi redirect về app</li>
   </ol>
-  <p>Redirect: <code>${escapeHtml(app.redirectUri)}</code></p>
+  <p>Redirect: <code>${escapeHtml(redirectUri)}</code></p>
   <p>App ID: <code>${escapeHtml(app.appId)}</code></p>
   <a class="btn" id="go" href="${escapeHtml(url)}">Tiếp tục Facebook →</a>
 </div>

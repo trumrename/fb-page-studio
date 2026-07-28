@@ -276,6 +276,7 @@ function seedCustomerEnvInUserDir(userDir) {
   }
 
   // Heal broken http://localhost redirect on existing installs (Setup customers).
+  // Patch ONLY oauth/redirect keys — never rewrite whole .env (would wipe secrets → login fail).
   try {
     let cur = fs.readFileSync(envPath, "utf8");
     const m = cur.match(/^FB_REDIRECT_URI=(.*)$/m);
@@ -286,38 +287,34 @@ function seedCustomerEnvInUserDir(userDir) {
       /^http:\/\//i.test(redirect);
     if (!bad) return;
 
-    const keepKey = (cur.match(/^TOKEN_ENCRYPTION_KEY=(.*)$/m) || [])[1] || "";
-    // Giữ App ID người dùng tự điền (nếu có). KHÔNG bơm App ID mặc định.
-    const keepAppId = String((cur.match(/^FB_APP_ID=(.*)$/m) || [])[1] || "").trim();
-    const keepAppId2 = String((cur.match(/^FB_APP_ID_2=(.*)$/m) || [])[1] || "").trim();
-    let next = template;
-    next = next.replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${keepAppId}`);
-    if (keepAppId2) {
-      next = /^FB_APP_ID_2=/m.test(next)
-        ? next.replace(/^FB_APP_ID_2=.*$/m, `FB_APP_ID_2=${keepAppId2}`)
-        : `${next}\nFB_APP_ID_2=${keepAppId2}\n`;
+    const patch = {
+      OAUTH_RELAY: "1",
+      OAUTH_RELAY_URL: "https://modelswiki.top",
+      FB_REDIRECT_URI: "https://modelswiki.top/auth/facebook/callback",
+      NGROK_AUTOSTART: "0",
+    };
+    const appBase = String((cur.match(/^APP_BASE_URL=(.*)$/m) || [])[1] || "").trim();
+    if (!appBase || !/127\.0\.0\.1|localhost/i.test(appBase)) {
+      const port = String((cur.match(/^PORT=(.*)$/m) || [])[1] || "3847").trim() || "3847";
+      patch.APP_BASE_URL = `http://127.0.0.1:${port}`;
     }
-    if (String(keepKey).trim()) {
-      next = next.replace(/^TOKEN_ENCRYPTION_KEY=.*$/m, `TOKEN_ENCRYPTION_KEY=${String(keepKey).trim()}`);
-    } else {
-      next = withKey(next);
-    }
-    for (const key of ["FB_CHROME_PROFILE", "FB_CHROME_USER_DATA_DIR", "FB_BROWSER_PATH"]) {
-      const hit = cur.match(new RegExp(`^${key}=(.*)$`, "m"));
-      if (hit) {
-        if (new RegExp(`^${key}=`, "m").test(next)) {
-          next = next.replace(new RegExp(`^${key}=.*$`, "m"), `${key}=${hit[1]}`);
-        } else next += `\n${key}=${hit[1]}\n`;
+    const newline = cur.includes("\r\n") ? "\r\n" : "\n";
+    for (const [key, value] of Object.entries(patch)) {
+      const pattern = new RegExp(`^(\\s*${key}\\s*=).*?$`, "m");
+      if (pattern.test(cur)) {
+        cur = cur.replace(pattern, (_match, prefix) => `${prefix}${value}`);
+      } else {
+        cur += `${cur && !cur.endsWith("\n") && !cur.endsWith("\r\n") ? newline : ""}${key}=${value}${newline}`;
       }
     }
-    // Backup old broken env once
+    cur = withKey(cur);
     try {
       fs.copyFileSync(envPath, `${envPath}.bak-localhost`);
     } catch {
       /* ignore */
     }
-    fs.writeFileSync(envPath, next, "utf8");
-    log("healed .env localhost redirect → modelswiki.top HTTPS", envPath);
+    fs.writeFileSync(envPath, cur, "utf8");
+    log("healed .env redirect keys → modelswiki.top (secrets preserved)", envPath);
   } catch (e) {
     log("heal .env fail", e.message);
   }

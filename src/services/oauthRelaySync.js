@@ -182,8 +182,22 @@ export async function syncOauthRelayConfig() {
     ),
   };
 
-  // Auto-fill FB_APP_ID / _2 / _3… from server so every machine matches without hand-edit
+  // App IDs on client are **local slots** (App 1 / App 2 on this machine).
+  // Server may host dozens of customer Meta Apps under app1…appN.
+  // NEVER overwrite a non-empty local App ID with a different remote ID
+  // (that caused Connect to open the wrong Meta App / wrong secret on relay).
+  // Only:
+  //   - fill empty local slots when server has a matching free catalog entry
+  //   - keep redirect_uri in sync
+  //   - never pull secrets
   let appsChanged = false;
+  const localIds = new Set();
+  for (let n = 1; n <= 20; n++) {
+    const idKey = n <= 1 ? "FB_APP_ID" : `FB_APP_ID_${n}`;
+    const prev = String(process.env[idKey] || "").trim();
+    if (/^\d{5,30}$/.test(prev)) localIds.add(prev);
+  }
+
   for (const a of remoteApps) {
     const key = String(a.key || "").trim();
     const id = String(a.app_id || a.appId || "").trim();
@@ -196,13 +210,36 @@ export async function syncOauthRelayConfig() {
     const nameKey = n <= 1 ? "FB_APP_NAME" : `FB_APP_NAME_${n}`;
     const redirKey = n <= 1 ? "FB_REDIRECT_URI" : `FB_REDIRECT_URI_${n}`;
     const prevId = String(process.env[idKey] || "").trim();
-    if (prevId !== id) appsChanged = true;
-    envUpdates[idKey] = id;
-    if (name) envUpdates[nameKey] = name;
-    envUpdates[redirKey] = redirectUri;
-    process.env[idKey] = id;
-    if (name) process.env[nameKey] = name;
-    // Never pull secrets from server onto client
+
+    // Always keep redirect for any slot that already has this App ID
+    if (prevId && prevId === id) {
+      envUpdates[redirKey] = redirectUri;
+      if (name && !String(process.env[nameKey] || "").trim()) {
+        envUpdates[nameKey] = name;
+        process.env[nameKey] = name;
+        appsChanged = true;
+      }
+      continue;
+    }
+
+    // Local already configured with a different Meta App — do not clobber
+    if (prevId && prevId !== id) {
+      continue;
+    }
+
+    // Empty local slot: only auto-fill App 1 / App 2 (Connect UI slots).
+    // Never invent app3…appN from a multi-tenant server catalog onto one machine.
+    if (!prevId) {
+      if (n > 2) continue;
+      if (localIds.has(id)) continue;
+      envUpdates[idKey] = id;
+      if (name) envUpdates[nameKey] = name;
+      envUpdates[redirKey] = redirectUri;
+      process.env[idKey] = id;
+      if (name) process.env[nameKey] = name;
+      localIds.add(id);
+      appsChanged = true;
+    }
   }
 
   const changed = prevRedirect !== redirectUri || prevRelay !== publicUrl || appsChanged;

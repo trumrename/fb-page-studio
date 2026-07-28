@@ -125,8 +125,9 @@ export function ensureCustomerEnvFile() {
 
 /**
  * Packaged installs that still have broken http://localhost redirect
- * (old first-run / wrong template) → heal to HTTPS relay without wiping keys.
- * Only when packaged or OAUTH already intended for customers.
+ * (old first-run / wrong template) → heal to HTTPS relay.
+ * Patch ONLY redirect/relay keys — never replace whole .env
+ * (full rewrite previously wiped FB_APP_SECRET and broke login).
  */
 export function healLocalhostRedirectEnv() {
   const envPath = getEnvPath();
@@ -134,7 +135,8 @@ export function healLocalhostRedirectEnv() {
   let text = fs.readFileSync(envPath, "utf8");
   const redirect = (text.match(/^FB_REDIRECT_URI=(.*)$/m) || [])[1]?.trim() || "";
   const isBad =
-    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(redirect) ||
+    !redirect ||
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(redirect) ||
     /^http:\/\//i.test(redirect);
 
   if (!isBad) return { healed: false, reason: "redirect_ok" };
@@ -144,43 +146,32 @@ export function healLocalhostRedirectEnv() {
     return { healed: false, reason: "dev_skip" };
   }
 
-  const keepKey = (text.match(/^TOKEN_ENCRYPTION_KEY=(.*)$/m) || [])[1] || "";
-  // Giữ App ID người dùng đã tự điền (nếu có). Không bơm ID mặc định.
-  const keepAppId = (text.match(/^FB_APP_ID=(.*)$/m) || [])[1]?.trim() || "";
-  const keepAppId2 = (text.match(/^FB_APP_ID_2=(.*)$/m) || [])[1]?.trim() || "";
-
-  let next = readCustomerDefaultEnvText();
-  if (/^FB_APP_ID=/m.test(next)) {
-    next = next.replace(/^FB_APP_ID=.*$/m, `FB_APP_ID=${keepAppId}`);
-  } else if (keepAppId) {
-    next += `\nFB_APP_ID=${keepAppId}\n`;
+  const patch = {
+    OAUTH_RELAY: "1",
+    OAUTH_RELAY_URL: DEFAULT_OAUTH_RELAY_URL,
+    FB_REDIRECT_URI: DEFAULT_FB_REDIRECT_URI,
+    NGROK_AUTOSTART: "0",
+  };
+  // Keep APP_BASE_URL local for portable EXE (never public relay domain)
+  const appBase = (text.match(/^APP_BASE_URL=(.*)$/m) || [])[1]?.trim() || "";
+  if (!appBase || !/127\.0\.0\.1|localhost/i.test(appBase)) {
+    const port = (text.match(/^PORT=(.*)$/m) || [])[1]?.trim() || "3847";
+    patch.APP_BASE_URL = `http://127.0.0.1:${port}`;
   }
-  if (keepAppId2) {
-    if (/^FB_APP_ID_2=/m.test(next)) {
-      next = next.replace(/^FB_APP_ID_2=.*$/m, `FB_APP_ID_2=${keepAppId2}`);
+
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  for (const [key, value] of Object.entries(patch)) {
+    const pattern = new RegExp(`^(\\s*${key}\\s*=).*?$`, "m");
+    if (pattern.test(text)) {
+      text = text.replace(pattern, (_m, prefix) => `${prefix}${value}`);
     } else {
-      next += `\nFB_APP_ID_2=${keepAppId2}\n`;
+      text += `${text && !text.endsWith("\n") && !text.endsWith("\r\n") ? newline : ""}${key}=${value}${newline}`;
     }
   }
-  if (keepKey.trim()) {
-    next = next.replace(/^TOKEN_ENCRYPTION_KEY=.*$/m, `TOKEN_ENCRYPTION_KEY=${keepKey.trim()}`);
-  } else {
-    next = ensureEncryptionKey(next);
-  }
+  // Ensure encryption key exists without regenerating if present
+  text = ensureEncryptionKey(text);
 
-  // Preserve chrome profile prefs if present
-  for (const key of ["FB_CHROME_PROFILE", "FB_CHROME_USER_DATA_DIR", "FB_BROWSER_PATH", "BROWSER_PATH"]) {
-    const m = text.match(new RegExp(`^${key}=(.*)$`, "m"));
-    if (m) {
-      if (new RegExp(`^${key}=`, "m").test(next)) {
-        next = next.replace(new RegExp(`^${key}=.*$`, "m"), `${key}=${m[1]}`);
-      } else {
-        next += `\n${key}=${m[1]}\n`;
-      }
-    }
-  }
-
-  fs.writeFileSync(envPath, next, "utf8");
-  console.log(`[config] Healed localhost/http redirect → ${DEFAULT_FB_REDIRECT_URI}`);
+  fs.writeFileSync(envPath, text, "utf8");
+  console.log(`[config] Healed redirect keys → ${DEFAULT_FB_REDIRECT_URI} (secrets preserved)`);
   return { healed: true, path: envPath };
 }

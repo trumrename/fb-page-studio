@@ -286,6 +286,30 @@ check("central deploy mode exists", fs.existsSync(path.join("src", "services", "
 check("media upload for central server", read("src/routes/api.js").includes("/media/upload") && fs.existsSync(path.join("src", "services", "mediaUpload.js")));
 check("central server docs", fs.existsSync("HUONG-DAN-SERVER-TRUNG-TAM.md") && fs.existsSync(".env.central.example"));
 check("oauth relay for EXE without ngrok", fs.existsSync("oauth-relay/server.mjs") && fs.existsSync("HUONG-DAN-OAUTH-RELAY.md") && read("src/routes/auth.js").includes("nanoid(32)}.${config.port}"));
+const oauthSync = read("src/services/oauthRelaySync.js");
+check(
+  "oauth relay sync does not overwrite local Meta App IDs",
+  oauthSync.includes("Never overwrite") &&
+    oauthSync.includes("n > 2") &&
+    oauthSync.includes("prevId !== id")
+);
+const customerEnv = read("src/services/customerEnv.js");
+check(
+  "heal broken redirect preserves secrets (patch keys only)",
+  customerEnv.includes("secrets preserved") ||
+    (customerEnv.includes("Patch ONLY") && customerEnv.includes("FB_REDIRECT_URI"))
+);
+check(
+  "setup domain keeps APP_BASE_URL local in OAuth relay mode",
+  apiRoutes.includes("never set APP_BASE_URL to modelswiki") ||
+    (apiRoutes.includes("localBase") && apiRoutes.includes("oauth_relay: relayMode"))
+);
+check(
+  "OAuth session stores exact redirect_uri for code exchange",
+  auth.includes("redirect_uri") &&
+    auth.includes("resolveOauthRedirectUri") &&
+    auth.includes("st.redirect_uri")
+);
 check("relay-complete for customer pack without secret", read("src/routes/auth.js").includes("relay-complete") && read("src/services/accounts.js").includes("connectFromUserToken"));
 check("two packs internal vs customer", fs.existsSync("scripts/sync-internal-pack.mjs") && fs.existsSync("HAI-GOI-NOI-BO-VA-KHACH.md") && read("oauth-relay/server.mjs").includes("RELAY_EXCHANGE"));
 check("dashboard separates created and Facebook publish time", dashboard.includes("Tool thực hiện lúc") && dashboard.includes("Facebook sẽ đăng lúc") && dashboard.includes("scheduleDisplay"));
