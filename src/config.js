@@ -13,8 +13,8 @@ import {
   healLocalhostRedirectEnv,
 } from "./services/customerEnv.js";
 
-// Setup / portable first run: seed .env from bundled HTTPS-relay template
-// (never leave http://localhost as Facebook redirect on customer installs).
+// Setup / portable first run: seed .env from bundled HTTPS-relay template.
+// Also purge legacy domains (ngrok / videoviral / handcraft / qgroup / localhost public).
 try {
   ensureCustomerEnvFile();
   healLocalhostRedirectEnv();
@@ -23,7 +23,14 @@ try {
 }
 
 // Load .env from beside .exe (portable) or AppData (NSIS Setup)
+// override:false — keep values heal() already put into process.env
 dotenv.config({ path: getEnvPath() });
+// Second pass: file may still have had legacy if heal skipped; re-heal after load
+try {
+  healLocalhostRedirectEnv();
+} catch (e) {
+  console.warn("[config] heal after dotenv:", e.message);
+}
 
 function required(name, fallback) {
   const v = process.env[name] ?? fallback;

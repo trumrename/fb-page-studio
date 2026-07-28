@@ -10,9 +10,14 @@ import path from "path";
 import { config } from "../config.js";
 import { getEnvPath } from "../paths.js";
 import { isOauthRelayMode } from "./deployMode.js";
+import {
+  DEFAULT_OAUTH_RELAY_URL,
+  isLegacyOauthHost,
+  sanitizeRelayBase,
+} from "./customerEnv.js";
 
-/** Primary relay used when pack still has an old domain in .env */
-const PRIMARY_RELAY = "https://modelswiki.top";
+/** Only official relay — never fall back to ngrok / videoviral / handcraft */
+const PRIMARY_RELAY = DEFAULT_OAUTH_RELAY_URL;
 
 function writeEnvValues(envPath, values) {
   const exists = fs.existsSync(envPath);
@@ -30,16 +35,10 @@ function writeEnvValues(envPath, values) {
 }
 
 function normalizeBase(raw) {
-  let s = String(raw || "").trim().replace(/\/$/, "");
-  if (!s) return "";
-  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
-  try {
-    const u = new URL(s);
-    if (!u.hostname || u.hostname === "localhost" || u.hostname === "127.0.0.1") return "";
-    return `${u.protocol}//${u.host}`;
-  } catch {
-    return "";
-  }
+  const cleaned = sanitizeRelayBase(raw, "");
+  if (!cleaned) return "";
+  if (isLegacyOauthHost(cleaned)) return "";
+  return cleaned;
 }
 
 function candidateBases() {
@@ -48,22 +47,24 @@ function candidateBases() {
     const b = normalizeBase(v);
     if (b && !list.includes(b)) list.push(b);
   };
-  // Prefer live production domain so old packs (videoviral1 / ngrok) self-heal.
+  // Official domain first — ignore stale ngrok/videoviral in .env
   push(PRIMARY_RELAY);
-  push(process.env.OAUTH_RELAY_URL);
-  push(process.env.RELAY_PUBLIC_URL);
-  const bootstrap = String(process.env.OAUTH_RELAY_BOOTSTRAP || "").trim();
-  if (bootstrap) {
-    for (const part of bootstrap.split(/[,;\s]+/)) push(part);
+  // Only accept env relay if it is NOT a legacy host
+  if (!isLegacyOauthHost(process.env.OAUTH_RELAY_URL)) {
+    push(process.env.OAUTH_RELAY_URL);
   }
-  // Last: whatever was saved as redirect host (may be stale)
+  if (!isLegacyOauthHost(process.env.RELAY_PUBLIC_URL)) {
+    push(process.env.RELAY_PUBLIC_URL);
+  }
+  // Do NOT use FB_REDIRECT_URI host when it is legacy (handcraft/ngrok) —
+  // that used to re-poison sync after every boot.
   try {
     const redir = String(process.env.FB_REDIRECT_URI || config.facebook?.redirectUri || "").trim();
-    if (redir) push(new URL(redir).origin);
+    if (redir && !isLegacyOauthHost(redir)) push(new URL(redir).origin);
   } catch {
     /* ignore */
   }
-  return list;
+  return list.length ? list : [PRIMARY_RELAY];
 }
 
 async function fetchClientConfig(base) {

@@ -140,7 +140,7 @@ if (!fs.existsSync(bat)) {
       "@echo off",
       "chcp 65001 >nul",
       "echo Ngrok da tich hop trong EXE. Mo app → Kết nối Meta → dán token.",
-      "echo Domain: qgroup.ngrok.app",
+      "echo Domain: modelswiki.top (OAuth relay — khong dung ngrok)",
       "pause",
       "",
     ].join("\r\n"),

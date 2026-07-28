@@ -1,19 +1,88 @@
 /**
  * Canonical customer install env (Setup + portable pack).
- * OAuth redirect = HTTPS relay domain — never http://localhost for Facebook Live.
+ * OAuth ONLY via official relay: https://modelswiki.top
+ * Old domains (ngrok / videoviral / qgroup / handcraft / localhost public) are purged.
  */
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { getBundleRoot, getEnvPath, isPackaged } from "../paths.js";
 
+/** Chỉ domain OAuth chính thức — không fallback domain cũ */
 export const DEFAULT_OAUTH_RELAY_URL = "https://modelswiki.top";
 export const DEFAULT_FB_REDIRECT_URI = `${DEFAULT_OAUTH_RELAY_URL}/auth/facebook/callback`;
+export const DEFAULT_OAUTH_HOST = "modelswiki.top";
+
+/**
+ * Hosts / patterns from the pre-server era. Never use for Facebook OAuth.
+ * (ngrok free/paid, videoviral1, handcraft tunnel, qgroup, etc.)
+ */
+export const LEGACY_OAUTH_HOST_RE =
+  /ngrok|videoviral|chainityai|handcraft|qgroup|loca\.lt|serveo|trycloudflare|pagekite|cloudflared\.com|sslip\.io|nip\.io/i;
+
 /**
  * KHÔNG hardcode App ID trong bản phát hành.
  * Máy khách tự điền trong UI (Cấu hình lần đầu) hoặc nhận từ relay /api/apps.
  */
 export const DEFAULT_CUSTOMER_APP_ID = "";
+
+export function hostnameOfUrl(raw) {
+  try {
+    const s = String(raw || "").trim();
+    if (!s) return "";
+    const u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
+    return String(u.hostname || "")
+      .trim()
+      .toLowerCase();
+  } catch {
+    return String(raw || "")
+      .replace(/^https?:\/\//i, "")
+      .split("/")[0]
+      .split(":")[0]
+      .trim()
+      .toLowerCase();
+  }
+}
+
+/** True if host/URL is an obsolete pre-server OAuth endpoint */
+export function isLegacyOauthHost(raw) {
+  const host = hostnameOfUrl(raw);
+  if (!host) return false;
+  if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") return true;
+  return LEGACY_OAUTH_HOST_RE.test(host);
+}
+
+/** True if redirect_uri must be rewritten to official relay */
+export function isBrokenOrLegacyRedirect(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return true;
+  if (/^http:\/\//i.test(s)) return true; // Facebook Live needs HTTPS public
+  if (isLegacyOauthHost(s)) return true;
+  try {
+    const u = new URL(s);
+    if (!/\/auth\/facebook\/callback$/i.test(u.pathname.replace(/\/+$/, "") || "")) {
+      // bare origin without callback path is ok if host is official — normalize elsewhere
+    }
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+/** Reject legacy when picking a public relay URL for packs / sync */
+export function sanitizeRelayBase(raw, fallback = DEFAULT_OAUTH_RELAY_URL) {
+  const s = String(raw || "")
+    .trim()
+    .replace(/\/$/, "");
+  if (!s || isLegacyOauthHost(s)) return fallback.replace(/\/$/, "");
+  try {
+    const u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
+    if (isLegacyOauthHost(u.hostname)) return fallback.replace(/\/$/, "");
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return fallback.replace(/\/$/, "");
+  }
+}
 
 /** Bundled template locations (asar / resources / pack). */
 export function customerDefaultEnvCandidates() {
@@ -22,7 +91,6 @@ export function customerDefaultEnvCandidates() {
     path.join(root, "build", "customer-default.env"),
     path.join(root, "customer-default.env"),
     path.join(root, ".env.public"),
-    // electron-builder resources path when unpacked
     process.resourcesPath
       ? path.join(process.resourcesPath, "customer-default.env")
       : null,
@@ -43,7 +111,6 @@ export function readCustomerDefaultEnvText() {
       /* try next */
     }
   }
-  // Hard fallback — must stay HTTPS relay
   return [
     "PORT=3847",
     "APP_BASE_URL=http://127.0.0.1:3847",
@@ -76,6 +143,22 @@ function ensureEncryptionKey(text) {
   return out;
 }
 
+function patchEnvText(text, patch) {
+  let out = String(text || "");
+  const newline = out.includes("\r\n") ? "\r\n" : "\n";
+  for (const [key, value] of Object.entries(patch)) {
+    const safe = String(value ?? "");
+    if (/[\r\n]/.test(safe)) continue;
+    const pattern = new RegExp(`^(\\s*${key}\\s*=).*?$`, "m");
+    if (pattern.test(out)) {
+      out = out.replace(pattern, (_m, prefix) => `${prefix}${safe}`);
+    } else {
+      out += `${out && !out.endsWith("\n") && !out.endsWith("\r\n") ? newline : ""}${key}=${safe}${newline}`;
+    }
+  }
+  return out;
+}
+
 /**
  * Create .env on first run from:
  * 1) .env.public next to user dir
@@ -100,7 +183,6 @@ export function ensureCustomerEnvFile() {
     source = ".env.public";
   } else {
     text = readCustomerDefaultEnvText();
-    // Also drop .env.public for user reference
     try {
       fs.writeFileSync(besidePublic, text, "utf8");
     } catch {
@@ -109,14 +191,14 @@ export function ensureCustomerEnvFile() {
   }
 
   text = ensureEncryptionKey(text);
-  // Force relay HTTPS markers if template somehow had localhost (safety)
-  if (/FB_REDIRECT_URI=https?:\/\/(localhost|127\.0\.0\.1)/i.test(text)) {
-    text = text
-      .replace(/^FB_REDIRECT_URI=.*$/m, `FB_REDIRECT_URI=${DEFAULT_FB_REDIRECT_URI}`)
-      .replace(/^OAUTH_RELAY_URL=.*$/m, `OAUTH_RELAY_URL=${DEFAULT_OAUTH_RELAY_URL}`);
-    if (!/^OAUTH_RELAY=/m.test(text)) text += "\nOAUTH_RELAY=1\n";
-    else text = text.replace(/^OAUTH_RELAY=.*$/m, "OAUTH_RELAY=1");
-  }
+  // Always force official relay on brand-new file if template had junk
+  text = patchEnvText(text, {
+    OAUTH_RELAY: "1",
+    OAUTH_RELAY_URL: DEFAULT_OAUTH_RELAY_URL,
+    FB_REDIRECT_URI: DEFAULT_FB_REDIRECT_URI,
+    NGROK_AUTOSTART: "0",
+    APP_BASE_URL: "http://127.0.0.1:3847",
+  });
 
   fs.writeFileSync(envPath, text, "utf8");
   console.log(`[config] Created .env (${source}) → ${envPath}`);
@@ -124,54 +206,83 @@ export function ensureCustomerEnvFile() {
 }
 
 /**
- * Packaged installs that still have broken http://localhost redirect
- * (old first-run / wrong template) → heal to HTTPS relay.
- * Patch ONLY redirect/relay keys — never replace whole .env
- * (full rewrite previously wiped FB_APP_SECRET and broke login).
+ * Purge localhost + legacy pre-server domains (ngrok, videoviral, handcraft, qgroup…).
+ * Patch ONLY oauth/redirect/ngrok keys — never wipe App ID / secrets / encryption key.
+ *
+ * Runs for packaged installs always; for dev also when redirect is legacy
+ * (so local .env with handcraft/ngrok cannot keep breaking Connect).
  */
 export function healLocalhostRedirectEnv() {
   const envPath = getEnvPath();
   if (!fs.existsSync(envPath)) return { healed: false };
   let text = fs.readFileSync(envPath, "utf8");
   const redirect = (text.match(/^FB_REDIRECT_URI=(.*)$/m) || [])[1]?.trim() || "";
-  const isBad =
-    !redirect ||
-    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(redirect) ||
-    /^http:\/\//i.test(redirect);
+  const relayUrl = (text.match(/^OAUTH_RELAY_URL=(.*)$/m) || [])[1]?.trim() || "";
+  const appBase = (text.match(/^APP_BASE_URL=(.*)$/m) || [])[1]?.trim() || "";
+  const redir2 = (text.match(/^FB_REDIRECT_URI_2=(.*)$/m) || [])[1]?.trim() || "";
 
-  if (!isBad) return { healed: false, reason: "redirect_ok" };
+  // APP_BASE_URL must stay 127.0.0.1 — only bad when it is a PUBLIC old tunnel host
+  const appBaseIsPublicLegacy =
+    Boolean(appBase) &&
+    !/127\.0\.0\.1|localhost/i.test(appBase) &&
+    LEGACY_OAUTH_HOST_RE.test(hostnameOfUrl(appBase) || appBase);
 
-  // Don't auto-heal pure dev trees unless packaged
-  if (!isPackaged() && process.env.FB_FORCE_HEAL_REDIRECT !== "1") {
-    return { healed: false, reason: "dev_skip" };
+  const needsPurge =
+    isBrokenOrLegacyRedirect(redirect) ||
+    (relayUrl && isLegacyOauthHost(relayUrl)) ||
+    appBaseIsPublicLegacy ||
+    (redir2 && isBrokenOrLegacyRedirect(redir2));
+
+  if (!needsPurge) {
+    // Still force OAUTH_RELAY=1 + NGROK off if redirect already official but flags wrong
+    const relayOff = !/^(1|true|yes|relay)$/i.test(
+      String((text.match(/^OAUTH_RELAY=(.*)$/m) || [])[1] || "").trim()
+    );
+    const ngrokOn = String((text.match(/^NGROK_AUTOSTART=(.*)$/m) || [])[1] || "").trim() === "1";
+    if (!relayOff && !ngrokOn) return { healed: false, reason: "redirect_ok" };
   }
 
+  // Tests / intentional offline: do not force official relay
+  if (String(process.env.OAUTH_RELAY_SYNC || "").trim() === "0") {
+    return { healed: false, reason: "sync_disabled" };
+  }
+  // Dev: only auto-heal when clearly legacy/broken (not custom HTTPS test domains)
+  if (!isPackaged() && process.env.FB_FORCE_HEAL_REDIRECT !== "1") {
+    if (!needsPurge) return { healed: false, reason: "dev_ok" };
+    // legacy/broken (ngrok/handcraft/…) → always heal even in dev
+  }
+
+  const port = (text.match(/^PORT=(.*)$/m) || [])[1]?.trim() || "3847";
   const patch = {
     OAUTH_RELAY: "1",
     OAUTH_RELAY_URL: DEFAULT_OAUTH_RELAY_URL,
     FB_REDIRECT_URI: DEFAULT_FB_REDIRECT_URI,
     NGROK_AUTOSTART: "0",
+    // Clear free-ngrok token so tool never prefers old tunnel mode
+    NGROK_AUTHTOKEN: "",
+    APP_BASE_URL: `http://127.0.0.1:${port}`,
   };
-  // Keep APP_BASE_URL local for portable EXE (never public relay domain)
-  const appBase = (text.match(/^APP_BASE_URL=(.*)$/m) || [])[1]?.trim() || "";
-  if (!appBase || !/127\.0\.0\.1|localhost/i.test(appBase)) {
-    const port = (text.match(/^PORT=(.*)$/m) || [])[1]?.trim() || "3847";
-    patch.APP_BASE_URL = `http://127.0.0.1:${port}`;
+  if (redir2 || /^FB_REDIRECT_URI_2=/m.test(text)) {
+    patch.FB_REDIRECT_URI_2 = DEFAULT_FB_REDIRECT_URI;
   }
 
-  const newline = text.includes("\r\n") ? "\r\n" : "\n";
-  for (const [key, value] of Object.entries(patch)) {
-    const pattern = new RegExp(`^(\\s*${key}\\s*=).*?$`, "m");
-    if (pattern.test(text)) {
-      text = text.replace(pattern, (_m, prefix) => `${prefix}${value}`);
-    } else {
-      text += `${text && !text.endsWith("\n") && !text.endsWith("\r\n") ? newline : ""}${key}=${value}${newline}`;
-    }
-  }
-  // Ensure encryption key exists without regenerating if present
+  text = patchEnvText(text, patch);
   text = ensureEncryptionKey(text);
 
+  try {
+    fs.copyFileSync(envPath, `${envPath}.bak-legacy-oauth`);
+  } catch {
+    /* ignore */
+  }
   fs.writeFileSync(envPath, text, "utf8");
-  console.log(`[config] Healed redirect keys → ${DEFAULT_FB_REDIRECT_URI} (secrets preserved)`);
-  return { healed: true, path: envPath };
+
+  // Live process.env so current boot uses new values without restart race
+  for (const [k, v] of Object.entries(patch)) {
+    process.env[k] = v;
+  }
+
+  console.log(
+    `[config] Purged legacy OAuth domain → ${DEFAULT_FB_REDIRECT_URI} (App ID/secret kept; backup .bak-legacy-oauth)`
+  );
+  return { healed: true, path: envPath, reason: needsPurge ? "legacy_domain" : "flags" };
 }

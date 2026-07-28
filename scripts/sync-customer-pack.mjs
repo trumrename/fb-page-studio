@@ -100,9 +100,15 @@ function pickCustomerRelayUrl() {
       return "";
     })();
   const s = String(raw || "").trim().replace(/\/$/, "");
-  if (!s || /ngrok|localhost|127\.0\.0\.1|example\.com/i.test(s)) {
-    if (s && /ngrok/i.test(s)) {
-      console.warn(`[pack-customer] Bo qua relay ngrok (${s}) → ${DEFAULT_CUSTOMER_RELAY}`);
+  // Chặn toàn bộ domain cũ (trước khi dùng server modelswiki.top)
+  if (
+    !s ||
+    /ngrok|localhost|127\.0\.0\.1|example\.com|videoviral|chainityai|handcraft|qgroup|loca\.lt|serveo/i.test(
+      s
+    )
+  ) {
+    if (s) {
+      console.warn(`[pack-customer] Bo qua relay domain cũ (${s}) → ${DEFAULT_CUSTOMER_RELAY}`);
     }
     return DEFAULT_CUSTOMER_RELAY;
   }

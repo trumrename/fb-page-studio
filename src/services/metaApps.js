@@ -11,6 +11,12 @@ import fs from "fs";
 import path from "path";
 import { config } from "../config.js";
 import { isOauthRelayMode } from "./deployMode.js";
+import {
+  DEFAULT_FB_REDIRECT_URI,
+  DEFAULT_OAUTH_RELAY_URL,
+  isLegacyOauthHost,
+  isBrokenOrLegacyRedirect,
+} from "./customerEnv.js";
 
 function scopesFromEnv(envKey, fallback) {
   const raw = process.env[envKey];
@@ -27,19 +33,14 @@ function isLocalRedirectUri(u) {
   const s = String(u || "").trim();
   if (!s) return true;
   if (/localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(s)) return true;
-  // Facebook Valid OAuth Redirect URIs must be HTTPS in production/relay
-  if (/^http:\/\//i.test(s) && !/localhost|127\.0\.0\.1/i.test(s)) {
-    /* allow plain http only for true local */
-  }
   return false;
 }
 
 /**
  * Facebook OAuth redirect_uri MUST match exactly in:
  *  1) dialog/oauth  2) code → token exchange  3) Meta App whitelist
- * Relay mode: always public HTTPS (modelswiki.top), never 127.0.0.1 / localhost.
- *
- * Prefer live process.env over frozen config (config loads once at boot).
+ * Relay mode: always official HTTPS (modelswiki.top).
+ * Legacy hosts (ngrok/videoviral/handcraft/qgroup) are NEVER used.
  */
 export function resolveOauthRedirectUri(explicit) {
   const envUri = String(process.env.FB_REDIRECT_URI || "").trim();
@@ -53,33 +54,35 @@ export function resolveOauthRedirectUri(explicit) {
   const relayOn = isOauthRelayMode();
 
   const asCallback = (baseOrFull) => {
-    const s = String(baseOrFull || "").trim().replace(/\/$/, "");
+    const s = String(baseOrFull || "").trim().replace(/\/+$/, "");
     if (!s) return "";
+    if (isLegacyOauthHost(s) || isBrokenOrLegacyRedirect(s)) return "";
     if (/\/auth\/facebook\/callback$/i.test(s)) return s;
-    // bare domain or origin
     try {
       const u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
+      if (isLegacyOauthHost(u.hostname)) return "";
       return `${u.origin}/auth/facebook/callback`;
     } catch {
-      return `${s}/auth/facebook/callback`;
+      return "";
     }
   };
 
-  if (relayOn) {
-    // Good: explicit/env already public HTTPS callback
-    if (raw && !isLocalRedirectUri(raw) && /^https:\/\//i.test(raw)) {
-      return asCallback(raw);
-    }
-    if (relayBase) return asCallback(relayBase);
-    // Last resort: keep raw if any
-    if (raw && !isLocalRedirectUri(raw)) return asCallback(raw);
-    console.warn(
-      "[oauth] OAUTH_RELAY=1 nhưng thiếu OAUTH_RELAY_URL / FB_REDIRECT_URI HTTPS — Connect sẽ fail"
-    );
+  // Always refuse legacy domains — even if still sitting in .env
+  if (raw && !isLocalRedirectUri(raw) && !isLegacyOauthHost(raw) && /^https:\/\//i.test(raw)) {
+    const ok = asCallback(raw);
+    if (ok) return ok;
+  }
+  if (relayBase && !isLegacyOauthHost(relayBase)) {
+    const ok = asCallback(relayBase);
+    if (ok) return ok;
   }
 
-  if (raw) return raw;
-  if (relayBase) return asCallback(relayBase);
+  if (relayOn) {
+    return DEFAULT_FB_REDIRECT_URI;
+  }
+
+  // Non-relay dev only: local callback
+  if (raw && !isLegacyOauthHost(raw) && isLocalRedirectUri(raw)) return raw;
   return `http://127.0.0.1:${config.port || 3847}/auth/facebook/callback`;
 }
 

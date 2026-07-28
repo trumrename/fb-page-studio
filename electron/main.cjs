@@ -275,28 +275,37 @@ function seedCustomerEnvInUserDir(userDir) {
     return;
   }
 
-  // Heal broken http://localhost redirect on existing installs (Setup customers).
-  // Patch ONLY oauth/redirect keys — never rewrite whole .env (would wipe secrets → login fail).
+  // Purge localhost + legacy pre-server domains (ngrok/videoviral/handcraft/qgroup).
+  // Patch ONLY oauth keys — never rewrite whole .env (would wipe secrets → login fail).
   try {
     let cur = fs.readFileSync(envPath, "utf8");
-    const m = cur.match(/^FB_REDIRECT_URI=(.*)$/m);
-    const redirect = (m && m[1] ? m[1] : "").trim();
-    const bad =
+    const redirect = String((cur.match(/^FB_REDIRECT_URI=(.*)$/m) || [])[1] || "").trim();
+    const relay = String((cur.match(/^OAUTH_RELAY_URL=(.*)$/m) || [])[1] || "").trim();
+    const appBase = String((cur.match(/^APP_BASE_URL=(.*)$/m) || [])[1] || "").trim();
+    const legacyTunnelRe =
+      /ngrok|videoviral|chainityai|handcraft|qgroup|loca\.lt|serveo|trycloudflare/i;
+    const badRedirect =
       !redirect ||
+      /^http:\/\//i.test(redirect) ||
       /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(redirect) ||
-      /^http:\/\//i.test(redirect);
-    if (!bad) return;
+      legacyTunnelRe.test(redirect) ||
+      (relay && legacyTunnelRe.test(relay));
+    const appBaseBad = appBase && legacyTunnelRe.test(appBase);
+    if (!badRedirect && !appBaseBad) {
+      if (/^OAUTH_RELAY=1\s*$/m.test(cur) && /^NGROK_AUTOSTART=0\s*$/m.test(cur)) return;
+    }
 
+    const port = String((cur.match(/^PORT=(.*)$/m) || [])[1] || "3847").trim() || "3847";
     const patch = {
       OAUTH_RELAY: "1",
       OAUTH_RELAY_URL: "https://modelswiki.top",
       FB_REDIRECT_URI: "https://modelswiki.top/auth/facebook/callback",
       NGROK_AUTOSTART: "0",
+      NGROK_AUTHTOKEN: "",
+      APP_BASE_URL: `http://127.0.0.1:${port}`,
     };
-    const appBase = String((cur.match(/^APP_BASE_URL=(.*)$/m) || [])[1] || "").trim();
-    if (!appBase || !/127\.0\.0\.1|localhost/i.test(appBase)) {
-      const port = String((cur.match(/^PORT=(.*)$/m) || [])[1] || "3847").trim() || "3847";
-      patch.APP_BASE_URL = `http://127.0.0.1:${port}`;
+    if (/^FB_REDIRECT_URI_2=/m.test(cur)) {
+      patch.FB_REDIRECT_URI_2 = "https://modelswiki.top/auth/facebook/callback";
     }
     const newline = cur.includes("\r\n") ? "\r\n" : "\n";
     for (const [key, value] of Object.entries(patch)) {
@@ -309,12 +318,12 @@ function seedCustomerEnvInUserDir(userDir) {
     }
     cur = withKey(cur);
     try {
-      fs.copyFileSync(envPath, `${envPath}.bak-localhost`);
+      fs.copyFileSync(envPath, `${envPath}.bak-legacy-oauth`);
     } catch {
       /* ignore */
     }
     fs.writeFileSync(envPath, cur, "utf8");
-    log("healed .env redirect keys → modelswiki.top (secrets preserved)", envPath);
+    log("purged legacy OAuth domain → modelswiki.top (secrets preserved)", envPath);
   } catch (e) {
     log("heal .env fail", e.message);
   }

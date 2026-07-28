@@ -296,8 +296,20 @@ check(
 const customerEnv = read("src/services/customerEnv.js");
 check(
   "heal broken redirect preserves secrets (patch keys only)",
-  customerEnv.includes("secrets preserved") ||
+  customerEnv.includes("App ID/secret kept") ||
+    customerEnv.includes("secrets preserved") ||
     (customerEnv.includes("Patch ONLY") && customerEnv.includes("FB_REDIRECT_URI"))
+);
+check(
+  "legacy pre-server OAuth domains are blacklisted",
+  customerEnv.includes("LEGACY_OAUTH_HOST_RE") &&
+    customerEnv.includes("handcraft") &&
+    customerEnv.includes("videoviral") &&
+    customerEnv.includes("isLegacyOauthHost")
+);
+check(
+  "resolveOauthRedirectUri refuses legacy hosts",
+  meta.includes("isLegacyOauthHost") && meta.includes("DEFAULT_FB_REDIRECT_URI")
 );
 check(
   "setup domain keeps APP_BASE_URL local in OAuth relay mode",

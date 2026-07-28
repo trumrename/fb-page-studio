@@ -37,6 +37,8 @@ const child = spawn(process.execPath, [path.join(root, "src", "server.js")], {
     // Không sync Meta App từ modelswiki — test first-run “chưa cấu hình”
     OAUTH_RELAY: "0",
     OAUTH_RELAY_URL: "",
+    OAUTH_RELAY_SYNC: "0",
+    FB_FORCE_HEAL_REDIRECT: "0",
   },
 });
 

@@ -61,16 +61,13 @@ function hostFromUrl(raw) {
 let relayHost = hostFromUrl(
   srcEnv.OAUTH_RELAY_URL || srcEnv.RELAY_PUBLIC_URL || srcEnv.FB_REDIRECT_URI || ""
 );
-// Dev .env may still use ngrok — pack nội bộ mặc định domain chính thức
-if (
-  !relayHost ||
-  relayHost.includes("ngrok") ||
-  relayHost === "localhost" ||
-  relayHost === "127.0.0.1"
-) {
-  if (relayHost && relayHost.includes("ngrok")) {
+// Dev .env may still use ngrok/videoviral/handcraft — luôn ép domain chính thức
+const LEGACY_HOST =
+  /ngrok|videoviral|chainityai|handcraft|qgroup|loca\.lt|serveo|localhost|127\.0\.0\.1/i;
+if (!relayHost || LEGACY_HOST.test(relayHost)) {
+  if (relayHost && LEGACY_HOST.test(relayHost)) {
     console.warn(
-      `[pack-internal] Bo qua redirect ngrok (${relayHost}) → dung ${DEFAULT_OAUTH_HOST}`
+      `[pack-internal] Bo qua domain cũ (${relayHost}) → dung ${DEFAULT_OAUTH_HOST}`
     );
   }
   relayHost = DEFAULT_OAUTH_HOST;

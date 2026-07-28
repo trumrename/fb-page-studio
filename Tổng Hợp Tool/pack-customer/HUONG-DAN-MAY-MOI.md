@@ -1,55 +1,45 @@
-# FB Page Studio — hướng dẫn máy mới (v1.2.21)
+# FB Page Studio — hướng dẫn máy mới
 
-## 1. Chỉ cần EXE (hoặc ZIP gói khách)
+## 1. Cài / chạy EXE
 
-Tải đúng asset GitHub:
+- **Setup (khuyên dùng):** `FB-Page-Studio-Setup-v*.exe`
+- **Portable:** `FB-Page-Studio-Desktop-v*.exe`
 
-- `FB-Page-Studio-Desktop-v1.2.21.exe` **hoặc**
-- `FB-Page-Studio-v1.2.21-Windows.zip` (giải nén rồi chạy EXE)
+Lần đầu tool tự tạo `.env` + `data` (Setup: `%APPDATA%\fb-page-studio`).
 
-**Không** tải `Source code.zip`.
+## 2. Thiết lập Meta (không dùng Ngrok)
 
-```text
-D:\FB-Page-Studio\
-  FB-Page-Studio-Desktop-v1.2.21.exe
-```
+1. Mở tool  
+2. **Bước 1 · Thiết lập Meta App** → nhập **App ID** (+ Secret để đẩy lên server relay)  
+3. **Lưu**  
+4. Meta Developers → Valid OAuth Redirect URIs **chỉ**:
 
-Lần đầu tool tự tạo `.env` và `data` cạnh EXE. Cập nhật: đặt EXE mới **cùng thư mục** để giữ license, token, lịch.
+   ```text
+   https://modelswiki.top/auth/facebook/callback
+   ```
 
-## 2. Thiết lập lần đầu trong tool
+5. Chọn Chrome profile đã login Facebook → **Connect App 1 / App 2**  
+6. Giữ app mở khi Connect; làm hết 2FA **một lần** (không F5 / không bấm Connect 2 lần)
 
-1. Mở EXE  
-2. **Kết nối Meta → Bước 1** → App ID / App Secret  
-3. **Lưu cấu hình máy mới**  
-4. Dán **Authtoken Ngrok** → **Lưu token & mở server**  
-5. Meta Developers: whitelist  
-   `https://qgroup.ngrok.app/auth/facebook/callback`  
-6. Chọn Chrome profile đã login Facebook → **Connect**  
-7. **License** → dán key admin (hoặc trial)
+OAuth đi qua **server relay** `modelswiki.top` — **không** cần Ngrok trên máy khách.
 
-Nếu Ngrok báo domain đang dùng máy khác: mở [dashboard.ngrok.com/endpoints](https://dashboard.ngrok.com/endpoints) → Stop endpoint → mở lại Ngrok trong app.
+## 3. Domain / env cũ (đã bỏ)
 
-## 3. Hai kiểu đăng
+Không còn dùng:
 
-| Chế độ | Ai canh giờ |
-|--------|-------------|
-| **Đăng trực tiếp Local** | Tool/PC phải bật; đến giờ gọi API đăng ngay |
-| **Hẹn giờ Facebook** | Facebook giữ scheduled post; app có thể tắt sau khi tạo lịch |
+- `*.ngrok-free.dev` / `qgroup.ngrok.app`
+- `videoviral1.chainityai.com` / handcraft tunnel
+- `http://localhost/.../callback` làm redirect Facebook Live
 
-## 4. Giờ từng page
+Tool tự **purge** domain cũ trong `.env` về `modelswiki.top` khi mở app.
 
-Meta đã **gỡ** `page_fans_online`. Mode “giờ tích cực” dùng **giờ ưa thích** (preset VN 9,12,19,21 nếu chưa đặt). Có thể gán hàng loạt trong màn hẹn giờ.
+## 4. Hai kiểu đăng
 
-## 5. Tiến trình & lỗi
+| Chế độ | Ghi chú |
+|--------|---------|
+| **Đăng trực tiếp Local** | PC/tool phải bật |
+| **Hẹn giờ Facebook** | Facebook giữ lịch sau khi tạo |
 
-- Theo dõi % job, từng task  
-- Task lỗi hiện **đúng nội dung lỗi**  
-- Nút **Đăng lại** từng task / cả list lỗi  
+## 5. Cập nhật
 
-## 6. Cập nhật app
-
-Banner / nút version → Cập nhật ngay. Chỉ thay EXE; giữ `data\`, license, `.env`.
-
-## 7. File gói khách
-
-Xem `MANIFEST.txt` và `README-KHACH.txt`. Không cần BAT Ngrok riêng.
+Tải Setup/Portable mới cùng thư mục (portable) hoặc cài đè Setup — data/license giữ nguyên.
