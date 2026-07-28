@@ -123,6 +123,8 @@ try {
       app1_name: "Clean Runtime App",
       app1_id: "123456789012345",
       app1_secret: "clean-runtime-secret-1234567890",
+      // Offline unit test — production UI never sends this
+      skip_relay_push: true,
     }),
   });
   const savedSetup = await savedSetupResponse.json();

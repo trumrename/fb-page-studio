@@ -86,8 +86,10 @@
           <h2 class="panel-hd">Bước 1 · Thiết lập Meta App <span class="badge" id="firstRunBadge">Đang kiểm tra</span></h2>
           <div class="panel-body">
             <p class="muted" style="margin-top:0">
-              Nhập <b>App ID + App Secret</b> → bấm Lưu: tool đẩy lên <b>server relay</b> (secret chỉ nằm server).
-              Máy này và máy khác mở lại tool sẽ <b>tự nhận App ID</b> (không cần sửa .env tay).
+              Nhập <b>App ID + App Secret</b> → <b>Lưu + đẩy App lên server</b>.
+              Tool tự: (1) đẩy secret lên <code>modelswiki.top</code>, (2) ghi <code>.env</code> sạch trên máy
+              (chỉ App ID + redirect — <b>không</b> lưu secret, <b>không</b> Ngrok).
+              Không sửa file tay.
             </p>
             <div class="toolbar" style="align-items:end">
               <label style="flex:1;min-width:180px">Tên App 1
@@ -97,7 +99,7 @@
                 <input id="setupApp1Id" type="text" inputmode="numeric" placeholder="Dãy số App ID" autocomplete="off" />
               </label>
               <label style="flex:1;min-width:260px">App Secret 1
-                <input id="setupApp1Secret" type="password" placeholder="Nhập để đẩy lên server; để trống = không đẩy" autocomplete="new-password" />
+                <input id="setupApp1Secret" type="password" placeholder="Bắt buộc lần đầu — đẩy server, không lưu máy" autocomplete="new-password" />
               </label>
             </div>
             <div class="first-run-app2" style="margin-top:.9rem;padding-top:.75rem;border-top:1px solid var(--border)">
@@ -120,11 +122,12 @@
                 </label>
               </div>
             </div>
-            <div class="toolbar" style="align-items:end;margin-top:.75rem">
-              <label style="flex:1;min-width:280px">Token đẩy lên server <span class="muted">(cùng RELAY_ADMIN_TOKEN trên VPS)</span>
-                <input id="setupRelayAdminToken" type="password" placeholder="RELAY_ADMIN_TOKEN — lưu 1 lần trên máy này" autocomplete="new-password" />
+            <details style="margin-top:.65rem">
+              <summary class="muted" style="cursor:pointer;font-size:.82rem">Tuỳ chọn · Token admin server (chỉ khi server yêu cầu)</summary>
+              <label style="display:block;margin-top:.45rem;max-width:420px">RELAY_ADMIN_TOKEN
+                <input id="setupRelayAdminToken" type="password" placeholder="Để trống nếu server RELAY_ALLOW_OPEN_REGISTER=1" autocomplete="new-password" />
               </label>
-            </div>
+            </details>
             <div class="actions" style="margin-top:.65rem">
               <button class="btn-ok" id="btnSaveFirstRun" type="button">Lưu + đẩy App lên server</button>
             </div>

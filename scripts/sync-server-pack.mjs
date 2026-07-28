@@ -173,7 +173,7 @@ fs.writeFileSync(
     "  3. Cai Node.js LTS neu chua: https://nodejs.org",
     "  4. Chuot phai CAI-MAY-SERVER.bat -> Run as administrator",
     "  5. Dien FB_APP_ID + FB_APP_SECRET",
-    "  6. Login Cloudflare (chon chainityai.com)",
+    "  6. Login Cloudflare (chon zone domain modelswiki.top)",
     "",
     "HANG NGAY: CHAY-SERVER-TAT-CA.bat",
     "",

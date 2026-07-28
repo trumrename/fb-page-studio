@@ -253,6 +253,13 @@ check(
 );
 check("UI first-run Meta App setup without manual .env", index.includes("firstRunSetup") && index.includes("setupApp1Id") && index.includes("setupApp1Secret") && index.includes("btnSaveFirstRun") && index.includes('"/api/setup/first-run"'));
 check("API first-run setup creates encryption key and updates live config", apiRoutes.includes('"/setup/first-run"') && apiRoutes.includes("crypto.randomBytes(32)") && apiRoutes.includes("config.facebook.appId = app1Id") && apiRoutes.includes("config.tokenEncryptionKey = encryptionKey"));
+check(
+  "first-run pushes App to relay and keeps local env secret-empty",
+  apiRoutes.includes("pushMetaAppToRelay") &&
+    apiRoutes.includes('FB_APP_SECRET: ""') &&
+    apiRoutes.includes("DEFAULT_FB_REDIRECT_URI") &&
+    apiRoutes.includes("Không đẩy được App 1 lên server")
+);
 check(".env writes reject line injection and preserve literal dollar signs", apiRoutes.includes("không được chứa xuống dòng") && apiRoutes.includes("(_match, prefix)") && apiRoutes.includes("Authtoken Ngrok không đúng định dạng"));
 check("UI meta app badge on accounts", index.includes("meta_app") || index.includes("appLabel"));
 check("UI exports Page information per App", index.includes("btnExportDailyPages") && index.includes("/api/reports/daily/pages"));
