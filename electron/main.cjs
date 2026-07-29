@@ -499,34 +499,51 @@ function clearStaleChromeSingletonLocks(userDataDir) {
 }
 
 /**
- * Build launch plan so Portable and system Chrome never cross user-data roots.
- * Root cause of "tool login OK, hand-open Portable flashes": tool used to spawn
- * App\Chrome-bin\chrome.exe with --user-data-dir=%LocalAppData%\...\User Data
- * (system), locking the wrong tree / leaving Singleton* that Portable launcher
- * then cannot open.
+ * Launch plan for Chrome.
+ *
+ * Chrome Portable (customer machines):
+ *   ALWAYS use ChromePortable.exe + URL only.
+ *   Never spawn App\Chrome-bin\chrome.exe with --user-data-dir — wrong Data path
+ *   or Singleton clear → empty profile, FB logout, "extensions gone".
+ *   PortableApps launcher owns the real user-data tree.
+ *
+ * System Chrome:
+ *   openExternal or chrome.exe URL only — never --user-data-dir.
  */
 function resolveChromeLaunchPlan(rawExe, browserEnv) {
-  const local = process.env.LOCALAPPDATA || "";
-  const systemUserData = path.join(local, "Google", "Chrome", "User Data");
-  const profile = String(browserEnv.FB_CHROME_PROFILE || process.env.FB_CHROME_PROFILE || "").trim();
-  let configuredData = String(
-    browserEnv.FB_CHROME_USER_DATA_DIR || process.env.FB_CHROME_USER_DATA_DIR || ""
-  ).trim();
-
   let exe = rawExe;
   const portableRoot =
     findChromePortableRoot(rawExe) ||
     (/chromeportable\.exe$/i.test(rawExe) ? path.dirname(path.resolve(rawExe)) : null);
+  const isPortable = Boolean(
+    portableRoot || /chromeportable/i.test(rawExe) || /chromeportable/i.test(exe)
+  );
 
-  // Prefer real chrome.exe under Portable for reliable --profile-directory.
-  if (/chromeportable\.exe$/i.test(rawExe) || portableRoot) {
+  if (isPortable) {
     const root = portableRoot || path.dirname(path.resolve(rawExe));
-    const realChrome = [
-      path.join(root, "App", "Chrome-bin", "chrome.exe"),
-      path.join(root, "App", "Chrome", "chrome.exe"),
-      path.join(root, "chrome.exe"),
-    ].find((candidate) => fs.existsSync(candidate));
-    if (realChrome) exe = realChrome;
+    const launcher = path.join(root, "ChromePortable.exe");
+    // Prefer official launcher — it sets Data\profile correctly
+    if (fs.existsSync(launcher)) {
+      exe = launcher;
+    } else {
+      const realChrome = [
+        path.join(root, "App", "Chrome-bin", "chrome.exe"),
+        path.join(root, "App", "Chrome", "chrome.exe"),
+        path.join(root, "chrome.exe"),
+      ].find((c) => fs.existsSync(c));
+      if (realChrome) exe = realChrome;
+    }
+    // NO --user-data-dir, NO --profile-directory, NO Singleton clear
+    log("chrome portable plan: launcher URL-only", exe);
+    return {
+      exe,
+      args: [],
+      isChrome: true,
+      userData: "",
+      profile: "",
+      portable: true,
+      reuseRunning: isChromeProcessRunning(),
+    };
   }
 
   const base = path.basename(exe).toLowerCase();
@@ -535,98 +552,24 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
     return { exe, args: [], isChrome: false, userData: "", profile: "", portable: false };
   }
 
-  let userData = "";
-  const isPortable = Boolean(portableRoot || /chromeportable/i.test(rawExe) || /chromeportable/i.test(exe));
-
-  if (isPortable) {
-    const portableData = findPortableUserDataDir(portableRoot || path.dirname(path.resolve(rawExe)));
-    // Explicit config only when it is still a real profile root and NOT system Chrome.
-    // Mis-saved system User Data + portable chrome.exe is the main "flash then exit" root cause.
-    if (configuredData && looksLikeChromeUserDataRoot(configuredData)) {
-      const resolved = path.resolve(configuredData);
-      const root = portableRoot ? path.resolve(portableRoot) : "";
-      const underPortable =
-        root &&
-        (resolved.toLowerCase() === root.toLowerCase() ||
-          resolved.toLowerCase().startsWith(root.toLowerCase() + path.sep));
-      const isSystem =
-        resolved.toLowerCase() === systemUserData.toLowerCase() ||
-        /[\\/]google[\\/]chrome[\\/]user data$/i.test(resolved);
-      if (isSystem) {
-        log("chrome portable: ignore system FB_CHROME_USER_DATA_DIR, use", portableData);
-        userData = portableData;
-      } else if (underPortable || looksLikeChromeUserDataRoot(resolved)) {
-        userData = resolved;
-      } else {
-        log("chrome portable: configured data invalid, use", portableData);
-        userData = portableData;
-      }
-    } else {
-      userData = portableData;
-    }
-  } else {
-    userData = configuredData
-      ? path.resolve(configuredData)
-      : systemUserData;
-  }
-
-  // CRITICAL: System Chrome already running → do NOT pass --user-data-dir /
-  // --profile-directory. Spawning chrome.exe with those flags can open a
-  // secondary empty profile (looks like "all extensions deleted") or fight
-  // Singleton lock and restart Chrome with wrong profile.
-  // Only Portable Chrome needs explicit user-data-dir (separate tree).
-  if (!isPortable && isChromeProcessRunning()) {
-    log(
-      "chrome system: already running — open URL only (reuse session/extensions)"
-    );
-    return {
-      exe,
-      args: [],
-      isChrome: true,
-      userData: "",
-      profile: "",
-      portable: false,
-      reuseRunning: true,
-    };
-  }
-
-  // Stale locks only for Portable tree when Chrome fully stopped.
-  // Never clear Singleton* under system "Google\\Chrome\\User Data".
-  if (userData && isPortable) {
-    clearStaleChromeSingletonLocks(userData);
-  }
-
-  const args = [];
-  if (isPortable && userData) {
-    args.push(`--user-data-dir=${userData}`);
-    if (profile) args.push(`--profile-directory=${profile}`);
-  } else if (!isPortable && profile && !isChromeProcessRunning()) {
-    // System Chrome stopped: optional profile only (no user-data-dir override)
-    args.push(`--profile-directory=${profile}`);
-  }
-
+  // System Chrome: never force profile flags
   return {
     exe,
-    args,
+    args: [],
     isChrome: true,
-    userData: isPortable ? userData : "",
-    profile: isPortable || profile ? profile : "",
-    portable: isPortable,
+    userData: "",
+    profile: "",
+    portable: false,
+    reuseRunning: isChromeProcessRunning(),
   };
 }
 
 /**
  * Open OAuth / external URL without breaking Facebook browser sessions.
  *
- * ROOT CAUSE of "post/delete then FB logout + captcha + extensions gone":
- * spawning chrome.exe with --user-data-dir / --profile-directory while user
- * already has Chrome open forces a second profile instance, cookie jar fights,
- * Singleton lock thrash → Meta sees new device fingerprint → logout + captcha.
- *
- * SAFE policy (system Chrome):
- *  1) Prefer shell.openExternal → OS reuses running Chrome/Edge session (no flags)
- *  2) Or chrome.exe <url> ONLY with zero profile flags when Chrome already running
- * Portable Chrome (explicit path): keep isolated user-data-dir (never system).
+ * Customer Chrome Portable: ChromePortable.exe <url> only (launcher keeps Data).
+ * System Chrome: shell.openExternal (OS reuses running session).
+ * Never --user-data-dir / --profile-directory on either path (causes FB logout).
  */
 function openInPreferredBrowser(url) {
   let parsed;
@@ -650,47 +593,41 @@ function openInPreferredBrowser(url) {
       ""
   ).trim();
 
-  // Explicit Portable path only — never force system Chrome flags
+  // Customer machines: explicit Chrome Portable path in .env / setup
   if (forcedPath && fs.existsSync(forcedPath)) {
     const plan = resolveChromeLaunchPlan(forcedPath, browserEnv);
-    if (plan.portable) {
-      try {
-        spawn(plan.exe, [...plan.args, url], {
-          detached: true,
-          stdio: "ignore",
-          windowsHide: false,
-        }).unref();
-        log(
-          "openInPreferredBrowser portable",
-          plan.exe,
-          plan.userData || "(data)",
-          url.slice(0, 80)
-        );
-        return true;
-      } catch (e) {
-        log("openInPreferredBrowser portable fail", e.message);
-      }
-    }
-    // Forced system chrome.exe: URL only, never --user-data-dir
-    if (/chrome\.exe$/i.test(forcedPath) && !/portable/i.test(forcedPath)) {
-      try {
-        spawn(forcedPath, [url], {
-          detached: true,
-          stdio: "ignore",
-          windowsHide: false,
-        }).unref();
-        log("openInPreferredBrowser system chrome URL-only", forcedPath, url.slice(0, 80));
-        return true;
-      } catch (e) {
-        log("openInPreferredBrowser system chrome fail", e.message);
-      }
+    try {
+      // URL only — portable launcher OR system chrome reuses existing process
+      spawn(plan.exe, [url], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
+        cwd: plan.portable
+          ? path.dirname(plan.exe)
+          : undefined,
+      }).unref();
+      log(
+        "openInPreferredBrowser",
+        plan.portable ? "portable-launcher" : "forced-exe",
+        plan.exe,
+        plan.reuseRunning ? "reuse-running" : "cold-start",
+        url.slice(0, 80)
+      );
+      return true;
+    } catch (e) {
+      log("openInPreferredBrowser forced fail", e.message);
     }
   }
 
-  // SAFEST default: OS handler reuses whatever browser/session user already has
+  // No portable path configured: OS default (does not steal Portable session)
   shell
     .openExternal(url)
-    .then(() => log("openInPreferredBrowser openExternal (preserve FB session)", url.slice(0, 80)))
+    .then(() =>
+      log(
+        "openInPreferredBrowser openExternal (preserve session)",
+        url.slice(0, 80)
+      )
+    )
     .catch((e) => log("openExternal fail", e.message));
   return true;
 }
