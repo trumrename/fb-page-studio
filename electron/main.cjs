@@ -521,20 +521,47 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
       : systemUserData;
   }
 
-  // Stale locks only when Chrome is fully stopped (safe).
-  if (userData) clearStaleChromeSingletonLocks(userData);
+  // CRITICAL: System Chrome already running → do NOT pass --user-data-dir /
+  // --profile-directory. Spawning chrome.exe with those flags can open a
+  // secondary empty profile (looks like "all extensions deleted") or fight
+  // Singleton lock and restart Chrome with wrong profile.
+  // Only Portable Chrome needs explicit user-data-dir (separate tree).
+  if (!isPortable && isChromeProcessRunning()) {
+    log(
+      "chrome system: already running — open URL only (reuse session/extensions)"
+    );
+    return {
+      exe,
+      args: [],
+      isChrome: true,
+      userData: "",
+      profile: "",
+      portable: false,
+      reuseRunning: true,
+    };
+  }
 
-  const args = [
-    ...(userData ? [`--user-data-dir=${userData}`] : []),
-    ...(profile ? [`--profile-directory=${profile}`] : []),
-  ];
+  // Stale locks only for Portable tree when Chrome fully stopped.
+  // Never clear Singleton* under system "Google\\Chrome\\User Data".
+  if (userData && isPortable) {
+    clearStaleChromeSingletonLocks(userData);
+  }
+
+  const args = [];
+  if (isPortable && userData) {
+    args.push(`--user-data-dir=${userData}`);
+    if (profile) args.push(`--profile-directory=${profile}`);
+  } else if (!isPortable && profile && !isChromeProcessRunning()) {
+    // System Chrome stopped: optional profile only (no user-data-dir override)
+    args.push(`--profile-directory=${profile}`);
+  }
 
   return {
     exe,
     args,
     isChrome: true,
-    userData,
-    profile,
+    userData: isPortable ? userData : "",
+    profile: isPortable || profile ? profile : "",
     portable: isPortable,
   };
 }
@@ -836,6 +863,14 @@ function createWindow() {
     }
   });
 
+  // Close to tray — do not destroy process while bulk jobs may still run.
+  mainWindow.on("close", (e) => {
+    if (!app.isQuitting && tray) {
+      e.preventDefault();
+      mainWindow.hide();
+      log("window hide to tray (job backend stays alive)");
+    }
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -982,10 +1017,22 @@ if (!gotLock) {
   });
 
   app.on("before-quit", () => {
+    app.isQuitting = true;
     shutdownBackend();
   });
 
-  app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit();
+  // Tray app: closing the window must NOT kill backend mid-job (bulk delete).
+  // User exits only via tray "Thoát".
+  app.on("window-all-closed", (e) => {
+    if (process.platform === "darwin") return;
+    if (tray) {
+      // keep process alive in tray
+      return;
+    }
+    app.quit();
+  });
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 }

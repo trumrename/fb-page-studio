@@ -31,9 +31,45 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function emit(job) {
+/** Throttle SSE during heavy delete (prevents Electron renderer OOM → app exit). */
+const emitThrottle = new Map(); // jobId → { lastAt, timer }
+
+function emit(job, opts = {}) {
+  const force = !!opts.force;
+  const id = job?.id;
+  if (!id) {
+    bus.emit("job", job);
+    return;
+  }
+  const runningHeavy = ["listing", "running", "rate_limited"].includes(job.status);
+  if (!force && runningHeavy) {
+    const st = emitThrottle.get(id) || { lastAt: 0, timer: null };
+    const now = Date.now();
+    // At most ~2 UI updates / second while deleting thousands of posts
+    if (now - st.lastAt < 500) {
+      if (!st.timer) {
+        st.timer = setTimeout(() => {
+          st.timer = null;
+          st.lastAt = Date.now();
+          emitThrottle.set(id, st);
+          bus.emit("job", job);
+          bus.emit(`job:${id}`, job);
+        }, 500);
+        emitThrottle.set(id, st);
+      }
+      return;
+    }
+    st.lastAt = now;
+    emitThrottle.set(id, st);
+  } else {
+    const st = emitThrottle.get(id);
+    if (st?.timer) {
+      clearTimeout(st.timer);
+      st.timer = null;
+    }
+  }
   bus.emit("job", job);
-  bus.emit(`job:${job.id}`, job);
+  bus.emit(`job:${id}`, job);
 }
 
 function trimJobs() {
@@ -574,9 +610,64 @@ function recompute(job) {
   }
 }
 
+/**
+ * Serialize job for API/SSE.
+ * While job is running: strip heavy failed_posts arrays (only keep counts + top errors)
+ * so 7k-delete progress cannot OOM Electron renderer and kill the whole app.
+ */
 function snapshot(job) {
-  // Drop internal non-serializable maps
-  const copy = { ...job, _postMeta: undefined };
+  const finished = ["ok", "fail", "partial", "stopped"].includes(job.status);
+  const pages = (job.pages || []).map((p) => {
+    const fails = Array.isArray(p.failed_posts) ? p.failed_posts : [];
+    if (finished) {
+      return {
+        ...p,
+        // Cap payload even when done (full list still via /report + CSV)
+        failed_posts: fails.slice(0, 200),
+        failed_truncated: fails.length > 200 || !!p.failed_truncated,
+        failed_total: fails.length,
+      };
+    }
+    return {
+      page_row_id: p.page_row_id,
+      page_id: p.page_id,
+      page_name: p.page_name,
+      status: p.status,
+      listed: p.listed || 0,
+      matched: p.matched || 0,
+      ok: p.ok || 0,
+      fail: p.fail || 0,
+      error: p.error || null,
+      error_summary: (p.error_summary || []).slice(0, 5),
+      failed_posts: [], // filled only when finished
+      failed_total: fails.length,
+      edge_stats: p.edge_stats || null,
+    };
+  });
+  const copy = {
+    id: job.id,
+    kind: job.kind,
+    status: job.status,
+    dry_run: job.dry_run,
+    created_at: job.created_at,
+    finished_at: job.finished_at,
+    stop_requested: job.stop_requested,
+    options: job.options,
+    pages,
+    progress: job.progress,
+    recent: (job.recent || []).slice(0, 40),
+    notifications: (job.notifications || []).slice(0, 10),
+    report: finished && job.report
+      ? {
+          ...job.report,
+          // Cap fail links in SSE; full list via /failed.csv
+          failed_posts: (job.report.failed_posts || []).slice(0, 200),
+          failed_truncated:
+            (job.report.failed_posts || []).length > 200 ||
+            !!job.report.failed_truncated,
+        }
+      : null,
+  };
   return JSON.parse(JSON.stringify(copy));
 }
 
@@ -1176,7 +1267,7 @@ async function runDeleteJob(jobId) {
   });
   // free meta maps
   job._postMeta = null;
-  emit(job);
+  emit(job, { force: true });
 }
 
 /** CSV string of failed posts for a finished job */

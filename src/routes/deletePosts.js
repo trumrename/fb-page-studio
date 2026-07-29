@@ -169,12 +169,15 @@ router.get("/jobs/:id/stream", (req, res) => {
   const send = (j) => {
     res.write(`data: ${JSON.stringify(j)}\n\n`);
   };
+  // Always send slim snapshot (never raw job — OOM after bulk delete)
   send(job);
 
-  const off = onDeleteJob(req.params.id, (j) => {
+  const off = onDeleteJob(req.params.id, () => {
     try {
-      send(j);
-      if (["ok", "fail", "partial", "stopped"].includes(j.status)) {
+      const snap = getDeleteJob(req.params.id);
+      if (!snap) return;
+      send(snap);
+      if (["ok", "fail", "partial", "stopped"].includes(snap.status)) {
         res.write("event: done\ndata: {}\n\n");
       }
     } catch {
