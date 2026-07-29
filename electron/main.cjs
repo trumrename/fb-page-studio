@@ -329,6 +329,55 @@ function seedCustomerEnvInUserDir(userDir) {
   }
 }
 
+/**
+ * Disable dangerous Chrome flags that force --user-data-dir on SYSTEM Chrome.
+ * That pattern logs users out of Facebook (new fingerprint / session fight)
+ * and can look like "all extensions deleted" (empty secondary profile).
+ * Only patches FB_CHROME_* lines — never OAuth secrets.
+ */
+function healChromeSessionEnv(userDir) {
+  if (!userDir) return;
+  const envPath = path.join(userDir, ".env");
+  if (!fs.existsSync(envPath)) return;
+  try {
+    let cur = fs.readFileSync(envPath, "utf8");
+    const orig = cur;
+    const dataDir = String(
+      (cur.match(/^FB_CHROME_USER_DATA_DIR=(.*)$/m) || [])[1] || ""
+    ).trim();
+    const isSystemData =
+      /google[\\/]chrome[\\/]user data/i.test(dataDir) ||
+      /\\user data$/i.test(dataDir);
+    if (isSystemData || dataDir) {
+      // Comment out system (or any) forced user-data-dir — openExternal is safer
+      cur = cur.replace(
+        /^FB_CHROME_USER_DATA_DIR=.*$/m,
+        "# FB_CHROME_USER_DATA_DIR=  # disabled: was causing FB logout / captcha after tool actions"
+      );
+    }
+    if (/^FB_CHROME_PROFILE=\s*\S+/m.test(cur)) {
+      cur = cur.replace(
+        /^FB_CHROME_PROFILE=.*$/m,
+        "# FB_CHROME_PROFILE=  # disabled: force profile breaks running Chrome session"
+      );
+    }
+    if (cur !== orig) {
+      try {
+        fs.copyFileSync(envPath, `${envPath}.bak-chrome-session`);
+      } catch {
+        /* ignore */
+      }
+      fs.writeFileSync(envPath, cur, "utf8");
+      log(
+        "healed Chrome session flags (removed forced User Data / profile) → prevent FB logout",
+        envPath
+      );
+    }
+  } catch (e) {
+    log("healChromeSessionEnv fail", e.message);
+  }
+}
+
 // Browser choice is read fresh before each OAuth launch. The setup page can
 // therefore change profile without restarting the desktop application.
 function readBrowserEnv() {
@@ -567,10 +616,17 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
 }
 
 /**
- * Open OAuth / external URL in a real browser that keeps Facebook login cookies.
- * Prefer Chrome (user usually has tabs logged in) → Edge → Firefox → system default.
+ * Open OAuth / external URL without breaking Facebook browser sessions.
  *
- * Portable-safe: bind --user-data-dir to ChromePortable\Data\… never system User Data.
+ * ROOT CAUSE of "post/delete then FB logout + captcha + extensions gone":
+ * spawning chrome.exe with --user-data-dir / --profile-directory while user
+ * already has Chrome open forces a second profile instance, cookie jar fights,
+ * Singleton lock thrash → Meta sees new device fingerprint → logout + captcha.
+ *
+ * SAFE policy (system Chrome):
+ *  1) Prefer shell.openExternal → OS reuses running Chrome/Edge session (no flags)
+ *  2) Or chrome.exe <url> ONLY with zero profile flags when Chrome already running
+ * Portable Chrome (explicit path): keep isolated user-data-dir (never system).
  */
 function openInPreferredBrowser(url) {
   let parsed;
@@ -580,62 +636,63 @@ function openInPreferredBrowser(url) {
     log("openInPreferredBrowser blocked invalid URL");
     return false;
   }
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
+  if (!["http:", "https:"].includes(parsed.protocol)) {
     log("openInPreferredBrowser blocked protocol", parsed.protocol);
     return false;
   }
   url = parsed.toString();
   const browserEnv = readBrowserEnv();
-  const candidates = [];
-  if (browserEnv.BROWSER_PATH || process.env.BROWSER_PATH) {
-    candidates.push(browserEnv.BROWSER_PATH || process.env.BROWSER_PATH);
-  }
-  if (browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH) {
-    candidates.push(browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH);
-  }
+  const forcedPath = String(
+    browserEnv.BROWSER_PATH ||
+      process.env.BROWSER_PATH ||
+      browserEnv.FB_BROWSER_PATH ||
+      process.env.FB_BROWSER_PATH ||
+      ""
+  ).trim();
 
-  const local = process.env.LOCALAPPDATA || "";
-  const pf = process.env.ProgramFiles || "C:\\Program Files";
-  const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
-
-  candidates.push(
-    path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
-    path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
-    path.join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
-    path.join(local, "Google", "Chrome Beta", "Application", "chrome.exe"),
-    path.join(pf86, "Microsoft", "Edge", "Application", "msedge.exe"),
-    path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
-    path.join(pf, "Mozilla Firefox", "firefox.exe"),
-    path.join(pf86, "Mozilla Firefox", "firefox.exe")
-  );
-
-  for (const rawExe of candidates) {
-    if (!rawExe || !fs.existsSync(rawExe)) continue;
-    try {
-      const plan = resolveChromeLaunchPlan(rawExe, browserEnv);
-      const args = plan.isChrome ? [...plan.args, url] : [url];
-      spawn(plan.exe, args, {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: false,
-      }).unref();
-      log(
-        "openInPreferredBrowser",
-        plan.exe,
-        plan.portable ? "portable" : "system",
-        plan.userData ? `userData=${plan.userData}` : "userData=default",
-        plan.profile ? `profile=${plan.profile}` : "profile=auto",
-        url.slice(0, 80)
-      );
-      return true;
-    } catch (e) {
-      log("openInPreferredBrowser fail", rawExe, e.message);
+  // Explicit Portable path only — never force system Chrome flags
+  if (forcedPath && fs.existsSync(forcedPath)) {
+    const plan = resolveChromeLaunchPlan(forcedPath, browserEnv);
+    if (plan.portable) {
+      try {
+        spawn(plan.exe, [...plan.args, url], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: false,
+        }).unref();
+        log(
+          "openInPreferredBrowser portable",
+          plan.exe,
+          plan.userData || "(data)",
+          url.slice(0, 80)
+        );
+        return true;
+      } catch (e) {
+        log("openInPreferredBrowser portable fail", e.message);
+      }
+    }
+    // Forced system chrome.exe: URL only, never --user-data-dir
+    if (/chrome\.exe$/i.test(forcedPath) && !/portable/i.test(forcedPath)) {
+      try {
+        spawn(forcedPath, [url], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: false,
+        }).unref();
+        log("openInPreferredBrowser system chrome URL-only", forcedPath, url.slice(0, 80));
+        return true;
+      } catch (e) {
+        log("openInPreferredBrowser system chrome fail", e.message);
+      }
     }
   }
 
-  shell.openExternal(url).catch((e) => log("openExternal fail", e.message));
-  log("openInPreferredBrowser fallback shell.openExternal");
-  return false;
+  // SAFEST default: OS handler reuses whatever browser/session user already has
+  shell
+    .openExternal(url)
+    .then(() => log("openInPreferredBrowser openExternal (preserve FB session)", url.slice(0, 80)))
+    .catch((e) => log("openExternal fail", e.message));
+  return true;
 }
 
 function waitForServer(port, timeoutMs = 60000) {
@@ -695,6 +752,11 @@ function startBackend() {
   } catch (e) {
     log("seedCustomerEnv fail", e.message);
   }
+  try {
+    healChromeSessionEnv(USER_DIR);
+  } catch (e) {
+    log("healChromeSessionEnv fail", e.message);
+  }
 
   const envPath = path.join(USER_DIR, ".env");
   if (!fs.existsSync(envPath)) {
@@ -706,6 +768,12 @@ function startBackend() {
     log("Loaded .env PORT", String(PORT));
     log("FB_REDIRECT_URI", process.env.FB_REDIRECT_URI || "");
     log("OAUTH_RELAY", process.env.OAUTH_RELAY || "");
+    log(
+      "Chrome session",
+      process.env.FB_CHROME_USER_DATA_DIR
+        ? `FORCED data=${process.env.FB_CHROME_USER_DATA_DIR}`
+        : "openExternal (safe)"
+    );
   }
 
   const serverJs = path.join(appRoot(), "src", "server.js");
