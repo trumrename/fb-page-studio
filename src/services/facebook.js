@@ -685,6 +685,200 @@ export async function deletePagePost(postId, pageToken, opts = {}) {
 }
 
 /**
+ * Delete Page profile picture (avatar) + cover photo via Graph.
+ *
+ * Meta: cannot DELETE /{page}/picture edge — must DELETE photo nodes.
+ * - Cover: GET /{page}?fields=cover → cover.cover_id → DELETE /{id}
+ * - Avatar: photos type=profile + albums "Profile Pictures" / "Cover Photos"
+ *
+ * Needs pages_manage_posts (+ often pages_manage_metadata / MANAGE task).
+ * Some Pages/New Page Experience may refuse; errors collected, not thrown.
+ *
+ * @returns {Promise<{cover:string|null, avatar:string|null, photos_deleted:number, errors:string[]}>}
+ */
+export async function deletePageAvatarAndCover(pageId, pageToken, opts = {}) {
+  const pid = String(pageId || "").trim();
+  if (!pid) throw new Error("Thiếu page_id");
+  const graphOpts = {
+    metaAppKey: opts.metaAppKey,
+    appSecret: opts.appSecret,
+  };
+  const out = {
+    cover: null,
+    avatar: null,
+    photos_deleted: 0,
+    errors: /** @type {string[]} */ ([]),
+  };
+  const photoIds = new Set();
+
+  const tryDel = async (id, label) => {
+    const sid = String(id || "").trim();
+    if (!sid || photoIds.has(sid)) return false;
+    photoIds.add(sid);
+    try {
+      await withRateLimitRetry(
+        () => graphDelete(`/${sid}`, pageToken, graphOpts),
+        {
+          maxAttempts: 3,
+          shouldStop: opts.shouldStop,
+          label: `DELETE ${label} ${sid}`,
+          onRateLimit: opts.onRateLimit,
+        }
+      );
+      out.photos_deleted++;
+      return true;
+    } catch (e) {
+      if (isAlreadyGoneGraphError(e)) {
+        out.photos_deleted++;
+        return true;
+      }
+      out.errors.push(`${label} ${sid}: ${e.message || e}`);
+      return false;
+    }
+  };
+
+  // ── Cover from page fields ──
+  try {
+    const page = await withRateLimitRetry(
+      () =>
+        graphGet(
+          `/${pid}`,
+          pageToken,
+          { fields: "id,cover,picture" },
+          graphOpts
+        ),
+      {
+        maxAttempts: 3,
+        shouldStop: opts.shouldStop,
+        label: `page cover fields ${pid}`,
+        onRateLimit: opts.onRateLimit,
+      }
+    );
+    const coverId =
+      page?.cover?.cover_id ||
+      page?.cover?.id ||
+      page?.cover?.photo_id ||
+      null;
+    if (coverId) {
+      out.cover = (await tryDel(coverId, "cover")) ? "deleted" : "fail";
+    } else {
+      out.cover = "none";
+    }
+  } catch (e) {
+    out.cover = "error";
+    out.errors.push(`cover fields: ${e.message || e}`);
+  }
+
+  // ── Profile / cover albums + type=profile photos ──
+  const collectAlbumPhotos = async (albumId, label) => {
+    try {
+      let data = await withRateLimitRetry(
+        () =>
+          graphGet(
+            `/${albumId}/photos`,
+            pageToken,
+            { fields: "id,created_time", limit: 100 },
+            graphOpts
+          ),
+        {
+          maxAttempts: 3,
+          shouldStop: opts.shouldStop,
+          label: `album photos ${label}`,
+          onRateLimit: opts.onRateLimit,
+        }
+      );
+      let pages = 0;
+      while (data && pages < 20) {
+        pages++;
+        for (const ph of data.data || []) {
+          if (ph?.id) await tryDel(ph.id, label);
+        }
+        if (!data.paging?.next) break;
+        data = await withRateLimitRetry(
+          () => graphFetchAbsolute(data.paging.next, pageToken, graphOpts),
+          {
+            maxAttempts: 3,
+            shouldStop: opts.shouldStop,
+            onRateLimit: opts.onRateLimit,
+          }
+        );
+      }
+    } catch (e) {
+      out.errors.push(`album ${label}: ${e.message || e}`);
+    }
+  };
+
+  try {
+    let albums = await withRateLimitRetry(
+      () =>
+        graphGet(
+          `/${pid}/albums`,
+          pageToken,
+          { fields: "id,name,type,count", limit: 50 },
+          graphOpts
+        ),
+      {
+        maxAttempts: 3,
+        shouldStop: opts.shouldStop,
+        label: `page albums ${pid}`,
+        onRateLimit: opts.onRateLimit,
+      }
+    );
+    const rows = albums?.data || [];
+    for (const al of rows) {
+      const name = String(al.name || "").toLowerCase();
+      const type = String(al.type || "").toLowerCase();
+      const isProfile =
+        type === "profile" ||
+        /profile picture|ảnh đại diện|anh dai dien/i.test(name);
+      const isCover =
+        type === "cover" ||
+        /cover photo|ảnh bìa|anh bia|cover photos/i.test(name);
+      if (isProfile || isCover) {
+        await collectAlbumPhotos(al.id, isCover ? "cover-album" : "profile-album");
+      }
+    }
+  } catch (e) {
+    out.errors.push(`albums: ${e.message || e}`);
+  }
+
+  // type=profile edge (when supported)
+  try {
+    let data = await withRateLimitRetry(
+      () =>
+        graphGet(
+          `/${pid}/photos`,
+          pageToken,
+          { type: "profile", fields: "id", limit: 50 },
+          graphOpts
+        ),
+      {
+        maxAttempts: 2,
+        shouldStop: opts.shouldStop,
+        label: `photos type=profile ${pid}`,
+        onRateLimit: opts.onRateLimit,
+      }
+    );
+    for (const ph of data?.data || []) {
+      if (ph?.id) await tryDel(ph.id, "profile-photo");
+    }
+  } catch (e) {
+    // often unsupported — ignore quietly
+    if (!/unsupported|nonexisting|#100/i.test(String(e.message || e))) {
+      out.errors.push(`photos profile: ${e.message || e}`);
+    }
+  }
+
+  if (out.photos_deleted > 0 && out.avatar !== "deleted") {
+    out.avatar = "deleted";
+  } else if (!out.avatar) {
+    out.avatar = out.photos_deleted ? "deleted" : "none_or_blocked";
+  }
+
+  return out;
+}
+
+/**
  * List posts published by the Page (paginated).
  * Prefer /published_posts (page-authored). Falls back to /posts then /feed.
  *
@@ -776,11 +970,28 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
       },
     ];
   } else {
-    // wipe: 3 non-overlapping high-value edges (Meta: avoid overlapping data)
+    // wipe: page-authored + timeline feed (shares / visitor) + media
+    // Meta: feed = posts by Page + visitor posts + public tags on Page
     edges = [
       { path: `/${pid}/published_posts`, fieldSets: postFieldSets, kind: "published_posts" },
+      // Page share posts + visitor wall posts (not always in published_posts)
+      { path: `/${pid}/feed`, fieldSets: postFieldSets, kind: "feed" },
+      { path: `/${pid}/posts`, fieldSets: postFieldSets, kind: "posts" },
       { path: `/${pid}/videos`, fieldSets: videoFieldSets, kind: "videos" },
       { path: `/${pid}/video_reels`, fieldSets: videoFieldSets, kind: "video_reels" },
+      {
+        path: `/${pid}/photos`,
+        fieldSets: ["id,created_time,link,name", "id,created_time", "id"],
+        kind: "photos",
+      },
+      // Public posts that tagged this Page
+      { path: `/${pid}/tagged`, fieldSets: postFieldSets, kind: "tagged" },
+      // Visitor posts (may  #100 on some pages — soft-fail via edge loop)
+      {
+        path: `/${pid}/visitor_posts`,
+        fieldSets: postFieldSets,
+        kind: "visitor_posts",
+      },
     ];
   }
 
@@ -968,7 +1179,7 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
   }
 
   // After #4: only keep going on empty list; otherwise soft-skip (pass-2 delete re-lists)
-  const essentialKinds = new Set(["published_posts", "videos"]);
+  const essentialKinds = new Set(["published_posts", "feed", "videos"]);
 
   for (const edge of edges) {
     if (opts.shouldStop?.()) break;

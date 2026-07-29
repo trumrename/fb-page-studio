@@ -9,6 +9,7 @@ import { decryptToken } from "./crypto.js";
 import {
   listPagePosts,
   deletePagePostsFast,
+  deletePageAvatarAndCover,
   sleep,
 } from "./facebook.js";
 import {
@@ -101,15 +102,41 @@ export function toUnixSeconds(raw) {
   if (!s) return null;
   if (/^\d{9,12}$/.test(s)) return Number(s);
   if (/^\d{13,}$/.test(s)) return Math.floor(Number(s) / 1000);
+  // YYYY-MM-DD only → treat as UTC date start (caller should prefer client local unix)
+  const dateOnly = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    return Math.floor(
+      Date.UTC(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]), 0, 0, 0) /
+        1000
+    );
+  }
   const t = Date.parse(s);
   if (!Number.isFinite(t)) return null;
   return Math.floor(t / 1000);
 }
 
 /**
+ * «Đến ngày» semantics: if until falls on exactly 00:00:00 (common when user
+ * picks a calendar day without time), expand to 23:59:59 of that UTC day so
+ * we delete through that calendar day instead of "before midnight only".
+ * Client should already send end-of-day local unix; this is a server safety net.
+ * Pass expand=false to keep exact timestamp.
+ */
+export function normalizeUntilUnix(raw, { expandMidnight = true } = {}) {
+  let u = toUnixSeconds(raw);
+  if (u == null || !Number.isFinite(u)) return null;
+  if (!expandMidnight) return u;
+  // Exactly midnight UTC or local-ish (mod 86400 === 0) → end of that day
+  if (u % 86400 === 0) {
+    u = u + 86400 - 1; // 23:59:59 same day
+  }
+  return u;
+}
+
+/**
  * Client-side time filter (Graph since/until is unreliable on /videos / reels).
  * - since: keep posts with created_time >= since (inclusive)
- * - until: keep posts with created_time <= until (inclusive end of selected second)
+ * - until: keep posts with created_time <= until (inclusive)
  * Posts without created_time: drop when any time filter is set (safer than deleting outside range).
  */
 export function postInTimeRange(post, sinceUnix, untilUnix) {
@@ -128,7 +155,12 @@ export function postInTimeRange(post, sinceUnix, untilUnix) {
 
 export function filterPostsByOptions(posts, opts = {}) {
   const sinceU = toUnixSeconds(opts.since);
-  const untilU = toUnixSeconds(opts.until);
+  const untilU =
+    opts.until != null && opts.until !== ""
+      ? normalizeUntilUnix(opts.until, {
+          expandMidnight: opts.until_exact !== true,
+        })
+      : null;
   let out = Array.isArray(posts) ? posts : [];
   if (sinceU != null || untilU != null) {
     out = out.filter((p) => postInTimeRange(p, sinceU, untilU));
@@ -139,15 +171,29 @@ export function filterPostsByOptions(posts, opts = {}) {
   return out;
 }
 
-/** True when date/keyword filters mean we must NOT run unbounded multi-pass wipe. */
+/** True when date/keyword filters are active (must never delete outside range). */
 export function hasContentFilters(opts = {}) {
   return Boolean(
     opts.keyword ||
       toUnixSeconds(opts.since) != null ||
-      toUnixSeconds(opts.until) != null ||
+      normalizeUntilUnix(opts.until) != null ||
       (Array.isArray(opts.explicit_post_ids) && opts.explicit_post_ids.length) ||
       (Array.isArray(opts.post_ids) && opts.post_ids.length)
   );
+}
+
+/** Human label for log / UI */
+export function formatFilterRange(opts = {}) {
+  const s = toUnixSeconds(opts.since);
+  const u = normalizeUntilUnix(opts.until, {
+    expandMidnight: opts.until_exact !== true,
+  });
+  const fmt = (sec) =>
+    sec == null
+      ? "—"
+      : new Date(sec * 1000).toLocaleString("vi-VN", { hour12: false });
+  if (s == null && u == null) return "không giới hạn ngày (full wipe)";
+  return `từ ${fmt(s)} → đến ${fmt(u)} (chỉ xóa trong khoảng)`;
 }
 
 /** Build a human-openable Facebook URL for a post id. */
@@ -323,10 +369,32 @@ export function startDeleteJob(opts = {}) {
     opts.adaptive !== false &&
     opts.adaptive !== 0 &&
     String(opts.adaptive).toLowerCase() !== "false";
+  const listModeRaw = String(opts.list_mode ?? opts.listMode ?? "wipe").toLowerCase();
   const listMode =
-    String(opts.list_mode ?? opts.listMode ?? "wipe").toLowerCase() === "full"
-      ? "full"
-      : "wipe";
+    listModeRaw === "full" || listModeRaw === "deep" ? "full" : "wipe";
+  // Normalize dates ONCE at job start — never re-read raw body later
+  const sinceNorm = toUnixSeconds(opts.since ?? opts.since_unix);
+  const untilNorm = normalizeUntilUnix(opts.until ?? opts.until_unix, {
+    expandMidnight: opts.until_exact !== true && opts.untilExact !== true,
+  });
+  // Avatar+cover: default ON when no date/keyword (full clean); off when filtering by day
+  // unless user explicitly checks the box.
+  const explicitBranding =
+    opts.delete_branding === true ||
+    opts.deleteBranding === true ||
+    opts.delete_avatar_cover === true;
+  const explicitBrandingOff =
+    opts.delete_branding === false ||
+    opts.deleteBranding === false ||
+    opts.delete_avatar_cover === false;
+  const hasDateOrKw = Boolean(
+    sinceNorm != null ||
+      untilNorm != null ||
+      (opts.keyword && String(opts.keyword).trim())
+  );
+  const deleteBranding = explicitBrandingOff
+    ? false
+    : explicitBranding || !hasDateOrKw;
   const job = {
     id: nanoid(10),
     kind: "delete_posts",
@@ -336,9 +404,11 @@ export function startDeleteJob(opts = {}) {
     finished_at: null,
     stop_requested: false,
     options: {
-      since: opts.since || null,
-      until: opts.until || null,
+      since: sinceNorm,
+      until: untilNorm,
+      until_exact: opts.until_exact === true || opts.untilExact === true,
       keyword: opts.keyword || null,
+      delete_branding: deleteBranding,
       // 0 = không giới hạn (xóa full text+ảnh+video+reel). UI mặc định 0 hoặc số lớn.
       max_posts: (() => {
         const n = Number(opts.max_posts ?? opts.maxPosts);
@@ -607,13 +677,21 @@ async function listOnePage(job, pageState, toDelete) {
         });
       }
     } else {
-      const sinceU = toUnixSeconds(job.options.since);
-      const untilU = toUnixSeconds(job.options.until);
+      // Always use job-normalized unix (set at start) — never raw UI strings
+      const sinceU = job.options.since;
+      const untilU = job.options.until;
+      if (sinceU != null || untilU != null) {
+        pushRecent(
+          job,
+          `${page.name}: lọc ngày ${formatFilterRange(job.options)}`
+        );
+      }
       const posts = await listPagePosts(page.page_id, page.page_token, {
         maxPosts: job.options.max_posts || 0,
         since: sinceU ?? undefined,
         until: untilU ?? undefined,
         metaAppKey: page.meta_app_key,
+        // wipe = published + feed(share/visitor) + videos + photos; full = all edges
         listMode: job.options.list_mode || "wipe",
         shouldStop: () => job.stop_requested,
         onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
@@ -633,17 +711,18 @@ async function listOnePage(job, pageState, toDelete) {
       pageState.edge_stats = posts._edgeStats || null;
       if (posts._edgeStats) {
         const parts = Object.entries(posts._edgeStats)
-          .filter(([, n]) => n > 0)
+          .filter(([, n]) => typeof n === "number" && n > 0)
           .map(([k, n]) => `${k}:${n}`)
           .join(", ");
         if (parts) {
           pushRecent(job, `${page.name} · edges: ${parts}`);
         }
       }
-      // Client filter: Graph often ignores since/until on /videos & reels
+      // HARD filter again (Graph often ignores since/until on /videos & reels)
       const filtered = filterPostsByOptions(posts, {
         since: sinceU,
         until: untilU,
+        until_exact: true, // already normalized
         keyword: job.options.keyword,
       });
       const dropped =
@@ -651,9 +730,10 @@ async function listOnePage(job, pageState, toDelete) {
       if (dropped > 0 && (sinceU != null || untilU != null || job.options.keyword)) {
         pushRecent(
           job,
-          `${page.name}: bỏ ${dropped} object ngoài khoảng ngày/keyword (lọc local)`
+          `${page.name}: bỏ ${dropped} object NGOÀI khoảng ngày/keyword — không xóa`
         );
       }
+      // Absolute safety: never delete ids that fail time check
       pageState.matched = filtered.length;
       ids = filtered.map((p) => p.id);
       for (const p of filtered) {
@@ -759,15 +839,13 @@ async function deleteOnePage(job, pageState, toDelete) {
       onProgress: onDelProgress,
     });
 
-    // Pass 2+3: re-list + delete leftovers (videos/reels often only on /videos)
-    // ONLY true full wipe: no keyword, no date range, no explicit ids.
-    // Bug fixed: previously multi-pass re-listed WITHOUT since/until → xóa hết
-    // kể cả bài sau "đến ngày" đã chọn.
-    const fullWipe =
-      !hasContentFilters({
-        ...job.options,
-        explicit_post_ids: job.explicit_post_ids,
-      }) &&
+    // Pass 2+3: re-list leftovers. ALWAYS re-apply date filter.
+    // (Old bug: multi-pass without since/until → xóa hết sau «đến ngày».)
+    const dateLocked = hasContentFilters({
+      ...job.options,
+      explicit_post_ids: job.explicit_post_ids,
+    });
+    const multiPass =
       !job.explicit_post_ids?.length &&
       (job.options.max_posts === 0 || job.options.max_posts >= 5000);
 
@@ -801,35 +879,35 @@ async function deleteOnePage(job, pageState, toDelete) {
       };
     }
 
-    if (fullWipe && !job.stop_requested) {
+    if (multiPass && !job.stop_requested) {
       for (let pass = 2; pass <= 3; pass++) {
         if (job.stop_requested) break;
         try {
           pushRecent(
             job,
-            `${page.name}: quét lại pass ${pass} (videos/reels/photos)…`
+            `${page.name}: quét lại pass ${pass}${dateLocked ? " (giữ lọc ngày)" : ""}…`
           );
-          const sinceU = toUnixSeconds(job.options.since);
-          const untilU = toUnixSeconds(job.options.until);
+          const sinceU = job.options.since;
+          const untilU = job.options.until;
           const againRaw = await listPagePosts(page.page_id, page.page_token, {
             maxPosts: 0,
             since: sinceU ?? undefined,
             until: untilU ?? undefined,
             metaAppKey: page.meta_app_key,
-            // Pass 2+: still wipe edges only (videos leftovers) unless user chose full
-            listMode: job.options.list_mode || "wipe",
+            listMode: pass >= 3 ? "full" : job.options.list_mode || "wipe",
             shouldStop: () => job.stop_requested,
             onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
           });
-          // Safety: never multi-pass-delete outside date filter
+          // HARD: never multi-pass-delete outside date/keyword filter
           const again = filterPostsByOptions(againRaw || [], {
             since: sinceU,
             until: untilU,
+            until_exact: true,
             keyword: job.options.keyword,
           });
           if (againRaw?._edgeStats) {
             const parts = Object.entries(againRaw._edgeStats)
-              .filter(([, n]) => n > 0)
+              .filter(([, n]) => typeof n === "number" && n > 0)
               .map(([k, n]) => `${k}:${n}`)
               .join(", ");
             if (parts) pushRecent(job, `${page.name} pass ${pass} edges: ${parts}`);
@@ -844,19 +922,18 @@ async function deleteOnePage(job, pageState, toDelete) {
           if (!stillThere.length) {
             pushRecent(
               job,
-              `${page.name}: pass ${pass} — hết object list được`
+              `${page.name}: pass ${pass} — hết object trong filter`
             );
             break;
           }
           pushRecent(
             job,
-            `${page.name}: pass ${pass} còn ${stillThere.length} → xóa tiếp`
+            `${page.name}: pass ${pass} còn ${stillThere.length} → xóa tiếp${dateLocked ? " (trong khoảng ngày)" : ""}`
           );
           pageState._ok_base = result.ok || 0;
           const rPass = await deletePagePostsFast(stillThere, page.page_token, {
             useBatch: job.options.use_batch,
             concurrency: job.options.concurrency,
-            // Re-scan pass: keep high ceiling; adaptive still protects #4
             batchParallel: Math.max(
               2,
               Math.min(12, job.options.batch_parallel || 6)
@@ -875,6 +952,45 @@ async function deleteOnePage(job, pageState, toDelete) {
             `${page.name}: pass ${pass} bỏ qua — ${ePass.message || ePass}`
           );
         }
+      }
+    }
+
+    // Avatar + cover: when option on AND (full wipe OR user checked while knowing date filter)
+    // If date filter active, still allow if user explicitly checked delete_branding
+    const brandingOk =
+      job.options.delete_branding && !job.stop_requested;
+    if (brandingOk) {
+      try {
+        pushRecent(job, `${page.name}: xóa avatar + ảnh bìa…`);
+        const br = await deletePageAvatarAndCover(
+          page.page_id,
+          page.page_token,
+          {
+            metaAppKey: page.meta_app_key,
+            shouldStop: () => job.stop_requested,
+            onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
+          }
+        );
+        pageState.branding = br;
+        const bits = [];
+        if (br.cover) bits.push(`cover:${br.cover}`);
+        if (br.avatar) bits.push(`avatar:${br.avatar}`);
+        if (br.photos_deleted) bits.push(`ảnh:${br.photos_deleted}`);
+        pushRecent(
+          job,
+          `${page.name}: branding ${bits.join(" · ") || "không xóa được (quyền/API)"}`
+        );
+        if (br.errors?.length) {
+          pushRecent(
+            job,
+            `${page.name}: branding note — ${br.errors.slice(0, 2).join("; ")}`
+          );
+        }
+      } catch (eBr) {
+        pushRecent(
+          job,
+          `${page.name}: branding bỏ qua — ${eBr.message || eBr}`
+        );
       }
     }
 
@@ -960,8 +1076,9 @@ async function runDeleteJob(jobId) {
   emit(job);
   pushRecent(
     job,
-    `Cấu hình: list//${listParallel} · delete//${pageParallel} · batch max ${job.options.batch_parallel} · ${job.options.list_mode || "wipe"} edges (Meta: 1 list tránh #4 storm)`
+    `Cấu hình: list//${listParallel} · delete//${pageParallel} · batch max ${job.options.batch_parallel} · ${job.options.list_mode || "wipe"} · branding ${job.options.delete_branding ? "ON" : "off"}`
   );
+  pushRecent(job, `Lọc ngày: ${formatFilterRange(job.options)}`);
 
   /** @type {Map<number, string[]>} pageRowId -> post ids */
   const toDelete = new Map();
