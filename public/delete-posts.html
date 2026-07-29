@@ -126,8 +126,8 @@
                 (đã fix bug multi-pass). Để trống cả hai = full wipe mọi bài list được + share/visitor.
               </p>
               <div class="chk" style="margin-top:.55rem">
-                <input type="checkbox" id="deleteBranding" checked />
-                <span>Xóa luôn <b>avatar + ảnh bìa</b> (chỉ khi full wipe / không lọc ngày; cần quyền MANAGE page)</span>
+                <input type="checkbox" id="deleteBranding" />
+                <span>Xóa luôn <b>avatar + ảnh bìa</b> (tùy chọn · full wipe; <b>bỏ tick</b> nếu chỉ xóa theo ngày)</span>
               </div>
               <div style="margin-top:.75rem">
                 <label class="field">Keyword trong caption (tùy chọn)</label>
@@ -380,7 +380,8 @@
         // wipe includes feed + share/visitor + photos (not only published_posts)
         list_mode: "wipe",
         use_batch: $("useBatch").checked,
-        delete_branding: $("deleteBranding") ? $("deleteBranding").checked : true,
+        // false when unchecked — never default true (avoids wiping avatar on date-filter jobs)
+        delete_branding: $("deleteBranding") ? !!$("deleteBranding").checked : false,
         ...extra,
       };
     }

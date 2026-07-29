@@ -377,24 +377,29 @@ export function startDeleteJob(opts = {}) {
   const untilNorm = normalizeUntilUnix(opts.until ?? opts.until_unix, {
     expandMidnight: opts.until_exact !== true && opts.untilExact !== true,
   });
-  // Avatar+cover: default ON when no date/keyword (full clean); off when filtering by day
-  // unless user explicitly checks the box.
-  const explicitBranding =
-    opts.delete_branding === true ||
-    opts.deleteBranding === true ||
-    opts.delete_avatar_cover === true;
-  const explicitBrandingOff =
-    opts.delete_branding === false ||
-    opts.deleteBranding === false ||
-    opts.delete_avatar_cover === false;
+  // Avatar+cover: ONLY when user explicitly enables (checkbox/API true).
+  // Never auto-on when date/keyword filter is set (was UX bug: default-checked
+  // checkbox wiped avatar while user only meant "delete posts until day X").
   const hasDateOrKw = Boolean(
     sinceNorm != null ||
       untilNorm != null ||
       (opts.keyword && String(opts.keyword).trim())
   );
-  const deleteBranding = explicitBrandingOff
-    ? false
-    : explicitBranding || !hasDateOrKw;
+  const brandingRaw =
+    opts.delete_branding ?? opts.deleteBranding ?? opts.delete_avatar_cover;
+  let deleteBranding = false;
+  if (brandingRaw === true || brandingRaw === 1 || brandingRaw === "true") {
+    deleteBranding = true;
+  } else if (
+    brandingRaw === false ||
+    brandingRaw === 0 ||
+    brandingRaw === "false"
+  ) {
+    deleteBranding = false;
+  } else {
+    // undefined: full wipe only → default ON; date/keyword → default OFF
+    deleteBranding = !hasDateOrKw;
+  }
   const job = {
     id: nanoid(10),
     kind: "delete_posts",
