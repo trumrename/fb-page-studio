@@ -918,9 +918,13 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     appSecret: opts.appSecret,
   };
 
-  // Minimal fields first — Meta: high complexity_score burns total_cputime faster
+  // Include status_type + story so shared_story (page shares) are identifiable.
+  // Live probe 2026-07-29: Animals page had 21/50 shared_story — DELETE works.
+  // Minimal fallbacks if rich fields rejected.
   const postFieldSets = [
-    "id,created_time,message,permalink_url",
+    "id,created_time,message,story,status_type,permalink_url,from{id,name}",
+    "id,created_time,message,story,status_type,permalink_url",
+    "id,created_time,message,status_type",
     "id,created_time,message",
     "id,created_time",
     "id",
@@ -928,10 +932,10 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
   if (opts.fields) {
     postFieldSets.unshift(opts.fields);
   }
-  // Rich only in full mode (preview UI)
+  // Richer attachments only in full mode (preview / deep)
   if (listMode === "full") {
     postFieldSets.unshift(
-      "id,message,story,created_time,permalink_url,status_type,attachments{media_type,type,target}",
+      "id,message,story,created_time,permalink_url,status_type,from{id,name},attachments{media_type,type,target}",
       "id,message,created_time,permalink_url,status_type"
     );
   }

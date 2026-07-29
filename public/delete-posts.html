@@ -127,8 +127,12 @@
               </p>
               <div class="chk" style="margin-top:.55rem">
                 <input type="checkbox" id="deleteBranding" />
-                <span>Xóa luôn <b>avatar + ảnh bìa</b> (tùy chọn · full wipe; <b>bỏ tick</b> nếu chỉ xóa theo ngày)</span>
+                <span>Thử xóa <b>avatar + ảnh bìa</b> (Meta thường #200 nếu ảnh không do app tạo — không phải bug tool)</span>
               </div>
+              <p class="muted" style="margin:.4rem 0 0;font-size:.75rem;line-height:1.4">
+                <b>Đã live-test:</b> xóa bài <code>shared_story</code> (page share) = OK.
+                <b>Meta chặn:</b> visitor_posts (#200 quyền), tagged của page khác (#200), cover/avatar upload tay (#200 same-app only).
+              </p>
               <div style="margin-top:.75rem">
                 <label class="field">Keyword trong caption (tùy chọn)</label>
                 <input type="text" id="keyword" placeholder="VD: sale, test, outdated…" />
