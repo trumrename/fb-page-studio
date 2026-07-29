@@ -1,6 +1,6 @@
 /**
- * Orchestrate one feed post for a page: media + caption + optional comment + CSV/DB log.
- * Story: skipped unless story_enabled (not implemented — returns clear error if forced).
+ * Orchestrate one feed/story post for a page: media + caption + optional comment + CSV/DB log.
+ * Story: Page Stories API (photo/video) + link strategy (combo/overlay) — no official link sticker.
  */
 import path from "path";
 import { getDb } from "../db/index.js";
@@ -14,6 +14,7 @@ import {
   isImageFile,
   isVideoFile,
 } from "./publish.js";
+import { publishPageStoryWithLink } from "./pageStories.js";
 import {
   pickMedia,
   moveToPosted,
@@ -99,8 +100,9 @@ export function getDefaultConfig(pageRowId) {
     pick_mode: "random",
     comment_enabled: 0,
     comment_templates: [],
-    link_lists: { see_more: [], full_album: [] },
+    link_lists: { see_more: [], full_album: [], story_link_mode: "combo" },
     story_enabled: 0,
+    story_link_mode: "combo",
     next_slot_index: 0,
     caption_slot_index: 0,
     last_post_at: null,
@@ -131,6 +133,8 @@ export function getPagePostConfig(pageRowId) {
     comment_templates: parseJson(row.comment_templates_json, []),
     link_lists: parseJson(row.link_lists_json, { see_more: [], full_album: [] }),
     story_enabled: row.story_enabled || 0,
+    story_link_mode:
+      parseJson(row.link_lists_json, {})?.story_link_mode || "combo",
     next_slot_index: row.next_slot_index || 0,
     caption_slot_index: row.caption_slot_index || 0,
     last_post_at: row.last_post_at,
@@ -148,6 +152,18 @@ export function savePagePostConfig(pageRowId, body) {
   };
   // Apply anti-spam floors/caps so UI and DB stay consistent
   next = clampPageLimits(next);
+  // Persist story_link_mode inside link_lists JSON (no new column)
+  const linkLists = {
+    ...(next.link_lists && typeof next.link_lists === "object"
+      ? next.link_lists
+      : {}),
+  };
+  if (next.story_link_mode) {
+    linkLists.story_link_mode = String(next.story_link_mode);
+  }
+  next.link_lists = linkLists;
+  next.story_link_mode = linkLists.story_link_mode || "combo";
+
   const db = getDb();
   db.prepare(
     `INSERT INTO page_post_config (
@@ -490,10 +506,95 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         mediaPath,
         caption
       );
-    } else if (postType === "story" || postType === "story_photo" || postType === "story_video") {
-      throw new Error(
-        "Story tạm tắt / chưa bật trong phase này (story_enabled chỉ là flag; chưa implement API story)"
-      );
+    } else if (
+      postType === "story" ||
+      postType === "story_photo" ||
+      postType === "story_video" ||
+      postType === "story_link"
+    ) {
+      // Story requires story_enabled (or force_type). Link is never a real sticker —
+      // we use combo (Story + Feed link) / overlay (burn URL on image).
+      if (!cfg.story_enabled && !opts.force_story) {
+        throw new Error(
+          "Story chưa bật cho Page này — tick «Story» trong cấu hình Page rồi Lưu."
+        );
+      }
+      if (!mediaPath) {
+        throw new Error(
+          `Story cần ảnh/video trong media_folder: ${cfg.media_folder || "(chưa cài)"}` +
+            (mediaSkipped ? ` (đã bỏ ${mediaSkipped} file trùng hash)` : "")
+        );
+      }
+      const gate2 = assertCanPublish({
+        pageRowId,
+        pageId: page.page_id,
+        caption,
+        mediaPath,
+        ignore_quota: !!opts.ignore_quota,
+        ignore_interval: !!opts.ignore_interval,
+      });
+      if (!gate2.ok) throw new Error(gate2.error);
+
+      // Pick first URL from see_more / full_album / opts.story_link / caption
+      const links = cfg.link_lists || {};
+      const seeMore = Array.isArray(links.see_more)
+        ? links.see_more
+        : String(links.see_more || "")
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+      const albums = Array.isArray(links.full_album)
+        ? links.full_album
+        : String(links.full_album || "")
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+      const urlFromCaption = (caption.match(/https?:\/\/[^\s]+/i) || [])[0] || "";
+      const storyLink =
+        String(opts.story_link || opts.link || "").trim() ||
+        seeMore[0] ||
+        albums[0] ||
+        urlFromCaption ||
+        "";
+
+      const linkMode =
+        opts.story_link_mode ||
+        cfg.story_link_mode ||
+        (storyLink ? "combo" : "media_only");
+
+      const storyType =
+        postType === "story_photo"
+          ? "photo"
+          : postType === "story_video"
+            ? "video"
+            : "auto";
+
+      const storyResult = await publishPageStoryWithLink({
+        pageId: page.page_id,
+        pageToken,
+        filePath: mediaPath,
+        link: storyLink,
+        caption,
+        link_mode: linkMode,
+        story_type: storyType,
+        metaAppKey: page.meta_app_key || "app1",
+      });
+
+      result = {
+        post_id: storyResult.post_id,
+        post_url: storyResult.post_url,
+        story: storyResult.story,
+        feed: storyResult.feed,
+        notes: storyResult.notes,
+        link_mode: storyResult.link_mode,
+        link: storyResult.link,
+        raw: storyResult,
+      };
+      // Prefer feed post for comment target (public feed); else story id
+      if (storyResult.feed?.post_id && !result.post_id) {
+        result.post_id = storyResult.feed.post_id;
+        result.post_url = storyResult.feed.post_url;
+      }
     } else {
       throw new Error(`Unknown post type in sequence: ${postType}`);
     }

@@ -178,6 +178,7 @@
                   <option value="photo">photo</option>
                   <option value="text">text</option>
                   <option value="video">video</option>
+                  <option value="story">story (+ link combo nếu bật)</option>
                 </select>
               </div>
               <div>
@@ -1403,7 +1404,23 @@
         <div class="checks">
           <label><input type="checkbox" id="enabled" ${c.enabled ? "checked" : ""}/> Auto scheduler (local · chỉ trong giờ ưa thích)</label>
           <label><input type="checkbox" id="comment_enabled" ${c.comment_enabled ? "checked" : ""}/> Auto comment</label>
-          <label title="Meta Graph API Story chưa được triển khai trong phiên bản này"><input type="checkbox" id="story_enabled" disabled /> Story (chưa hỗ trợ)</label>
+          <label title="Story ảnh/video qua Page Stories API. Link sticker không có trên API — tool dùng combo Story + Feed link hoặc in URL lên ảnh.">
+            <input type="checkbox" id="story_enabled" ${c.story_enabled ? "checked" : ""} /> Story (media + link combo)
+          </label>
+        </div>
+        <div class="row2" style="margin-top:.35rem">
+          <div>
+            <label>Story + link mode</label>
+            <select id="story_link_mode" title="Meta không có sticker link trên Story API">
+              <option value="combo" ${(c.story_link_mode || c.link_lists?.story_link_mode || "combo") === "combo" ? "selected" : ""}>Combo: Story + Feed link (khuyên dùng)</option>
+              <option value="overlay_combo" ${(c.story_link_mode || c.link_lists?.story_link_mode) === "overlay_combo" ? "selected" : ""}>Overlay URL lên ảnh + Feed link</option>
+              <option value="media_only" ${(c.story_link_mode || c.link_lists?.story_link_mode) === "media_only" ? "selected" : ""}>Chỉ Story media (không link)</option>
+              <option value="feed_link" ${(c.story_link_mode || c.link_lists?.story_link_mode) === "feed_link" ? "selected" : ""}>Chỉ Feed có link (không Story)</option>
+            </select>
+          </div>
+          <div>
+            <label class="muted" style="font-size:.78rem">URL lấy từ «see_more» / «full_album» dòng đầu, hoặc URL trong caption. Sequence: thêm <code>story</code>.</label>
+          </div>
         </div>
         <p class="muted" style="margin:.35rem 0 .55rem;font-size:.78rem;line-height:1.45">
           <b>Policy chung</b> (hẹn FB + đăng trực tiếp + auto scheduler):
@@ -1421,7 +1438,7 @@
           </div>
         </div>
         <label>Sequence</label>
-        <input type="text" id="sequence" value="${esc(seq)}" placeholder="photo, video, text" />
+        <input type="text" id="sequence" value="${esc(seq)}" placeholder="photo, video, text, story" />
         <label>Pick mode</label>
         <input type="hidden" id="pick_mode" value="random" />
         <p class="muted">Media: random, tránh các file gần lần chọn trước · Caption: lần lượt đến hết, sau đó trộn và xoay vòng.</p>
@@ -1541,7 +1558,8 @@
       return {
         enabled: $("enabled").checked ? 1 : 0,
         comment_enabled: $("comment_enabled").checked ? 1 : 0,
-        story_enabled: 0,
+        story_enabled: $("story_enabled")?.checked ? 1 : 0,
+        story_link_mode: $("story_link_mode")?.value || "combo",
         max_posts_per_day: Number($("max_posts_per_day").value) || 3,
         interval_minutes: Number($("interval_minutes").value) || 120,
         sequence: $("sequence").value,
@@ -1554,6 +1572,7 @@
         link_lists: {
           see_more: $("see_more").value,
           full_album: $("full_album").value,
+          story_link_mode: $("story_link_mode")?.value || "combo",
         },
       };
     }

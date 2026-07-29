@@ -233,7 +233,20 @@ check(
   posting.includes('typeof r !== "object"')
 );
 check("posting stops when config save fails", posting.includes("if (!(await saveConfig())) return"));
-check("unsupported Story control is disabled", posting.includes('id="story_enabled" disabled'));
+check(
+  "Story control enabled with link combo modes",
+  posting.includes('id="story_enabled"') &&
+    posting.includes("story_link_mode") &&
+    posting.includes("Story + Feed link") &&
+    !posting.includes('id="story_enabled" disabled')
+);
+check(
+  "pageStories implements photo_stories + combo link",
+  fs.existsSync(path.join(root, "src", "services", "pageStories.js")) &&
+    read("src/services/pageStories.js").includes("photo_stories") &&
+    read("src/services/pageStories.js").includes("publishPageStoryWithLink") &&
+    read("src/services/poster.js").includes("publishPageStoryWithLink")
+);
 check("UI profile Meta App badge", posting.includes("meta_app_name") && posting.includes("appKey"));
 check("UI auto meta groups checkbox", posting.includes("rotAutoMeta"));
 check("UI windows + gap settings", posting.includes("rotWindows") && posting.includes("rotGapMin"));

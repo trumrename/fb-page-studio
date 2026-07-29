@@ -145,11 +145,24 @@ function normalizeConfigBody(input) {
   if (body.link_lists && typeof body.link_lists === "object") {
     const out = {};
     for (const [k, v] of Object.entries(body.link_lists)) {
+      if (k === "story_link_mode") {
+        out[k] = String(v || body.story_link_mode || "combo");
+        continue;
+      }
       out[k] = typeof v === "string"
         ? v.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
         : (Array.isArray(v) ? v : []);
     }
+    if (body.story_link_mode && !out.story_link_mode) {
+      out.story_link_mode = String(body.story_link_mode);
+    }
     body.link_lists = out;
+  } else if (body.story_link_mode) {
+    body.link_lists = {
+      see_more: [],
+      full_album: [],
+      story_link_mode: String(body.story_link_mode),
+    };
   }
   return body;
 }
@@ -182,7 +195,7 @@ router.get("/config/:pageRowId", (req, res) => {
     media: mediaStats(cfg.media_folder),
     captions_pool: getCaptionStats(cfg),
     story_note:
-      "story_enabled chỉ là cờ tùy chọn — API story chưa bật trong phase này (không gắn link).",
+      "Story = Page Stories API (ảnh/video). Meta không có sticker link — tool dùng combo Story + Feed link hoặc in URL lên ảnh (overlay).",
   });
 });
 
