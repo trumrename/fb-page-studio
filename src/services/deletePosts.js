@@ -189,6 +189,74 @@ export function postInTimeRange(post, sinceUnix, untilUnix) {
   return true;
 }
 
+/**
+ * Avatar / cover / "updated their profile picture" — Meta #200 same-app only.
+ * Bulk wipe must skip these unless user opts into separate branding step.
+ *
+ * Evidence from live fails (Beautiful Women Daily):
+ * - story: "…updated their profile picture"
+ * - photo.php?fbid=…&set=a.… album Profile Pictures
+ * - (#200) App can only delete photos created by the same app
+ * - (#200) This post wasn't created by the application
+ */
+export function isBrandingGraphItem(post) {
+  if (!post || typeof post !== "object") return false;
+  if (post._branding === true || post.branding === true) return true;
+
+  const st = String(post.status_type || "").toLowerCase();
+  if (
+    st === "added_profile_picture" ||
+    st === "added_cover_photo" ||
+    /profile_picture|cover_photo/.test(st)
+  ) {
+    return true;
+  }
+
+  const story = [post.story, post.message, post.description, post.name]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  if (
+    /updated their profile picture|updated its profile picture|updated their cover photo|updated its cover photo|changed their profile picture|changed their cover photo|đã cập nhật ảnh đại diện|đã cập nhật ảnh bìa|cap nhat anh dai dien|cap nhat anh bia/.test(
+      story
+    )
+  ) {
+    return true;
+  }
+
+  const albumType = String(
+    post.album?.type || post._album_type || ""
+  ).toLowerCase();
+  if (albumType === "profile" || albumType === "cover") return true;
+
+  const albumName = String(
+    post.album?.name || post._album_name || ""
+  ).toLowerCase();
+  if (
+    /profile pictures|cover photos|ảnh đại diện|anh dai dien|ảnh bìa|anh bia/.test(
+      albumName
+    )
+  ) {
+    return true;
+  }
+
+  const src = String(post._source || "").toLowerCase();
+  if (
+    /profile-album|cover-album|profile-photo|photos_profile|type=profile/.test(
+      src
+    )
+  ) {
+    return true;
+  }
+
+  // permalink / link hints
+  const link = String(post.permalink_url || post.link || "").toLowerCase();
+  if (/set=a\.\d+/.test(link) && /profile\.php|photo\.php/.test(link)) {
+    // alone not enough — only with story/album already handled
+  }
+  return false;
+}
+
 export function filterPostsByOptions(posts, opts = {}) {
   const sinceU = toUnixSeconds(opts.since);
   const untilU =
@@ -203,6 +271,15 @@ export function filterPostsByOptions(posts, opts = {}) {
   }
   if (opts.keyword) {
     out = out.filter((p) => matchKeyword(p, opts.keyword));
+  }
+  // Default: NEVER bulk-delete avatar/cover (Meta #200 noise). Branding uses
+  // deletePageAvatarAndCover when delete_branding checkbox is ON.
+  const includeBranding =
+    opts.include_branding === true ||
+    opts.includeBranding === true ||
+    opts.keep_branding_in_list === true;
+  if (!includeBranding) {
+    out = out.filter((p) => !isBrandingGraphItem(p));
   }
   return out;
 }
@@ -819,18 +896,35 @@ async function listOnePage(job, pageState, toDelete) {
         }
       }
       // HARD filter again (Graph often ignores since/until on /videos & reels)
+      // Always drop avatar/cover profile posts from bulk list (Meta #200 same-app)
       const filtered = filterPostsByOptions(posts, {
         since: sinceU,
         until: untilU,
         until_exact: true, // already normalized
         keyword: job.options.keyword,
+        include_branding: false,
       });
+      const brandingSkipped = (Array.isArray(posts) ? posts : []).filter((p) =>
+        isBrandingGraphItem(p)
+      ).length;
       const dropped =
         (Array.isArray(posts) ? posts.length : 0) - filtered.length;
-      if (dropped > 0 && (sinceU != null || untilU != null || job.options.keyword)) {
+      if (brandingSkipped > 0) {
         pushRecent(
           job,
-          `${page.name}: bỏ ${dropped} object NGOÀI khoảng ngày/keyword — không xóa`
+          `${page.name}: bỏ ${brandingSkipped} avatar/bìa (profile picture) — ` +
+            (job.options.delete_branding
+              ? "sẽ thử bước branding riêng (Meta hay #200 nếu upload tay)"
+              : "không xóa (tick «Xóa avatar + ảnh bìa» nếu muốn thử)")
+        );
+      }
+      if (
+        dropped > brandingSkipped &&
+        (sinceU != null || untilU != null || job.options.keyword)
+      ) {
+        pushRecent(
+          job,
+          `${page.name}: bỏ ${dropped - brandingSkipped} object NGOÀI khoảng ngày/keyword — không xóa`
         );
       }
       // Absolute safety: never delete ids that fail time check

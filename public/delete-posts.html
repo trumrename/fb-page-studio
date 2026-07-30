@@ -125,13 +125,21 @@
                 (<b>đến = hết ngày 23:59:59</b>). Bài <b>sau</b> «Đến hết ngày» <b>không</b> bị xóa
                 (đã fix bug multi-pass). Để trống cả hai = full wipe mọi bài list được + share/visitor.
               </p>
-              <div class="chk" style="margin-top:.55rem">
+              <div class="chk" style="margin-top:.55rem;align-items:flex-start">
                 <input type="checkbox" id="deleteBranding" />
-                <span>Thử xóa <b>avatar + ảnh bìa</b> (Meta thường #200 nếu ảnh không do app tạo — không phải bug tool)</span>
+                <span>
+                  <b>Có xóa ảnh đại diện + ảnh bìa?</b>
+                  <span class="muted" style="display:block;font-size:.8rem;margin-top:.2rem;line-height:1.4">
+                    <b>Tắt (mặc định):</b> bỏ qua avatar/bìa và bài «updated their profile picture» — không đếm vào Lỗi #200.<br/>
+                    <b>Bật:</b> thử xóa riêng avatar + cover sau khi xóa bài. Meta hay trả
+                    <code>(#200) App can only delete photos created by the same app</code>
+                    nếu ảnh upload tay trên Facebook (không phải app này) — <b>không phải bug tool</b>.
+                  </span>
+                </span>
               </div>
               <p class="muted" style="margin:.4rem 0 0;font-size:.75rem;line-height:1.4">
                 <b>Đã live-test:</b> xóa bài <code>shared_story</code> (page share) = OK.
-                <b>Meta chặn:</b> visitor_posts (#200 quyền), tagged của page khác (#200), cover/avatar upload tay (#200 same-app only).
+                <b>Meta chặn:</b> visitor_posts (#200), tagged page khác (#200), avatar/bìa upload tay (#200 same-app).
               </p>
               <div style="margin-top:.75rem">
                 <label class="field">Keyword trong caption (tùy chọn)</label>
@@ -180,8 +188,8 @@
               </div>
               <div class="chk"><input type="checkbox" id="useBatch" checked /> <span>Graph Batch 50 DELETE · list: published + feed (share/visitor) + video + photo + tagged</span></div>
               <p class="muted" style="margin-top:.75rem;font-size:.8rem;line-height:1.45">
-                <b>Full wipe:</b> để trống ngày → xóa post chữ + <b>ảnh</b> + share/visitor + video/reel; bật avatar+bìa.<br/>
-                List ưu tiên published_posts/posts/feed + /photos (page_story_id) trước videos — tránh “chỉ xóa video”.<br/>
+                <b>Full wipe:</b> để trống ngày → xóa post chữ + ảnh timeline + share/visitor + video/reel.<br/>
+                Avatar/bìa: chỉ khi tick «Có xóa ảnh đại diện + ảnh bìa?» (tách khỏi list bài thường).<br/>
                 <b>Lọc ngày:</b> «Đến hết ngày» = 23:59:59 — bài sau đó được giữ. Log hiện khoảng lọc + số object bỏ ngoài khoảng.<br/>
                 List//1 khi #4. Quyền: <code>pages_manage_posts</code>, <code>pages_read_engagement</code>, MANAGE page (avatar/bìa).
               </p>

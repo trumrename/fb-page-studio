@@ -7,6 +7,7 @@ import {
   postInTimeRange,
   filterPostsByOptions,
   hasContentFilters,
+  isBrandingGraphItem,
 } from "../src/services/deletePosts.js";
 
 let fails = 0;
@@ -75,6 +76,48 @@ assert(
   ),
   "until exclusive after +1s"
 );
+
+// Branding (avatar / profile picture) — never in bulk list by default
+assert(
+  isBrandingGraphItem({
+    id: "1",
+    story: "Beautiful Women Daily updated their profile picture.",
+  }),
+  "story profile picture is branding"
+);
+assert(
+  isBrandingGraphItem({
+    id: "2",
+    status_type: "added_profile_picture",
+  }),
+  "status_type added_profile_picture is branding"
+);
+assert(
+  isBrandingGraphItem({
+    id: "3",
+    album: { type: "profile", name: "Profile Pictures" },
+  }),
+  "album type=profile is branding"
+);
+assert(
+  !isBrandingGraphItem({
+    id: "4",
+    message: "sale photo",
+    status_type: "added_photos",
+  }),
+  "normal added_photos is NOT branding"
+);
+{
+  const mixed = [
+    { id: "a", story: "X updated their profile picture." },
+    { id: "b", message: "hello", created_time: "2026-07-10T12:00:00+0000" },
+    { id: "c", album: { type: "cover", name: "Cover Photos" } },
+  ];
+  const f = filterPostsByOptions(mixed, {});
+  assert(f.length === 1 && f[0].id === "b", "filter drops branding by default");
+  const keep = filterPostsByOptions(mixed, { include_branding: true });
+  assert(keep.length === 3, "include_branding keeps all");
+}
 
 if (fails) {
   console.error("\nFAILED", fails);

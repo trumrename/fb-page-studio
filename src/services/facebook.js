@@ -950,7 +950,9 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
   let edges;
   if (listMode === "full") {
     const photoFieldSetsFull = [
-      "id,created_time,link,name,page_story_id,images",
+      "id,created_time,link,name,page_story_id,images,album{id,name,type}",
+      "id,created_time,link,name,page_story_id,album{id,name,type}",
+      "id,created_time,page_story_id,album{id,name,type}",
       "id,created_time,link,name,page_story_id",
       "id,created_time,page_story_id",
       "id,created_time,link",
@@ -988,7 +990,10 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     // Photo wall posts live in published_posts/posts/feed (status_type=added_photos)
     // and/or /photos (+ page_story_id). Videos only are NOT enough for clean timeline.
     const photoFieldSets = [
-      "id,created_time,link,name,page_story_id,images",
+      "id,created_time,link,name,page_story_id,images,album{id,name,type}",
+      "id,created_time,link,name,page_story_id,album{id,name,type}",
+      "id,created_time,page_story_id,album{id,name,type}",
+      "id,created_time,link,name,album{id,name,type}",
       "id,created_time,link,name,page_story_id",
       "id,created_time,page_story_id",
       "id,created_time,link,name",
@@ -1082,6 +1087,20 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
       seenLocal.add(sid);
       out.push({ ...base, id: sid, _source: source });
     };
+
+    // Mark avatar/cover album photos — bulk wipe will skip (Meta #200 same-app)
+    if (raw.album) {
+      base.album = raw.album;
+      const at = String(raw.album.type || "").toLowerCase();
+      const an = String(raw.album.name || "").toLowerCase();
+      if (
+        at === "profile" ||
+        at === "cover" ||
+        /profile pictures|cover photos|ảnh đại diện|ảnh bìa/.test(an)
+      ) {
+        base._branding = true;
+      }
+    }
 
     // /photos: page_story_id = wall post (text+image card). Photo node alone
     // often leaves the timeline post visible after DELETE /{photo-id}.
