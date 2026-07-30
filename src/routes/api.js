@@ -71,6 +71,16 @@ import {
   DEFAULT_OAUTH_RELAY_URL,
   sanitizeRelayBase,
 } from "../services/customerEnv.js";
+import {
+  getWorkspaceTree,
+  getAccountWorkspace,
+  rankPages,
+  pageOpsHints,
+} from "../services/workspace.js";
+import {
+  attachQualityToPages,
+  assessPageQuality,
+} from "../services/pageQuality.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -560,8 +570,9 @@ function rankBrowserForProfile(userDataDir, chromeExecutables) {
     let common = 0;
     while (common < dataParts.length && common < exeParts.length && dataParts[common] === exeParts[common]) common++;
     const base = path.basename(exe).toLowerCase();
-    // Prefer real chrome.exe over ChromePortable.exe launcher (flags are reliable there).
-    const kind = base === "chrome.exe" ? 0 : base === "chromeportable.exe" ? 1 : 2;
+    // Prefer ChromePortable.exe launcher (sets Data\profile correctly + profile-directory).
+    // Do NOT prefer App\Chrome-bin\chrome.exe — wrong user-data-dir causes empty profile.
+    const kind = base === "chromeportable.exe" ? 0 : base === "chrome.exe" ? 1 : 2;
     return { exe, common, kind, len: exe.length };
   }).sort((a, b) => b.common - a.common || a.kind - b.kind || a.len - b.len);
 }
@@ -779,15 +790,23 @@ router.put("/setup/browser", (req, res) => {
       requestedDataDir = requestedDataDir.split(/[;\r\n|]+/).map((item) => item.trim()).filter(Boolean)[0] || "";
     }
     let requestedBrowserPath = String(req.body?.browser_path || "").trim();
-    // Prefer real chrome.exe next to ChromePortable.exe so Connect can pass profile flags reliably.
+    // Prefer ChromePortable.exe launcher (not App\Chrome-bin\chrome.exe).
+    // Launcher owns Data\profile; we only pass --profile-directory for correct tab.
+    if (/chrome\.exe$/i.test(requestedBrowserPath) && !/chromeportable/i.test(requestedBrowserPath)) {
+      let dir = path.dirname(requestedBrowserPath);
+      for (let i = 0; i < 5; i++) {
+        const launcher = path.join(dir, "ChromePortable.exe");
+        if (fs.existsSync(launcher)) {
+          requestedBrowserPath = launcher;
+          break;
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+    }
     if (/chromeportable\.exe$/i.test(requestedBrowserPath)) {
-      const dir = path.dirname(requestedBrowserPath);
-      const realChrome = [
-        path.join(dir, "App", "Chrome-bin", "chrome.exe"),
-        path.join(dir, "App", "Chrome", "chrome.exe"),
-        path.join(dir, "chrome.exe"),
-      ].find((candidate) => fs.existsSync(candidate));
-      if (realChrome) requestedBrowserPath = realChrome;
+      // keep launcher path as-is
     }
     // Portable: if UI only sent browser path (or wrong system User Data), bind Data\profile of THAT portable.
     const portableData = detectPortableUserDataFromBrowser(requestedBrowserPath);
@@ -1202,8 +1221,48 @@ router.delete("/accounts/:id", (req, res) => {
 });
 
 /**
+ * GET /api/workspace
+ * Cây: tài khoản FB (OAuth) → pages + quality + portfolio đề xuất
+ * + login_accounts + sessions (cookie)
+ */
+router.get("/workspace", (req, res) => {
+  try {
+    const q = req.query.q ? String(req.query.q) : "";
+    const tree = getWorkspaceTree({ q, includeQuality: true });
+    res.json(tree);
+  } catch (e) {
+    console.error("[workspace]", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/** GET /api/workspace/accounts/:id */
+router.get("/workspace/accounts/:id", (req, res) => {
+  try {
+    const data = getAccountWorkspace(Number(req.params.id));
+    if (!data) return res.status(404).json({ error: "Account not found" });
+    res.json({ ok: true, ...data });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/** GET /api/workspace/rank?sort=quality|followers|growth&limit=30 */
+router.get("/workspace/rank", (req, res) => {
+  try {
+    const pages = rankPages({
+      sort: String(req.query.sort || "quality"),
+      limit: Number(req.query.limit || 40),
+    });
+    res.json({ ok: true, pages });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
  * GET /api/pages
- * Query: account_id, q, limit, offset
+ * Query: account_id, q, limit, offset, quality=1
  * Large scale: paginate with limit/offset
  */
 router.get("/pages", (req, res) => {
@@ -1213,9 +1272,12 @@ router.get("/pages", (req, res) => {
   const q = req.query.q ? String(req.query.q) : undefined;
   const limit = req.query.limit ? Number(req.query.limit) : 500;
   const offset = req.query.offset ? Number(req.query.offset) : 0;
+  const withQuality =
+    req.query.quality === "1" || req.query.quality === "true";
 
   const total = countPages({ accountId, q });
-  const pages = listPages({ accountId, q, limit, offset });
+  let pages = listPages({ accountId, q, limit, offset });
+  if (withQuality) pages = attachQualityToPages(pages);
 
   res.json({
     total,
@@ -1257,11 +1319,13 @@ router.post("/accounts/:id/enrich", async (req, res) => {
   }
 });
 
-/** GET /api/pages/:id — one page with full enrich payload */
+/** GET /api/pages/:id — one page with full enrich payload + quality + ops */
 router.get("/pages/:id", (req, res) => {
   const page = getPagePublic(Number(req.params.id));
   if (!page) return res.status(404).json({ error: "Page not found" });
-  res.json({ page });
+  const quality = assessPageQuality(page);
+  const ops = pageOpsHints(page.id);
+  res.json({ page: { ...page, quality }, quality, ops });
 });
 
 /**

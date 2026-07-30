@@ -722,7 +722,10 @@
           }),
         });
         if (r.history) renderBrowserHistory(r.history);
-        $("oauthBrowserStatus").innerHTML = `<b style="color:#34d399">Đã lưu Chrome Profile ${escapeHtml(r.selected_profile || "tự động")}.</b> Đã thêm vào lịch sử. Bấm Connect Facebook ngay — không cần khởi động lại tool.`;
+        $("oauthBrowserStatus").innerHTML =
+          `<b style="color:#34d399">Đã lưu profile <code>${escapeHtml(r.selected_profile || "Default")}</code></b>` +
+          (r.browser_path ? `<br/>Browser: <code>${escapeHtml(r.browser_path)}</code>` : "") +
+          `<br/><span class="muted" style="font-size:.8rem">Connect sẽ mở đúng profile này (Chrome Portable: ChromePortable.exe --profile-directory=…).</span> Bấm Connect Facebook ngay — không cần restart.`;
       } catch (e) {
         $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`;
       } finally { btn.disabled = false; }

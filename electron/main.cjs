@@ -330,10 +330,9 @@ function seedCustomerEnvInUserDir(userDir) {
 }
 
 /**
- * Disable dangerous Chrome flags that force --user-data-dir on SYSTEM Chrome.
- * That pattern logs users out of Facebook (new fingerprint / session fight)
- * and can look like "all extensions deleted" (empty secondary profile).
- * Only patches FB_CHROME_* lines — never OAuth secrets.
+ * Only strip SYSTEM Chrome User Data dir from .env (that path + wrong flags
+ * causes FB logout). Keep FB_CHROME_PROFILE and Portable Data\profile so
+ * "Chọn profile" in UI still opens the correct tab/profile.
  */
 function healChromeSessionEnv(userDir) {
   if (!userDir) return;
@@ -346,21 +345,16 @@ function healChromeSessionEnv(userDir) {
       (cur.match(/^FB_CHROME_USER_DATA_DIR=(.*)$/m) || [])[1] || ""
     ).trim();
     const isSystemData =
-      /google[\\/]chrome[\\/]user data/i.test(dataDir) ||
-      /\\user data$/i.test(dataDir);
-    if (isSystemData || dataDir) {
-      // Comment out system (or any) forced user-data-dir — openExternal is safer
+      /google[\\/]chrome[\\/]user data/i.test(dataDir) &&
+      !/chromeportable/i.test(dataDir);
+    if (isSystemData) {
       cur = cur.replace(
         /^FB_CHROME_USER_DATA_DIR=.*$/m,
-        "# FB_CHROME_USER_DATA_DIR=  # disabled: was causing FB logout / captcha after tool actions"
+        "# FB_CHROME_USER_DATA_DIR=  # disabled: system User Data — use openExternal / Portable only"
       );
+      log("healed: stripped system FB_CHROME_USER_DATA_DIR", envPath);
     }
-    if (/^FB_CHROME_PROFILE=\s*\S+/m.test(cur)) {
-      cur = cur.replace(
-        /^FB_CHROME_PROFILE=.*$/m,
-        "# FB_CHROME_PROFILE=  # disabled: force profile breaks running Chrome session"
-      );
-    }
+    // Do NOT strip FB_CHROME_PROFILE — needed to open correct Portable profile tab
     if (cur !== orig) {
       try {
         fs.copyFileSync(envPath, `${envPath}.bak-chrome-session`);
@@ -368,10 +362,6 @@ function healChromeSessionEnv(userDir) {
         /* ignore */
       }
       fs.writeFileSync(envPath, cur, "utf8");
-      log(
-        "healed Chrome session flags (removed forced User Data / profile) → prevent FB logout",
-        envPath
-      );
     }
   } catch (e) {
     log("healChromeSessionEnv fail", e.message);
@@ -499,19 +489,21 @@ function clearStaleChromeSingletonLocks(userDataDir) {
 }
 
 /**
- * Launch plan for Chrome.
+ * Launch plan for Chrome / Chrome Portable.
  *
- * Chrome Portable (customer machines):
- *   ALWAYS use ChromePortable.exe + URL only.
- *   Never spawn App\Chrome-bin\chrome.exe with --user-data-dir — wrong Data path
- *   or Singleton clear → empty profile, FB logout, "extensions gone".
- *   PortableApps launcher owns the real user-data tree.
+ * Portable (customer):
+ *   ChromePortable.exe [--profile-directory=Profile N] <url>
+ *   Launcher sets Data\profile — we NEVER pass --user-data-dir (wrong path = empty profile).
+ *   Profile name from UI / FB_CHROME_PROFILE so correct tab/session is used.
  *
  * System Chrome:
- *   openExternal or chrome.exe URL only — never --user-data-dir.
+ *   Prefer openExternal. If forced path: chrome.exe [--profile-directory=…] url only.
  */
 function resolveChromeLaunchPlan(rawExe, browserEnv) {
   let exe = rawExe;
+  const profile = String(
+    browserEnv.FB_CHROME_PROFILE || process.env.FB_CHROME_PROFILE || ""
+  ).trim();
   const portableRoot =
     findChromePortableRoot(rawExe) ||
     (/chromeportable\.exe$/i.test(rawExe) ? path.dirname(path.resolve(rawExe)) : null);
@@ -522,7 +514,6 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
   if (isPortable) {
     const root = portableRoot || path.dirname(path.resolve(rawExe));
     const launcher = path.join(root, "ChromePortable.exe");
-    // Prefer official launcher — it sets Data\profile correctly
     if (fs.existsSync(launcher)) {
       exe = launcher;
     } else {
@@ -533,14 +524,23 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
       ].find((c) => fs.existsSync(c));
       if (realChrome) exe = realChrome;
     }
-    // NO --user-data-dir, NO --profile-directory, NO Singleton clear
-    log("chrome portable plan: launcher URL-only", exe);
+    // Only profile-directory — PortableApps launcher injects user-data-dir
+    const args = [];
+    if (profile && !/^#/.test(profile)) {
+      args.push(`--profile-directory=${profile}`);
+    }
+    log(
+      "chrome portable plan",
+      exe,
+      profile ? `profile=${profile}` : "profile=Default(auto)",
+      isChromeProcessRunning() ? "chrome-running" : "cold"
+    );
     return {
       exe,
-      args: [],
+      args,
       isChrome: true,
       userData: "",
-      profile: "",
+      profile,
       portable: true,
       reuseRunning: isChromeProcessRunning(),
     };
@@ -552,24 +552,26 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
     return { exe, args: [], isChrome: false, userData: "", profile: "", portable: false };
   }
 
-  // System Chrome: never force profile flags
+  // System Chrome: profile flag only (no user-data-dir) so Default vs Profile N works
+  const args = [];
+  if (profile && !/^#/.test(profile) && !isChromeProcessRunning()) {
+    args.push(`--profile-directory=${profile}`);
+  }
   return {
     exe,
-    args: [],
+    args,
     isChrome: true,
     userData: "",
-    profile: "",
+    profile,
     portable: false,
     reuseRunning: isChromeProcessRunning(),
   };
 }
 
 /**
- * Open OAuth / external URL without breaking Facebook browser sessions.
- *
- * Customer Chrome Portable: ChromePortable.exe <url> only (launcher keeps Data).
- * System Chrome: shell.openExternal (OS reuses running session).
- * Never --user-data-dir / --profile-directory on either path (causes FB logout).
+ * Open OAuth URL in the browser/profile the user configured.
+ * Portable: ChromePortable.exe + optional --profile-directory + URL.
+ * System: openExternal, or forced chrome.exe + profile if cold start.
  */
 function openInPreferredBrowser(url) {
   let parsed;
@@ -592,25 +594,27 @@ function openInPreferredBrowser(url) {
       process.env.FB_BROWSER_PATH ||
       ""
   ).trim();
+  const profile = String(
+    browserEnv.FB_CHROME_PROFILE || process.env.FB_CHROME_PROFILE || ""
+  ).trim();
 
-  // Customer machines: explicit Chrome Portable path in .env / setup
+  // Explicit browser path (Portable or chrome.exe)
   if (forcedPath && fs.existsSync(forcedPath)) {
     const plan = resolveChromeLaunchPlan(forcedPath, browserEnv);
     try {
-      // URL only — portable launcher OR system chrome reuses existing process
-      spawn(plan.exe, [url], {
+      const spawnArgs = [...plan.args, url];
+      spawn(plan.exe, spawnArgs, {
         detached: true,
         stdio: "ignore",
         windowsHide: false,
-        cwd: plan.portable
-          ? path.dirname(plan.exe)
-          : undefined,
+        cwd: plan.portable ? path.dirname(plan.exe) : undefined,
       }).unref();
       log(
         "openInPreferredBrowser",
-        plan.portable ? "portable-launcher" : "forced-exe",
+        plan.portable ? "portable" : "forced",
         plan.exe,
-        plan.reuseRunning ? "reuse-running" : "cold-start",
+        plan.profile ? `profile=${plan.profile}` : "profile=auto",
+        plan.reuseRunning ? "reuse" : "cold",
         url.slice(0, 80)
       );
       return true;
@@ -619,12 +623,43 @@ function openInPreferredBrowser(url) {
     }
   }
 
-  // No portable path configured: OS default (does not steal Portable session)
+  // No path: if only profile set, try system chrome with that profile (cold)
+  if (profile && !/^#/.test(profile)) {
+    const local = process.env.LOCALAPPDATA || "";
+    const pf = process.env.ProgramFiles || "C:\\Program Files";
+    const systemChrome = [
+      path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+    ].find((p) => fs.existsSync(p));
+    if (systemChrome) {
+      try {
+        const args = isChromeProcessRunning()
+          ? [url]
+          : [`--profile-directory=${profile}`, url];
+        spawn(systemChrome, args, {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: false,
+        }).unref();
+        log(
+          "openInPreferredBrowser system+profile",
+          profile,
+          isChromeProcessRunning() ? "reuse-url-only" : "cold+profile",
+          url.slice(0, 80)
+        );
+        return true;
+      } catch (e) {
+        log("openInPreferredBrowser system+profile fail", e.message);
+      }
+    }
+  }
+
+  // Last resort: OS default handler
   shell
     .openExternal(url)
     .then(() =>
       log(
-        "openInPreferredBrowser openExternal (preserve session)",
+        "openInPreferredBrowser openExternal (no FB_BROWSER_PATH — may miss Portable)",
         url.slice(0, 80)
       )
     )
