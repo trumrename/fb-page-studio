@@ -568,10 +568,92 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
   };
 }
 
+/** True if URL is Facebook OAuth / login — must NOT open Windows default (system Chrome). */
+function isFacebookAuthUrl(url) {
+  return /facebook\.com|fb\.com|fbcdn\.|\/auth\/facebook|modelswiki\.top\/auth/i.test(
+    String(url || "")
+  );
+}
+
 /**
- * Open OAuth URL in the browser/profile the user configured.
- * Portable: ChromePortable.exe + optional --profile-directory + URL.
- * System: openExternal, or forced chrome.exe + profile if cold start.
+ * Resolve ChromePortable.exe aggressively — customers often forget FB_BROWSER_PATH.
+ * Never return system Google\Chrome\Application\chrome.exe as "portable".
+ */
+function findChromePortableExe(browserEnv = {}) {
+  const tried = [];
+  const push = (p) => {
+    const s = String(p || "").trim();
+    if (s) tried.push(s);
+  };
+
+  push(browserEnv.BROWSER_PATH || process.env.BROWSER_PATH);
+  push(browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH);
+
+  // Walk up from configured portable user-data (Data\profile)
+  const ud = String(
+    browserEnv.FB_CHROME_USER_DATA_DIR || process.env.FB_CHROME_USER_DATA_DIR || ""
+  ).trim();
+  if (ud && !/google[\\/]chrome[\\/]user data/i.test(ud)) {
+    let dir = path.resolve(ud);
+    for (let i = 0; i < 8; i++) {
+      push(path.join(dir, "ChromePortable.exe"));
+      push(path.join(dir, "GoogleChromePortable.exe"));
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  const drives = ["C", "D", "E", "F", "G", "H"];
+  for (const L of drives) {
+    push(`${L}:\\ChromePortable\\ChromePortable.exe`);
+    push(`${L}:\\GoogleChromePortable\\GoogleChromePortable.exe`);
+    push(`${L}:\\PortableApps\\GoogleChromePortable\\GoogleChromePortable.exe`);
+    push(`${L}:\\PortableApps\\ChromePortable\\ChromePortable.exe`);
+    push(`${L}:\\Tools\\ChromePortable\\ChromePortable.exe`);
+    push(`${L}:\\Program\\ChromePortable\\ChromePortable.exe`);
+  }
+  if (home) {
+    push(path.join(home, "ChromePortable", "ChromePortable.exe"));
+    push(path.join(home, "Desktop", "ChromePortable", "ChromePortable.exe"));
+    push(path.join(home, "Documents", "ChromePortable", "ChromePortable.exe"));
+    push(path.join(home, "Downloads", "ChromePortable", "ChromePortable.exe"));
+    push(
+      path.join(
+        home,
+        "PortableApps",
+        "GoogleChromePortable",
+        "GoogleChromePortable.exe"
+      )
+    );
+  }
+
+  for (const p of tried) {
+    try {
+      if (p && fs.existsSync(p) && /portable/i.test(p) && /\.exe$/i.test(p)) {
+        return path.resolve(p);
+      }
+      // Path is chrome.exe under a Portable tree → use launcher
+      if (p && fs.existsSync(p) && /chrome\.exe$/i.test(p)) {
+        const root = findChromePortableRoot(p);
+        if (root) {
+          const launcher = path.join(root, "ChromePortable.exe");
+          if (fs.existsSync(launcher)) return launcher;
+          const g = path.join(root, "GoogleChromePortable.exe");
+          if (fs.existsSync(g)) return g;
+        }
+      }
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+/**
+ * Open OAuth URL — MUST use Chrome Portable when available.
+ * openExternal = Windows default browser = almost always system Chrome → customer bug.
  */
 function openInPreferredBrowser(url) {
   let parsed;
@@ -587,18 +669,42 @@ function openInPreferredBrowser(url) {
   }
   url = parsed.toString();
   const browserEnv = readBrowserEnv();
-  const forcedPath = String(
+  const authSensitive = isFacebookAuthUrl(url);
+
+  // 1) Explicit path or auto-found Portable
+  let forcedPath = String(
     browserEnv.BROWSER_PATH ||
       process.env.BROWSER_PATH ||
       browserEnv.FB_BROWSER_PATH ||
       process.env.FB_BROWSER_PATH ||
       ""
   ).trim();
-  const profile = String(
-    browserEnv.FB_CHROME_PROFILE || process.env.FB_CHROME_PROFILE || ""
-  ).trim();
+  if (!forcedPath || !fs.existsSync(forcedPath)) {
+    const found = findChromePortableExe(browserEnv);
+    if (found) {
+      log("openInPreferredBrowser auto-found Portable", found);
+      forcedPath = found;
+      // Persist so next Connect is instant (non-destructive append if missing)
+      try {
+        if (USER_DIR) {
+          const envPath = path.join(USER_DIR, ".env");
+          if (fs.existsSync(envPath)) {
+            let cur = fs.readFileSync(envPath, "utf8");
+            if (!/^FB_BROWSER_PATH=\s*\S+/m.test(cur)) {
+              cur +=
+                (cur.endsWith("\n") ? "" : "\n") +
+                `FB_BROWSER_PATH=${found}\n`;
+              fs.writeFileSync(envPath, cur, "utf8");
+              log("wrote FB_BROWSER_PATH from auto-detect", found);
+            }
+          }
+        }
+      } catch (e) {
+        log("persist FB_BROWSER_PATH fail", e.message);
+      }
+    }
+  }
 
-  // Explicit browser path (Portable or chrome.exe)
   if (forcedPath && fs.existsSync(forcedPath)) {
     const plan = resolveChromeLaunchPlan(forcedPath, browserEnv);
     try {
@@ -611,7 +717,7 @@ function openInPreferredBrowser(url) {
       }).unref();
       log(
         "openInPreferredBrowser",
-        plan.portable ? "portable" : "forced",
+        plan.portable ? "PORTABLE" : "forced-exe",
         plan.exe,
         plan.profile ? `profile=${plan.profile}` : "profile=auto",
         plan.reuseRunning ? "reuse" : "cold",
@@ -619,47 +725,42 @@ function openInPreferredBrowser(url) {
       );
       return true;
     } catch (e) {
-      log("openInPreferredBrowser forced fail", e.message);
+      log("openInPreferredBrowser spawn fail", e.message);
     }
   }
 
-  // No path: if only profile set, try system chrome with that profile (cold)
-  if (profile && !/^#/.test(profile)) {
-    const local = process.env.LOCALAPPDATA || "";
-    const pf = process.env.ProgramFiles || "C:\\Program Files";
-    const systemChrome = [
-      path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
-    ].find((p) => fs.existsSync(p));
-    if (systemChrome) {
-      try {
-        const args = isChromeProcessRunning()
-          ? [url]
-          : [`--profile-directory=${profile}`, url];
-        spawn(systemChrome, args, {
-          detached: true,
-          stdio: "ignore",
-          windowsHide: false,
-        }).unref();
-        log(
-          "openInPreferredBrowser system+profile",
-          profile,
-          isChromeProcessRunning() ? "reuse-url-only" : "cold+profile",
-          url.slice(0, 80)
-        );
-        return true;
-      } catch (e) {
-        log("openInPreferredBrowser system+profile fail", e.message);
-      }
+  // 2) Facebook OAuth without Portable: DO NOT open system Chrome silently
+  if (authSensitive) {
+    const msg =
+      "Chưa tìm thấy Chrome Portable.\n\n" +
+      "Vào «Kết nối Meta» → Chọn thư mục ChromePortable (file ChromePortable.exe) → " +
+      "chọn Profile → «Dùng profile này».\n\n" +
+      "Hoặc ghi vào .env:\n" +
+      "FB_BROWSER_PATH=D:\\\\path\\\\ChromePortable\\\\ChromePortable.exe\n\n" +
+      "Nếu bấm OK, Windows có thể mở Chrome GỐC (sai session).";
+    log("openInPreferredBrowser BLOCK system chrome for OAuth — no Portable path");
+    try {
+      const r = dialog.showMessageBoxSync(mainWindow || undefined, {
+        type: "warning",
+        title: "Cần Chrome Portable",
+        message: "Connect Facebook cần Chrome Portable",
+        detail: msg,
+        buttons: ["Hủy (khuyên dùng)", "Vẫn mở trình duyệt mặc định"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (r === 0) return false;
+    } catch {
+      return false;
     }
   }
 
-  // Last resort: OS default handler
+  // 3) Non-auth or user accepted fallback
   shell
     .openExternal(url)
     .then(() =>
       log(
-        "openInPreferredBrowser openExternal (no FB_BROWSER_PATH — may miss Portable)",
+        "openInPreferredBrowser openExternal FALLBACK (system default)",
         url.slice(0, 80)
       )
     )

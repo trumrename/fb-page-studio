@@ -722,10 +722,18 @@
           }),
         });
         if (r.history) renderBrowserHistory(r.history);
+        const isPortable = /portable/i.test(r.browser_path || "");
         $("oauthBrowserStatus").innerHTML =
           `<b style="color:#34d399">Đã lưu profile <code>${escapeHtml(r.selected_profile || "Default")}</code></b>` +
-          (r.browser_path ? `<br/>Browser: <code>${escapeHtml(r.browser_path)}</code>` : "") +
-          `<br/><span class="muted" style="font-size:.8rem">Connect sẽ mở đúng profile này (Chrome Portable: ChromePortable.exe --profile-directory=…).</span> Bấm Connect Facebook ngay — không cần restart.`;
+          (r.browser_path
+            ? `<br/>Browser: <code>${escapeHtml(r.browser_path)}</code>`
+            : `<br/><span style="color:#fb7185">⚠ Chưa có FB_BROWSER_PATH — Connect sẽ mở Chrome GỐC. Hãy chọn lại thư mục ChromePortable.</span>`) +
+          (isPortable
+            ? `<br/><span class="muted" style="font-size:.8rem">✓ Portable — Connect mở ChromePortable.exe + profile (không Chrome gốc).</span>`
+            : r.browser_path
+              ? `<br/><span style="color:#fbbf24">Đường dẫn không phải Portable — nên trỏ ChromePortable.exe</span>`
+              : "") +
+          `<br/>Bấm Connect Facebook ngay — không cần restart.`;
       } catch (e) {
         $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`;
       } finally { btn.disabled = false; }
