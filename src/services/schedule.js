@@ -380,8 +380,11 @@ export async function scheduleOnePost(pageRowId, opts = {}) {
  *  - // fixed:
  *  - times?: string[] ISO or "YYYY-MM-DD HH:mm"
  *  - start_at?: string
- *  - count_per_page?: number
+ *  - count_per_page?: number  (bài / page / ngày khi multi-day)
+ *  - days_ahead?: number (1-30) — hẹn nhiều ngày (cả fixed + active_times)
  *  - interval_minutes?: number
+ *  - interval_minutes_min/max?: number — cách giữa 2 bài cùng page
+ *  - page_gap_minutes_min/max?: number — cách giữa page A và page B (stagger)
  *  - dry_run?: boolean — only return planned slots
  */
 export async function scheduleBulk(body = {}) {
@@ -408,10 +411,41 @@ export async function scheduleBulk(body = {}) {
   const plan = []; // { page_row_id, page_name, slots: Date[], active?, error? }
   const antiGlobal = getAntiSpamSettings();
   const antiOn = !!antiGlobal.enabled;
-  // Stagger multi-page so many pages don't schedule the exact same second
-  const staggerStep = antiOn
+
+  // Page A → Page B gap (phút). User-configurable; fallback anti-spam jitter.
+  const legacyStep = antiOn
     ? Math.min(12, Math.max(3, Number(antiGlobal.jitter_minutes_min) || 3))
     : 5;
+  let pageGapMin = Number(
+    body.page_gap_minutes_min ?? body.page_stagger_min ?? body.page_stagger_minutes
+  );
+  let pageGapMax = Number(
+    body.page_gap_minutes_max ?? body.page_stagger_max ?? body.page_stagger_minutes
+  );
+  if (!Number.isFinite(pageGapMin) || pageGapMin < 0) pageGapMin = legacyStep;
+  if (!Number.isFinite(pageGapMax) || pageGapMax < pageGapMin) {
+    pageGapMax = pageGapMin;
+  }
+  pageGapMin = Math.min(24 * 60, Math.max(0, Math.round(pageGapMin)));
+  pageGapMax = Math.min(24 * 60, Math.max(pageGapMin, Math.round(pageGapMax)));
+
+  // Cumulative offset per page index: page0=0, page1=gap1, page2=gap1+gap2…
+  const pageStaggerRng = makeSeededRng(
+    `pagegap.${pageIds.join(",")}.${pageGapMin}.${pageGapMax}`
+  );
+  const pageStaggers = [0];
+  for (let i = 1; i < pageIds.length; i++) {
+    const gap =
+      pageGapMax > pageGapMin
+        ? Math.round(randBetweenSeeded(pageStaggerRng, pageGapMin, pageGapMax))
+        : pageGapMin;
+    pageStaggers.push(pageStaggers[i - 1] + gap);
+  }
+  const staggerStep =
+    pageIds.length > 1
+      ? Math.round(pageStaggers[pageStaggers.length - 1] / (pageIds.length - 1))
+      : pageGapMin;
+
   let pageIndex = 0;
   // Khi anti-spam OFF, tự động bỏ cap ngày — user tắt anti = muốn đăng tự do
   const ignorePageCap = !!body.ignore_page_quota || !antiOn;
@@ -420,7 +454,15 @@ export async function scheduleBulk(body = {}) {
   // Mặc định bật cho mode "fixed"; có thể tắt bằng body.strict_timing === false.
   const strictTiming =
     body.strict_timing != null ? !!body.strict_timing : mode === "fixed";
-  const daysAhead = Math.min(30, Math.max(1, Number(body.days_ahead) || 3));
+  // Multi-day: default 3 for active_times; default 1 for fixed unless body sets days
+  const daysAhead = Math.min(
+    30,
+    Math.max(
+      1,
+      Number(body.days_ahead) ||
+        (mode === "fixed" ? 1 : 3)
+    )
+  );
   const requestedPerDay = body.posts_per_day != null ? Number(body.posts_per_day) : null;
 
   for (const pageRowId of pageIds) {
@@ -441,7 +483,7 @@ export async function scheduleBulk(body = {}) {
     let slots = [];
     let activeMeta = null;
     let policyMeta = null;
-    const pageStagger = pageIndex * staggerStep;
+    const pageStagger = pageStaggers[pageIndex] ?? pageIndex * pageGapMin;
     pageIndex += 1;
 
     // Shared policy
@@ -482,15 +524,14 @@ export async function scheduleBulk(body = {}) {
           (d) => new Date(d.getTime() + pageStagger * 60 * 1000)
         );
       } else if (body.start_at) {
-        // count_per_page capped by page max/day unless ignore
+        // count_per_page = bài / page / ngày; nhân với days_ahead (hẹn nhiều ngày)
         const rawCount = Math.min(50, Math.max(1, Number(body.count_per_page) || 1));
-        const count = ignorePageCap
+        const countPerDay = ignorePageCap
           ? rawCount
           : Math.min(rawCount, policy.max_posts_per_day_effective);
         // strictTiming: dùng đúng interval người dùng nhập (chỉ chặn tối thiểu 10p
         // theo giới hạn Graph). Không ép min-gap của page đè lên.
-        // Khoảng cách bài–bài: nếu có interval_minutes_min/max và max>min thì
-        // tool tự random trong [min,max] cho mỗi bước; ngược lại dùng 1 giá trị cố định.
+        // Khoảng cách bài–bài CÙNG page: interval_minutes_min/max
         const rawMin = Number(body.interval_minutes_min);
         const rawMax = Number(body.interval_minutes_max);
         const fallbackInterval =
@@ -501,15 +542,12 @@ export async function scheduleBulk(body = {}) {
           Number.isFinite(rawMax) ? rawMax : intervalMin
         );
         if (!strictTiming) {
-          // Ở chế độ không strict, tôn trọng min-gap của page làm sàn.
           intervalMin = Math.max(minGap, intervalMin);
           intervalMax = Math.max(intervalMin, intervalMax);
         }
         const randomizeInterval = intervalMax > intervalMin;
-        // Seed cố định theo (page + start + count + khoảng) => dry-run và chạy thật
-        // ra GIỐNG nhau; không đổi mỗi lần bấm "Xem kế hoạch".
         const rng = makeSeededRng(
-          `${pageRowId}.${body.start_at}.${count}.${intervalMin}.${intervalMax}`
+          `${pageRowId}.${body.start_at}.${countPerDay}.${daysAhead}.${intervalMin}.${intervalMax}`
         );
         const startList = parseFixedTimes([body.start_at], tz);
         if (!startList.length) {
@@ -522,13 +560,18 @@ export async function scheduleBulk(body = {}) {
           });
           continue;
         }
-        let t = startList[0].getTime() + pageStagger * 60 * 1000;
-        for (let i = 0; i < count; i++) {
-          slots.push(new Date(t));
-          const stepMin = randomizeInterval
-            ? randBetweenSeeded(rng, intervalMin, intervalMax)
-            : intervalMin;
-          t += Math.round(stepMin) * 60 * 1000;
+        const day0Ms = startList[0].getTime();
+        const dayMs = 24 * 60 * 60 * 1000;
+        // Multi-day: mỗi ngày lặp lại countPerDay bài, cùng giờ bắt đầu + interval
+        for (let d = 0; d < daysAhead; d++) {
+          let t = day0Ms + d * dayMs + pageStagger * 60 * 1000;
+          for (let i = 0; i < countPerDay; i++) {
+            slots.push(new Date(t));
+            const stepMin = randomizeInterval
+              ? randBetweenSeeded(rng, intervalMin, intervalMax)
+              : intervalMin;
+            t += Math.round(stepMin) * 60 * 1000;
+          }
         }
       } else {
         plan.push({
@@ -557,6 +600,9 @@ export async function scheduleBulk(body = {}) {
         source: "fixed",
         min_gap_minutes: minGap,
         page_stagger_minutes: pageStagger,
+        page_gap_minutes_min: pageGapMin,
+        page_gap_minutes_max: pageGapMax,
+        days_ahead: daysAhead,
         anti_spam_enabled: antiOn,
       };
     } else if (mode === "windows") {
@@ -757,9 +803,14 @@ export async function scheduleBulk(body = {}) {
       anti_spam_trimmed: limited.trimmed,
       anti_spam_caps: limited.caps || null,
       page_stagger_step_minutes: staggerStep,
+      page_gap_minutes_min: pageGapMin,
+      page_gap_minutes_max: pageGapMax,
+      page_staggers: pageStaggers,
+      days_ahead: daysAhead,
       policy_note:
         "Giờ / gap / max bài/ngày lấy từ cấu hình Page + anti-spam (khớp đăng trực tiếp). " +
-        "Hôm nay trừ slot đã đăng + đã hẹn FB. Bật ignore_page_quota để bỏ cap page (không khuyến nghị).",
+        "Hôm nay trừ slot đã đăng + đã hẹn FB. Bật ignore_page_quota để bỏ cap page (không khuyến nghị). " +
+        `Cách page A→B: ${pageGapMin}–${pageGapMax} phút · hẹn ${daysAhead} ngày.`,
       plan: finalPlan.map((p) => ({
         ...p,
         slots: (p.slots || []).map((d) => ({
@@ -822,6 +873,9 @@ export async function scheduleBulk(body = {}) {
     anti_spam_trimmed: limited.trimmed,
     anti_spam_caps: limited.caps || null,
     page_stagger_step_minutes: staggerStep,
+    page_gap_minutes_min: pageGapMin,
+    page_gap_minutes_max: pageGapMax,
+    days_ahead: daysAhead,
     results,
     total_ok: results.reduce((n, r) => n + (r.scheduled_ok || 0), 0),
     total_fail: results.reduce((n, r) => n + (r.scheduled_fail || 0), 0),

@@ -192,8 +192,8 @@
           <div class="panel-body">
             <p class="muted" style="margin-top:.65rem">
               Meta <b>đã gỡ</b> metric <code>page_fans_online</code> — không còn lấy “fan online” từ Graph.
-              Mode <b>Giờ tích cực</b> = giờ ưa thích <b>từng page</b> (hoặc preset VN 9,12,19,21 nếu chưa lưu) · jitter phút + min-gap anti-spam · stagger giữa các page.
-              Mode <b>cố định</b> = 1 lịch cho mọi page đã tick (vẫn stagger nhẹ).
+              Mode <b>Giờ tích cực</b> = giờ ưa thích từng page · <b>nhiều ngày</b> · gap bài trong page + gap giữa các page.
+              Mode <b>cố định</b> = Start at + bài/ngày × <b>số ngày</b> · cách bài (cùng page) · cách page A→B (phút min–max).
             </p>
             <div id="bulkAntiBar" class="muted" style="margin:.5rem 0 .65rem;padding:.55rem .75rem;border-radius:8px;border:1px solid rgba(255,255,255,.08);font-size:.82rem">
               Anti-spam: <b id="bulkAntiLabel">…</b>
@@ -316,36 +316,64 @@
             <div id="bulkFixed">
               <div class="row2" style="margin-top:.25rem">
                 <div>
-                  <label>Start at · giờ bắt đầu (máy local)</label>
+                  <label>Start at · giờ bắt đầu ngày 1 (máy local)</label>
                   <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap">
                     <input type="datetime-local" id="bulkStart" step="60" style="min-width:13.5rem;flex:1" />
                     <button type="button" class="btn-ok btn-sm" id="btnBulkStartApply" title="Khóa giờ đã chọn vào form + lưu workspace">Áp dụng giờ</button>
                     <button type="button" class="btn-ghost btn-sm" id="btnBulkStartPlus2h">+2 giờ</button>
                   </div>
                   <div id="bulkStartHint" class="muted" style="margin-top:.3rem;font-size:.78rem;line-height:1.4">
-                    Chọn giờ trên picker → bấm <b>Áp dụng giờ</b> (Windows/Electron đôi khi đóng picker không ghi giá trị).
+                    Chọn giờ trên picker → bấm <b>Áp dụng giờ</b>. Ngày 2+ lặp cùng giờ + interval.
                   </div>
                 </div>
                 <div class="row2">
                   <div>
-                    <label>Số bài / page</label>
-                    <input type="number" id="bulkCount" min="1" max="50" value="3" />
+                    <label>Số ngày hẹn</label>
+                    <input type="number" id="bulkFixedDays" min="1" max="30" value="3" title="Hẹn nhiều ngày — mỗi ngày lặp số bài/page" />
                   </div>
-                  <div class="row2">
-                    <div>
-                      <label>Cách nhau tối thiểu (phút)</label>
-                      <input type="number" id="bulkIntervalMin" min="10" value="120" title="Khoảng cách tối thiểu giữa 2 bài" />
-                    </div>
-                    <div>
-                      <label>tối đa (phút)</label>
-                      <input type="number" id="bulkIntervalMax" min="10" value="120" title="Để bằng tối thiểu = cách đều; lớn hơn = tool tự random trong khoảng" />
-                    </div>
+                  <div>
+                    <label>Bài / page / ngày</label>
+                    <input type="number" id="bulkCount" min="1" max="50" value="3" title="Số bài mỗi page trong 1 ngày" />
                   </div>
                 </div>
               </div>
+              <div class="row2" style="margin-top:.45rem">
+                <div>
+                  <label>Cách 2 bài <b>cùng page</b> (phút) — tối thiểu</label>
+                  <input type="number" id="bulkIntervalMin" min="10" value="120" title="Giữa bài 1 và bài 2 của cùng 1 page" />
+                </div>
+                <div>
+                  <label>cùng page — tối đa (phút)</label>
+                  <input type="number" id="bulkIntervalMax" min="10" value="120" title="= min → cách đều; &gt; min → random trong khoảng" />
+                </div>
+              </div>
               <input type="hidden" id="bulkInterval" value="120" />
-              <label>Hoặc list thời điểm (mỗi dòng · YYYY-MM-DD HH:mm) — nếu có list thì bỏ qua Start at</label>
-              <textarea id="bulkTimes" placeholder="2026-07-18 09:00&#10;2026-07-18 19:00"></textarea>
+              <label style="margin-top:.55rem;display:block">Hoặc list thời điểm (mỗi dòng · YYYY-MM-DD HH:mm) — nếu có list thì bỏ qua Start at / số ngày</label>
+              <textarea id="bulkTimes" placeholder="2026-07-18 09:00&#10;2026-07-18 19:00&#10;2026-07-19 09:00"></textarea>
+              <p class="muted" style="margin:.35rem 0 0;font-size:.78rem">
+                VD: 3 ngày × 2 bài/page × 5 page = 30 slot. Mỗi ngày bắt đầu lúc Start at, cách bài theo interval.
+              </p>
+            </div>
+
+            <!-- Gap giữa các page — dùng cả mode giờ tích cực + cố định -->
+            <div class="panel section-gap" style="margin-top:.75rem;border-color:rgba(96,165,250,.35)">
+              <h2 class="panel-hd" style="font-size:.9rem">Cách giờ giữa các page (A → B → C…)</h2>
+              <div class="panel-body">
+                <p class="muted" style="margin:.15rem 0 .5rem;font-size:.78rem;line-height:1.45">
+                  Page đầu không lệch. Page sau lệch thêm <b>random trong khoảng</b> so với page trước
+                  (cùng mốc bài). VD min=15 max=45 → page B trễ 15–45 phút so với page A; page C trễ thêm 15–45 phút so với B.
+                </p>
+                <div class="row2">
+                  <div>
+                    <label>Page A → page B tối thiểu (phút)</label>
+                    <input type="number" id="bulkPageGapMin" min="0" max="1440" value="10" title="Khoảng cách tối thiểu giữa 2 page liên tiếp" />
+                  </div>
+                  <div>
+                    <label>tối đa (phút)</label>
+                    <input type="number" id="bulkPageGapMax" min="0" max="1440" value="30" title="= min → lệch cố định; &gt; min → random" />
+                  </div>
+                </div>
+              </div>
             </div>
 
             <label class="checks" style="margin:.5rem 0 0">
@@ -722,8 +750,8 @@
 
     const bulkWorkspaceControlIds = [
       "bulkMode", "bulkPostType", "bulkTz", "bulkDays", "bulkPerDay",
-      "bulkForceActive", "bulkStart", "bulkCount", "bulkInterval", "bulkTimes",
-      "bulkIntervalMin", "bulkIntervalMax", "bulkIgnoreQuota",
+      "bulkForceActive", "bulkStart", "bulkCount", "bulkFixedDays", "bulkInterval", "bulkTimes",
+      "bulkIntervalMin", "bulkIntervalMax", "bulkPageGapMin", "bulkPageGapMax", "bulkIgnoreQuota",
       "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder",
       "metaMaxScheduledPerDay", "metaPublishWindowDays", "metaMinIntervalMinutes",
       "metaIgnoreGraphLimit", "allow30DaysMax", "bulkPrefHours",
@@ -2053,6 +2081,14 @@
     function bulkBody(dryRun) {
       const ids = selectedPageIds();
       const mode = $("bulkMode").value;
+      // Gap page A → B (cả 2 mode)
+      const pgMin = Number($("bulkPageGapMin")?.value);
+      const pgMaxRaw = Number($("bulkPageGapMax")?.value);
+      const pageGapMin = Number.isFinite(pgMin) && pgMin >= 0 ? pgMin : 10;
+      const pageGapMax = Math.max(
+        pageGapMin,
+        Number.isFinite(pgMaxRaw) ? pgMaxRaw : pageGapMin
+      );
       const body = {
         page_row_ids: ids,
         mode,
@@ -2060,6 +2096,8 @@
         tz_offset_minutes: Number($("bulkTz").value) || 420,
         dry_run: !!dryRun,
         ignore_page_quota: $("bulkIgnoreQuota")?.checked || false,
+        page_gap_minutes_min: pageGapMin,
+        page_gap_minutes_max: pageGapMax,
       };
       if (mode === "fixed") ensureBulkStartFuture({ silent: true });
       if (mode === "active_times") {
@@ -2087,7 +2125,6 @@
         if (lines.length) {
           body.times = lines;
           if ($("bulkStart")?.value) {
-            // list thời điểm thắng Start at — tránh user tưởng Start at đang dùng
             updateBulkStartHint("bị bỏ qua vì đã có list thời điểm", true);
           }
         } else {
@@ -2096,13 +2133,14 @@
           body.start_at = startVal
             ? startVal.replace("T", " ")
             : null;
+          // Hẹn nhiều ngày × bài/page/ngày
+          body.days_ahead = Math.min(30, Math.max(1, Number($("bulkFixedDays")?.value) || 1));
           body.count_per_page = Number($("bulkCount").value) || 1;
           const iMin = Number($("bulkIntervalMin")?.value) || 120;
           const iMaxRaw = Number($("bulkIntervalMax")?.value) || iMin;
           const iMax = Math.max(iMin, iMaxRaw);
           body.interval_minutes_min = iMin;
           body.interval_minutes_max = iMax;
-          // Tương thích cũ: nếu min=max thì gửi luôn interval_minutes cố định
           body.interval_minutes = iMin === iMax ? iMin : undefined;
         }
       }
@@ -2125,9 +2163,12 @@
         (r.anti_spam_caps
           ? ` · cap pages=${r.anti_spam_caps.bulk_max_pages}/slots-page=${r.anti_spam_caps.bulk_max_slots_per_page}/total=${r.anti_spam_caps.bulk_max_total}`
           : "") +
-        (r.page_stagger_step_minutes != null
-          ? ` · stagger +${r.page_stagger_step_minutes}p/page`
-          : "") +
+        (r.page_gap_minutes_min != null
+          ? ` · page A→B ${r.page_gap_minutes_min}–${r.page_gap_minutes_max ?? r.page_gap_minutes_min}p`
+          : r.page_stagger_step_minutes != null
+            ? ` · stagger ~+${r.page_stagger_step_minutes}p/page`
+            : "") +
+        (r.days_ahead != null ? ` · ${r.days_ahead} ngày` : "") +
         (metaOn ? ` · Meta scheduled: max=${metaOn.max_scheduled_per_day}/ngày · window=${metaOn.publish_window_days} ngày` : "") +
         `</div>`;
 
