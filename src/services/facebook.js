@@ -1647,6 +1647,9 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         minMs: retryCount <= 3 ? 8_000 : retryCount <= 12 ? 15_000 : 20_000,
         maxMs: retryCount <= 3 ? 40_000 : retryCount <= 12 ? 90_000 : 120_000,
       });
+      // CRITICAL: batch *item* #4/#17/#32 must pause ALL pages/list workers
+      // (local sharedPauseUntil alone lets page_parallel keep thrashing Graph)
+      noteGlobalRateLimit(sampleErr || { code: 4, message: "batch item rate limit" });
     } else {
       waitMs = estimateTransientWaitMs(sampleErr, {
         attempt,
@@ -1654,7 +1657,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         maxMs: retryCount <= 10 ? 25_000 : 60_000,
       });
     }
-    // Extend shared pause so ALL workers wait the same window (no //4//5//6 spam)
+    // Extend shared pause so ALL workers in THIS delete call wait together
     const until = Date.now() + waitMs;
     if (until > sharedPauseUntil) sharedPauseUntil = until;
 
@@ -1671,6 +1674,28 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         ? `⚠ FB limit — tạm dừng ~${Math.ceil((sharedPauseUntil - Date.now()) / 1000)}s, còn ${retryCount} bài (${liveLabel()})`
         : `⚠ Lỗi tạm FB — chờ ~${Math.ceil(waitMs / 1000)}s, còn ${retryCount} bài (${liveLabel()})`,
     });
+
+    // Wait both process-global pause (other pages) and local shared pause
+    if (isRl) {
+      const g = await waitGlobalGraphPause({
+        shouldStop: opts.shouldStop,
+        onTick: (tick) => {
+          notifyLimit({
+            attempt: attempt + 1,
+            wait_ms: tick.wait_ms,
+            remaining_sec: tick.remaining_sec,
+            remaining_ms: tick.remaining_ms,
+            error: sampleErr?.message || "retry",
+            code: sampleErr?.code,
+            rate_limit: true,
+            label,
+            message: `⚠ GLOBAL pause — còn ${tick.remaining_sec}s… (còn ${retryCount} bài · ${liveLabel()})`,
+            ticking: true,
+          });
+        },
+      });
+      if (g.stopped) return g;
+    }
 
     const w = await waitWhileRateLimited(
       Math.max(1000, sharedPauseUntil - Date.now()),

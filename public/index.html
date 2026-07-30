@@ -739,7 +739,7 @@
     }
 
     $("btnChooseBrowserData").onclick = async () => {
-      const options = { title:"Chọn một hoặc nhiều thư mục/ổ chứa Chrome", initialDir: $("oauthBrowserDataDir").value.split(/[;|]/)[0], multiple:true };
+      const options = { title:"Chọn nhiều thư mục/ổ chứa Chrome (GỐC hoặc PORTABLE)", initialDir: $("oauthBrowserDataDir").value.split(/[;|]/)[0], multiple:true };
       const r = window.fbPageStudioDesktop?.pickFolder
         ? await window.fbPageStudioDesktop.pickFolder(options)
         : await api("/api/system/pick-folder", { method:"POST", body: JSON.stringify({ title:options.title, initial_dir:options.initialDir }) });
@@ -779,7 +779,7 @@
           body: JSON.stringify({
             profile: chosen.directory,
             user_data_dir: chosen.user_data_dir || "",
-            browser_path: chosen.browser_path || "",
+            browser_path: chosen?.browser_path || "",
           }),
         });
         if (r.history) renderBrowserHistory(r.history);

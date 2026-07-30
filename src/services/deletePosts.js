@@ -315,8 +315,11 @@ function finalizeReport(job) {
 export async function previewPagePosts(pageRowId, opts = {}) {
   const page = loadPageForDelete(pageRowId);
   const maxPosts = Math.max(0, Number(opts.max_posts) || Number(opts.maxPosts) || 200);
-  const sinceU = toUnixSeconds(opts.since);
-  const untilU = toUnixSeconds(opts.until);
+  // Same normalization as startDeleteJob (preview must match delete counts)
+  const sinceU = toUnixSeconds(opts.since ?? opts.since_unix);
+  const untilU = normalizeUntilUnix(opts.until ?? opts.until_unix, {
+    expandMidnight: opts.until_exact !== true && opts.untilExact !== true,
+  });
   const posts = await listPagePosts(page.page_id, page.page_token, {
     maxPosts: maxPosts || 200,
     since: sinceU ?? undefined,
@@ -329,6 +332,7 @@ export async function previewPagePosts(pageRowId, opts = {}) {
   const filtered = filterPostsByOptions(posts, {
     since: sinceU,
     until: untilU,
+    until_exact: true, // already expanded above
     keyword: opts.keyword,
   });
 

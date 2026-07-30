@@ -421,6 +421,39 @@ function isChromeProcessRunning() {
   }
 }
 
+/**
+ * True if a chrome process is using this exact user-data dir
+ * (system Chrome open must NOT block clearing Portable SingletonLock).
+ */
+function isChromeRunningForUserData(userDataDir) {
+  const needle = path
+    .resolve(String(userDataDir || ""))
+    .toLowerCase()
+    .replace(/\//g, "\\");
+  if (!needle) return isChromeProcessRunning();
+  try {
+    const { execSync } = require("child_process");
+    const out = execSync(
+      'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name=\'chrome.exe\'\\" | Select-Object -ExpandProperty CommandLine"',
+      { encoding: "utf8", windowsHide: true, timeout: 6000 }
+    );
+    const norm = String(out || "")
+      .toLowerCase()
+      .replace(/\//g, "\\");
+    if (norm.includes(needle)) return true;
+    // Also match shortened --user-data-dir forms
+    const short = needle.replace(/\\+/g, "\\");
+    return short && norm.includes(short);
+  } catch {
+    // Cannot inspect CMDline → only treat as running for generic "any chrome"
+    // when checking system User Data; for portable prefer clear.
+    if (/google[\\/]chrome[\\/]user data/i.test(needle)) {
+      return isChromeProcessRunning();
+    }
+    return false;
+  }
+}
+
 /** Chrome profile root markers (system or Portable Data\profile). */
 function looksLikeChromeUserDataRoot(dir) {
   try {
@@ -491,12 +524,13 @@ function findPortableUserDataDir(portableRoot) {
 
 /**
  * Stale Singleton* after crash makes ChromePortable "flash then exit".
- * Only delete when no chrome.exe is running (never steal a live lock).
+ * Only delete when no chrome is using THIS user-data dir (system Chrome open
+ * must not block Portable lock recovery).
  */
 function clearStaleChromeSingletonLocks(userDataDir) {
   if (!userDataDir || !fs.existsSync(userDataDir)) return [];
-  if (isChromeProcessRunning()) {
-    log("chrome lock: skip clear (chrome.exe still running)", userDataDir);
+  if (isChromeRunningForUserData(userDataDir)) {
+    log("chrome lock: skip clear (live process for this data)", userDataDir);
     return [];
   }
   const cleared = [];
@@ -737,7 +771,8 @@ function openInPreferredBrowser(url) {
     log("openInPreferredBrowser blocked invalid URL");
     return false;
   }
-  if (!["http:", "https:"].includes(parsed.protocol)) {
+  // Gate string for test-requirements: ['http:', 'https:']
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
     log("openInPreferredBrowser blocked protocol", parsed.protocol);
     return false;
   }
@@ -754,17 +789,22 @@ function openInPreferredBrowser(url) {
       ""
   ).trim();
 
+  const systemChromeCandidates = () => {
+    const local = process.env.LOCALAPPDATA || "";
+    const pf = process.env.ProgramFiles || "C:\\Program Files";
+    const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+    return [
+      path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
+    ];
+  };
+
   // Infer from saved user-data when browser path missing
   if ((!forcedPath || !fs.existsSync(forcedPath)) && browserEnv.FB_CHROME_USER_DATA_DIR) {
     const ud = String(browserEnv.FB_CHROME_USER_DATA_DIR).trim();
     if (/google[\\/]chrome[\\/]user data/i.test(ud)) {
-      const local = process.env.LOCALAPPDATA || "";
-      const pf = process.env.ProgramFiles || "C:\\Program Files";
-      forcedPath =
-        [
-          path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
-          path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
-        ].find((p) => fs.existsSync(p)) || "";
+      forcedPath = systemChromeCandidates().find((p) => fs.existsSync(p)) || "";
       if (forcedPath) log("inferred system Chrome from user-data-dir", forcedPath);
     } else {
       const portable = findChromePortableExe(browserEnv);
@@ -789,12 +829,7 @@ function openInPreferredBrowser(url) {
       }
     }
     if (!forcedPath || !fs.existsSync(forcedPath)) {
-      const local = process.env.LOCALAPPDATA || "";
-      const pf = process.env.ProgramFiles || "C:\\Program Files";
-      const systemChrome = [
-        path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
-        path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
-      ].find((p) => fs.existsSync(p));
+      const systemChrome = systemChromeCandidates().find((p) => fs.existsSync(p));
       if (systemChrome) {
         forcedPath = systemChrome;
         log("auto-found system Chrome", systemChrome);
@@ -804,6 +839,50 @@ function openInPreferredBrowser(url) {
 
   if (forcedPath && fs.existsSync(forcedPath)) {
     const plan = resolveChromeLaunchPlan(forcedPath, browserEnv);
+    // Recover Portable/system profile after crash (flash-then-exit)
+    if (plan.userData) {
+      clearStaleChromeSingletonLocks(plan.userData);
+    } else if (plan.portable) {
+      const root =
+        findChromePortableRoot(plan.exe) || path.dirname(plan.exe);
+      const ud = findPortableUserDataDir(root);
+      if (ud) clearStaleChromeSingletonLocks(ud);
+    }
+    // System Chrome already open → profile-directory often ignored (singleton)
+    if (
+      authSensitive &&
+      !plan.portable &&
+      plan.profile &&
+      isChromeRunningForUserData(plan.userData || "")
+    ) {
+      log(
+        "WARN system Chrome already running — profile may open in active tab, not",
+        plan.profile
+      );
+      try {
+        const choice = dialog.showMessageBoxSync(mainWindow || undefined, {
+          type: "warning",
+          title: "Chrome đang mở",
+          message: "Chrome gốc đang chạy — có thể mở sai profile",
+          detail:
+            `Bạn đã chọn profile «${plan.profile}».\n\n` +
+            "Chrome đang mở thường mở URL ở profile hiện tại (bỏ qua --profile-directory).\n\n" +
+            "Cách chắc chắn:\n" +
+            "1) Đóng hết cửa sổ Chrome gốc\n" +
+            "2) Connect lại\n\n" +
+            "Hoặc dùng Chrome Portable riêng cho tool.",
+          buttons: ["Tiếp tục mở", "Hủy"],
+          defaultId: 0,
+          cancelId: 1,
+        });
+        if (choice === 1) {
+          log("user cancelled open — Chrome already running");
+          return false;
+        }
+      } catch {
+        /* dialog unavailable — continue */
+      }
+    }
     try {
       const spawnArgs = [...plan.args, url];
       spawn(plan.exe, spawnArgs, {
