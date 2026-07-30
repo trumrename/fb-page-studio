@@ -949,10 +949,25 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
   /** @type {Array<{ path: string, fieldSets: string[], kind: string, extraQuery?: Record<string,string|number> }>} */
   let edges;
   if (listMode === "full") {
+    const photoFieldSetsFull = [
+      "id,created_time,link,name,page_story_id,images",
+      "id,created_time,link,name,page_story_id",
+      "id,created_time,page_story_id",
+      "id,created_time,link",
+      "id,created_time",
+      "id",
+    ];
     edges = [
       { path: `/${pid}/published_posts`, fieldSets: postFieldSets, kind: "published_posts" },
       { path: `/${pid}/posts`, fieldSets: postFieldSets, kind: "posts" },
       { path: `/${pid}/feed`, fieldSets: postFieldSets, kind: "feed" },
+      { path: `/${pid}/photos`, fieldSets: photoFieldSetsFull, kind: "photos" },
+      {
+        path: `/${pid}/photos`,
+        fieldSets: photoFieldSetsFull,
+        kind: "photos_uploaded",
+        extraQuery: { type: "uploaded" },
+      },
       { path: `/${pid}/videos`, fieldSets: videoFieldSets, kind: "videos" },
       {
         path: `/${pid}/videos`,
@@ -963,34 +978,38 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
       { path: `/${pid}/video_reels`, fieldSets: videoFieldSets, kind: "video_reels" },
       { path: `/${pid}/live_videos`, fieldSets: videoFieldSets, kind: "live_videos" },
       {
-        path: `/${pid}/photos`,
-        fieldSets: ["id,created_time,link", "id,created_time", "id"],
-        kind: "photos",
-      },
-      {
         path: `/${pid}/scheduled_posts`,
         fieldSets: postFieldSets,
         kind: "scheduled_posts",
       },
     ];
   } else {
-    // wipe: page-authored + timeline feed (shares / visitor) + media
-    // Meta: feed = posts by Page + visitor posts + public tags on Page
+    // wipe: text/photo POSTS first, then media edges (videos burn quota last)
+    // Photo wall posts live in published_posts/posts/feed (status_type=added_photos)
+    // and/or /photos (+ page_story_id). Videos only are NOT enough for clean timeline.
+    const photoFieldSets = [
+      "id,created_time,link,name,page_story_id,images",
+      "id,created_time,link,name,page_story_id",
+      "id,created_time,page_story_id",
+      "id,created_time,link,name",
+      "id,created_time",
+      "id",
+    ];
     edges = [
       { path: `/${pid}/published_posts`, fieldSets: postFieldSets, kind: "published_posts" },
-      // Page share posts + visitor wall posts (not always in published_posts)
-      { path: `/${pid}/feed`, fieldSets: postFieldSets, kind: "feed" },
       { path: `/${pid}/posts`, fieldSets: postFieldSets, kind: "posts" },
-      { path: `/${pid}/videos`, fieldSets: videoFieldSets, kind: "videos" },
-      { path: `/${pid}/video_reels`, fieldSets: videoFieldSets, kind: "video_reels" },
+      { path: `/${pid}/feed`, fieldSets: postFieldSets, kind: "feed" },
+      // Photos BEFORE videos — otherwise #4 after videos skips photo edge entirely
+      { path: `/${pid}/photos`, fieldSets: photoFieldSets, kind: "photos" },
       {
         path: `/${pid}/photos`,
-        fieldSets: ["id,created_time,link,name", "id,created_time", "id"],
-        kind: "photos",
+        fieldSets: photoFieldSets,
+        kind: "photos_uploaded",
+        extraQuery: { type: "uploaded" },
       },
-      // Public posts that tagged this Page
+      { path: `/${pid}/videos`, fieldSets: videoFieldSets, kind: "videos" },
+      { path: `/${pid}/video_reels`, fieldSets: videoFieldSets, kind: "video_reels" },
       { path: `/${pid}/tagged`, fieldSets: postFieldSets, kind: "tagged" },
-      // Visitor posts (may  #100 on some pages — soft-fail via edge loop)
       {
         path: `/${pid}/visitor_posts`,
         fieldSets: postFieldSets,
@@ -1023,14 +1042,15 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
 
   /**
    * One canonical Graph id per object (avoids matched/OK ~2× + double DELETE quota).
-   * Feed-style edges: pageId_objectId. Videos/photos/reels: plain numeric id.
+   * Feed-style edges: pageId_objectId. Videos/reels: plain numeric id.
+   * Photos: prefer page_story_id (timeline post) when Graph provides it.
    */
   function canonicalContentId(rawId, kind) {
     const rid = String(rawId || "").trim();
     if (!rid) return "";
     if (rid.includes("_") || !/^\d+$/.test(rid)) return rid;
     if (
-      /published_posts|feed|posts|visitor|tagged|shared|enrich/i.test(
+      /published_posts|feed|posts|visitor|tagged|shared|enrich|scheduled/i.test(
         String(kind || "")
       )
     ) {
@@ -1045,34 +1065,59 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     const base = {
       ...raw,
       _source: kind,
-      message: raw.message || raw.story || raw.description || raw.title || raw.name || "",
+      message:
+        raw.message ||
+        raw.story ||
+        raw.description ||
+        raw.title ||
+        raw.name ||
+        "",
       created_time: raw.created_time || null,
       permalink_url: raw.permalink_url || raw.link || null,
     };
-    const primary = canonicalContentId(raw.id, kind);
-    if (primary) out.push({ ...base, id: primary });
+    const seenLocal = new Set();
+    const pushId = (id, source = kind) => {
+      const sid = String(id || "").trim();
+      if (!sid || seenLocal.has(sid)) return;
+      seenLocal.add(sid);
+      out.push({ ...base, id: sid, _source: source });
+    };
+
+    // /photos: page_story_id = wall post (text+image card). Photo node alone
+    // often leaves the timeline post visible after DELETE /{photo-id}.
+    if (/^photos/i.test(String(kind || ""))) {
+      const story = String(raw.page_story_id || "").trim();
+      if (story) pushId(story, `${kind}+story`);
+      pushId(String(raw.id), kind); // photo asset
+    } else {
+      const primary = canonicalContentId(raw.id, kind);
+      if (primary) pushId(primary, kind);
+    }
+
     // Linked objects only when they are different objects — one form each
     const extras = [
       raw.post_id,
       raw.object_id,
       raw.object_story_id,
+      raw.page_story_id,
       raw.video?.id,
       raw.video_id,
     ].filter(Boolean);
-    const seenLocal = new Set(primary ? [primary] : []);
+    const primaryPlain = String(raw.id || "")
+      .split("_")
+      .pop();
     for (const ex of extras) {
       const eid = canonicalContentId(ex, kind);
       if (!eid || seenLocal.has(eid)) continue;
-      // skip plain↔compound duplicate of same numeric object
-      const plain = String(ex).includes("_") ? String(ex).split("_").pop() : String(ex);
-      const primaryPlain = primary.includes("_") ? primary.split("_").pop() : primary;
-      if (plain && plain === primaryPlain) continue;
-      seenLocal.add(eid);
-      out.push({
-        ...base,
-        id: eid,
-        _source: `${kind}+linked`,
-      });
+      const plain = String(ex).includes("_")
+        ? String(ex).split("_").pop()
+        : String(ex);
+      if (plain && plain === primaryPlain && !String(ex).includes("_")) {
+        // plain same as photo/video node already added
+        if (seenLocal.has(plain)) continue;
+      }
+      if (plain && plain === primaryPlain && seenLocal.has(eid)) continue;
+      pushId(eid, `${kind}+linked`);
     }
     try {
       const atts = raw.attachments?.data || [];
@@ -1210,8 +1255,24 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     return 0;
   }
 
-  // After #4: only keep going on empty list; otherwise soft-skip (pass-2 delete re-lists)
-  const essentialKinds = new Set(["published_posts", "feed", "videos"]);
+  // After #4: still list core edges (posts + photos + videos). Only skip soft edges.
+  // Old bug: photos skipped after videos hit limit → "chỉ xóa video, còn full ảnh".
+  const essentialKinds = new Set([
+    "published_posts",
+    "posts",
+    "feed",
+    "photos",
+    "photos_uploaded",
+    "videos",
+    "video_reels",
+  ]);
+  const softSkipKinds = new Set([
+    "tagged",
+    "visitor_posts",
+    "live_videos",
+    "scheduled_posts",
+    "videos_uploaded",
+  ]);
 
   for (const edge of edges) {
     if (opts.shouldStop?.()) break;
@@ -1223,12 +1284,13 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
       });
       if (g.stopped) break;
     }
-    if (hitAppLimit && !essentialKinds.has(edge.kind) && byId.size >= 5) {
-      edgeStats[`${edge.kind}_skipped`] = 0;
+    // Soft edges only after #4 — never skip photos/posts/videos
+    if (hitAppLimit && softSkipKinds.has(edge.kind) && byId.size >= 5) {
+      edgeStats[`${edge.kind}_skipped_after_limit`] = 0;
       continue;
     }
-    if (hitAppLimit && byId.size >= 20 && edge.kind !== "published_posts" && edge.kind !== "videos") {
-      edgeStats[`${edge.kind}_skipped_after_limit`] = 0;
+    if (hitAppLimit && !essentialKinds.has(edge.kind) && !softSkipKinds.has(edge.kind)) {
+      edgeStats[`${edge.kind}_skipped`] = 0;
       continue;
     }
     try {

@@ -851,7 +851,7 @@ async function listOnePage(job, pageState, toDelete) {
     toDelete.set(pageState.page_row_id, ids);
     pushRecent(
       job,
-      `${page.name}: ${ids.length} object (post/video/reel) khớp (unique id ${pageState.listed})`
+      `${page.name}: ${ids.length} object (post/ảnh/video/reel) khớp (unique id ${pageState.listed})`
     );
 
     if (job.dry_run) {

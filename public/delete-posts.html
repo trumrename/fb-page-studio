@@ -139,7 +139,7 @@
               </div>
               <div class="field-row" style="margin-top:.75rem">
                 <div>
-                  <label class="field">Tối đa object / page (0 = full: post+video+reel)</label>
+                  <label class="field">Tối đa object / page (0 = full: post+ảnh+video+reel)</label>
                   <input type="number" id="maxPosts" value="0" min="0" max="100000" title="0 = không giới hạn — list gộp published_posts + posts + feed + videos + reels" />
                 </div>
                 <div>
@@ -180,7 +180,8 @@
               </div>
               <div class="chk"><input type="checkbox" id="useBatch" checked /> <span>Graph Batch 50 DELETE · list: published + feed (share/visitor) + video + photo + tagged</span></div>
               <p class="muted" style="margin-top:.75rem;font-size:.8rem;line-height:1.45">
-                <b>Full wipe:</b> để trống ngày → xóa post/share/visitor/video/reel/photo; bật avatar+bìa.<br/>
+                <b>Full wipe:</b> để trống ngày → xóa post chữ + <b>ảnh</b> + share/visitor + video/reel; bật avatar+bìa.<br/>
+                List ưu tiên published_posts/posts/feed + /photos (page_story_id) trước videos — tránh “chỉ xóa video”.<br/>
                 <b>Lọc ngày:</b> «Đến hết ngày» = 23:59:59 — bài sau đó được giữ. Log hiện khoảng lọc + số object bỏ ngoài khoảng.<br/>
                 List//1 khi #4. Quyền: <code>pages_manage_posts</code>, <code>pages_read_engagement</code>, MANAGE page (avatar/bìa).
               </p>
