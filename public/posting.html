@@ -126,10 +126,39 @@
                 <input type="search" id="pagePickFilter" placeholder="Lọc tên / Page ID / follow…"
                   style="flex:1;min-width:10rem;margin:0" autocomplete="off" />
               </div>
+
+              <div style="margin:0 .35rem .65rem;padding:.65rem .7rem;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(0,0,0,.18)">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem">
+                  <b style="font-size:.86rem">Nhóm chọn nhanh</b>
+                  <span class="muted" style="font-size:.75rem">Lưu · bấm 1 lần chọn nhiều page</span>
+                </div>
+                <div style="margin-bottom:.45rem">
+                  <div class="muted" style="font-size:.75rem;margin-bottom:.25rem">Nhóm tài khoản (profile FB)</div>
+                  <div id="accGroupChips" style="display:flex;flex-wrap:wrap;gap:.35rem;min-height:1.6rem">
+                    <span class="muted" style="font-size:.78rem">Chưa có nhóm tài khoản</span>
+                  </div>
+                  <div class="actions" style="margin:.35rem 0 0;padding:0;gap:.35rem;flex-wrap:wrap">
+                    <button type="button" class="btn-ok btn-sm" id="btnSaveAccGroup" title="Lưu các account có page đang tick thành 1 nhóm">+ Lưu nhóm TK từ selection</button>
+                    <button type="button" class="btn-ghost btn-sm" id="btnManageAccGroups">Quản lý TK</button>
+                  </div>
+                </div>
+                <div>
+                  <div class="muted" style="font-size:.75rem;margin-bottom:.25rem">Nhóm page</div>
+                  <div id="pageGroupChips" style="display:flex;flex-wrap:wrap;gap:.35rem;min-height:1.6rem">
+                    <span class="muted" style="font-size:.78rem">Chưa có nhóm page</span>
+                  </div>
+                  <div class="actions" style="margin:.35rem 0 0;padding:0;gap:.35rem;flex-wrap:wrap">
+                    <button type="button" class="btn-ok btn-sm" id="btnSavePageGroup" title="Lưu các page đang tick thành 1 nhóm">+ Lưu nhóm page từ selection</button>
+                    <button type="button" class="btn-ghost btn-sm" id="btnManagePageGroups">Quản lý page</button>
+                  </div>
+                </div>
+                <div id="selGroupStatus" class="muted" style="margin-top:.45rem;font-size:.78rem"></div>
+              </div>
+
               <p class="muted" style="margin:0 .35rem .45rem;font-size:.78rem">
-                Mỗi dòng: <b>avatar</b> · tên · <b>Page ID</b> · <b>số follow</b> — tick để chạy.
+                Mỗi dòng: <b>avatar</b> · tên · <b>Page ID</b> · <b>số follow</b> — tick để chạy · hoặc chọn <b>nhóm</b> phía trên.
               </p>
-              <div class="panel-body scroll tight" id="pageList" style="max-height:62vh;padding:0.35rem">
+              <div class="panel-body scroll tight" id="pageList" style="max-height:52vh;padding:0.35rem">
                 <div class="muted">Loading…</div>
               </div>
             </div>
@@ -663,6 +692,8 @@
     let pendingConfigSave = null;
     let configSaveTimer = null;
     let pages = [];
+    /** @type {{ account_groups: Array, page_groups: Array }} */
+    let selectionGroups = { account_groups: [], page_groups: [] };
     let runNowPlanId = null;
     let runNowPlanSignature = null;
     let liveJobId = null;
@@ -1291,6 +1322,218 @@
       bindPageListEvents(el);
     }
 
+    function setSelGroupStatus(msg, ok = true) {
+      const el = $("selGroupStatus");
+      if (!el) return;
+      el.style.color = ok ? "" : "#fb7185";
+      el.textContent = msg || "";
+    }
+
+    async function loadSelectionGroups() {
+      try {
+        const r = await api("/api/posting/selection-groups");
+        selectionGroups = {
+          account_groups: r.account_groups || [],
+          page_groups: r.page_groups || [],
+        };
+      } catch (e) {
+        selectionGroups = { account_groups: [], page_groups: [] };
+        setSelGroupStatus(e.message || "Không tải được nhóm", false);
+      }
+      renderSelectionGroupChips();
+    }
+
+    function renderSelectionGroupChips() {
+      const accBox = $("accGroupChips");
+      const pgBox = $("pageGroupChips");
+      if (accBox) {
+        const list = selectionGroups.account_groups || [];
+        if (!list.length) {
+          accBox.innerHTML = `<span class="muted" style="font-size:.78rem">Chưa có nhóm tài khoản — tick page rồi «Lưu nhóm TK»</span>`;
+        } else {
+          accBox.innerHTML = list
+            .map((g) => {
+              const n = (g.account_ids || []).length;
+              return `<button type="button" class="btn-ghost btn-sm acc-grp-chip" data-id="${esc(g.id)}" title="Chọn mọi page thuộc ${n} tài khoản">
+                👤 ${esc(g.name)} <span class="badge">${n} TK</span>
+              </button>`;
+            })
+            .join("");
+          accBox.querySelectorAll(".acc-grp-chip").forEach((btn) => {
+            btn.onclick = () => applyAccountGroup(btn.dataset.id);
+          });
+        }
+      }
+      if (pgBox) {
+        const list = selectionGroups.page_groups || [];
+        if (!list.length) {
+          pgBox.innerHTML = `<span class="muted" style="font-size:.78rem">Chưa có nhóm page — tick page rồi «Lưu nhóm page»</span>`;
+        } else {
+          pgBox.innerHTML = list
+            .map((g) => {
+              const n = (g.page_row_ids || []).length;
+              return `<button type="button" class="btn-ghost btn-sm page-grp-chip" data-id="${esc(g.id)}" title="Chọn ${n} page trong nhóm">
+                📄 ${esc(g.name)} <span class="badge">${n} Page</span>
+              </button>`;
+            })
+            .join("");
+          pgBox.querySelectorAll(".page-grp-chip").forEach((btn) => {
+            btn.onclick = () => applyPageGroup(btn.dataset.id);
+          });
+        }
+      }
+    }
+
+    async function applyAccountGroup(groupId) {
+      try {
+        const r = await api("/api/posting/selection-groups/resolve", {
+          method: "POST",
+          body: JSON.stringify({ account_group_id: groupId }),
+        });
+        const ids = r.page_row_ids || [];
+        selectedPageSet = new Set(ids.map(Number).filter((id) => id > 0));
+        if (ids[0]) selectedId = Number(ids[0]);
+        renderPageList();
+        invalidateRunNowPlan();
+        queueWorkspaceSave();
+        setSelGroupStatus(
+          `Đã chọn nhóm TK «${r.group?.name || groupId}» → ${ids.length} page`
+        );
+      } catch (e) {
+        setSelGroupStatus(e.message, false);
+      }
+    }
+
+    async function applyPageGroup(groupId) {
+      try {
+        const r = await api("/api/posting/selection-groups/resolve", {
+          method: "POST",
+          body: JSON.stringify({ page_group_id: groupId }),
+        });
+        const ids = r.page_row_ids || [];
+        selectedPageSet = new Set(ids.map(Number).filter((id) => id > 0));
+        if (ids[0]) selectedId = Number(ids[0]);
+        renderPageList();
+        invalidateRunNowPlan();
+        queueWorkspaceSave();
+        setSelGroupStatus(
+          `Đã chọn nhóm page «${r.group?.name || groupId}» → ${ids.length} page`
+        );
+      } catch (e) {
+        setSelGroupStatus(e.message, false);
+      }
+    }
+
+    function accountIdsFromSelection() {
+      const ids = selectedPageIds();
+      const set = new Set();
+      for (const id of ids) {
+        const p = pages.find((x) => Number(x.id) === Number(id));
+        if (p?.account_id) set.add(Number(p.account_id));
+      }
+      return [...set];
+    }
+
+    async function saveAccGroupFromSelection() {
+      const account_ids = accountIdsFromSelection();
+      if (!account_ids.length) {
+        return setSelGroupStatus("Tick ít nhất 1 page (để lấy tài khoản) trước", false);
+      }
+      const name = prompt(
+        `Tên nhóm tài khoản (${account_ids.length} TK từ selection):`,
+        `TK ${account_ids.length} · ${new Date().toLocaleDateString("vi-VN")}`
+      );
+      if (name == null) return;
+      try {
+        const r = await api("/api/posting/selection-groups/account", {
+          method: "POST",
+          body: JSON.stringify({ name: name.trim() || "Nhóm TK", account_ids }),
+        });
+        selectionGroups = {
+          account_groups: r.account_groups || [],
+          page_groups: r.page_groups || selectionGroups.page_groups,
+        };
+        renderSelectionGroupChips();
+        setSelGroupStatus(`Đã lưu nhóm TK «${name.trim()}» · ${account_ids.length} tài khoản`);
+      } catch (e) {
+        setSelGroupStatus(e.message, false);
+      }
+    }
+
+    async function savePageGroupFromSelection() {
+      const page_row_ids = selectedPageIds();
+      if (!page_row_ids.length) {
+        return setSelGroupStatus("Tick ít nhất 1 page trước", false);
+      }
+      const name = prompt(
+        `Tên nhóm page (${page_row_ids.length} page):`,
+        `Page ${page_row_ids.length} · ${new Date().toLocaleDateString("vi-VN")}`
+      );
+      if (name == null) return;
+      try {
+        const r = await api("/api/posting/selection-groups/page", {
+          method: "POST",
+          body: JSON.stringify({ name: name.trim() || "Nhóm page", page_row_ids }),
+        });
+        selectionGroups = {
+          account_groups: selectionGroups.account_groups,
+          page_groups: r.page_groups || [],
+        };
+        renderSelectionGroupChips();
+        setSelGroupStatus(`Đã lưu nhóm page «${name.trim()}» · ${page_row_ids.length} page`);
+      } catch (e) {
+        setSelGroupStatus(e.message, false);
+      }
+    }
+
+    async function manageGroups(kind) {
+      const list =
+        kind === "account"
+          ? selectionGroups.account_groups || []
+          : selectionGroups.page_groups || [];
+      if (!list.length) {
+        return setSelGroupStatus(
+          kind === "account" ? "Chưa có nhóm TK để quản lý" : "Chưa có nhóm page để quản lý",
+          false
+        );
+      }
+      const lines = list
+        .map((g, i) => {
+          const n =
+            kind === "account"
+              ? (g.account_ids || []).length + " TK"
+              : (g.page_row_ids || []).length + " page";
+          return `${i + 1}. ${g.name} (${n}) · id=${g.id}`;
+        })
+        .join("\n");
+      const pick = prompt(
+        `Nhóm ${kind === "account" ? "tài khoản" : "page"}:\n${lines}\n\n` +
+          `Nhập số thứ tự để XÓA (hoặc Cancel):`
+      );
+      if (pick == null || !String(pick).trim()) return;
+      const idx = Number(pick) - 1;
+      if (!Number.isFinite(idx) || idx < 0 || idx >= list.length) {
+        return setSelGroupStatus("Số thứ tự không hợp lệ", false);
+      }
+      const g = list[idx];
+      if (!confirm(`Xóa nhóm «${g.name}»?`)) return;
+      try {
+        const path =
+          kind === "account"
+            ? `/api/posting/selection-groups/account/${encodeURIComponent(g.id)}`
+            : `/api/posting/selection-groups/page/${encodeURIComponent(g.id)}`;
+        const r = await api(path, { method: "DELETE" });
+        selectionGroups = {
+          account_groups: r.account_groups || [],
+          page_groups: r.page_groups || [],
+        };
+        renderSelectionGroupChips();
+        setSelGroupStatus(`Đã xóa nhóm «${g.name}»`);
+      } catch (e) {
+        setSelGroupStatus(e.message, false);
+      }
+    }
+
     async function loadPages() {
       const data = await api("/api/posting/pages");
       pages = data.pages || [];
@@ -1318,6 +1561,7 @@
         selectedId = selectedPageIds()[0] || Number(pages[0].id);
       }
       renderPageList();
+      await loadSelectionGroups();
     }
 
     async function loadActiveTimes(id, force) {
@@ -2054,6 +2298,10 @@
     $("pagePickFilter")?.addEventListener("input", () => {
       renderPageList();
     });
+    $("btnSaveAccGroup")?.addEventListener("click", () => saveAccGroupFromSelection());
+    $("btnSavePageGroup")?.addEventListener("click", () => savePageGroupFromSelection());
+    $("btnManageAccGroups")?.addEventListener("click", () => manageGroups("account"));
+    $("btnManagePageGroups")?.addEventListener("click", () => manageGroups("page"));
 
     (() => {
       if ($("bulkStart") && !$("bulkStart").value) {

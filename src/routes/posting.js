@@ -29,6 +29,15 @@ import {
 import { listMetaAppsPublic } from "../services/metaApps.js";
 import { getFollowerGrowth } from "../services/followerHistory.js";
 import { getAppSetting, saveAppSetting } from "../services/appSettings.js";
+import {
+  getSelectionGroups,
+  saveSelectionGroups,
+  upsertAccountGroup,
+  upsertPageGroup,
+  deleteAccountGroup,
+  deletePageGroup,
+  resolveGroupToPageIds,
+} from "../services/selectionGroups.js";
 
 const router = Router();
 const POSTING_WORKSPACE_KEY = "posting_workspace_v1";
@@ -124,6 +133,74 @@ router.put("/workspace-state", (req, res) => {
   const state = normalizeWorkspaceState(merged);
   saveAppSetting(POSTING_WORKSPACE_KEY, state);
   res.json({ ok: true, state });
+});
+
+/**
+ * Custom groups for easier multi-select when posting.
+ * GET  /api/posting/selection-groups
+ * PUT  /api/posting/selection-groups  { account_groups, page_groups }
+ * POST /api/posting/selection-groups/account  create/update one account group
+ * POST /api/posting/selection-groups/page     create/update one page group
+ * DELETE /api/posting/selection-groups/account/:id
+ * DELETE /api/posting/selection-groups/page/:id
+ * POST /api/posting/selection-groups/resolve  → page_row_ids from a group
+ */
+router.get("/selection-groups", (_req, res) => {
+  res.json({ ok: true, ...getSelectionGroups() });
+});
+
+router.put("/selection-groups", (req, res) => {
+  try {
+    const data = saveSelectionGroups(req.body || {});
+    res.json({ ok: true, ...data });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/selection-groups/account", (req, res) => {
+  try {
+    const data = upsertAccountGroup(req.body || {});
+    res.json({ ok: true, ...data });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/selection-groups/page", (req, res) => {
+  try {
+    const data = upsertPageGroup(req.body || {});
+    res.json({ ok: true, ...data });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.delete("/selection-groups/account/:id", (req, res) => {
+  try {
+    const data = deleteAccountGroup(req.params.id);
+    res.json({ ok: true, ...data });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.delete("/selection-groups/page/:id", (req, res) => {
+  try {
+    const data = deletePageGroup(req.params.id);
+    res.json({ ok: true, ...data });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post("/selection-groups/resolve", (req, res) => {
+  try {
+    const r = resolveGroupToPageIds(req.body || {});
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
 });
 
 function pageExists(id) {
