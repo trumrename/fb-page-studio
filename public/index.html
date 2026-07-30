@@ -180,17 +180,17 @@
             </details>
             <hr style="border:0;border-top:1px solid rgba(255,255,255,.08);margin:1rem 0" />
             <div class="toolbar" style="align-items:end;margin-bottom:.6rem">
-              <label style="flex:1;min-width:260px">Các thư mục/ổ chứa Chrome <span class="muted">(có thể chọn nhiều)</span>
-                <input id="oauthBrowserDataDir" type="text" placeholder="Ví dụ D:\\Chrome 1; E:\\Chrome 2 hoặc chọn cả ổ" autocomplete="off" />
+              <label style="flex:1;min-width:260px">Thư mục quét <span class="muted">(để trống = quét Chrome GỐC + Portable mọi ổ / Desktop)</span>
+                <input id="oauthBrowserDataDir" type="text" placeholder="Trống = tự quét máy này · hoặc D:\\ChromePortable · hoặc …\\User Data" autocomplete="off" />
               </label>
-              <button class="btn-ghost" id="btnChooseBrowserData" type="button">Chọn nhiều thư mục/ổ</button>
-              <button class="btn-ghost" id="btnScanBrowserData" type="button">Quét tất cả Chrome</button>
+              <button class="btn-ghost" id="btnChooseBrowserData" type="button">Chọn thư mục</button>
+              <button class="btn-ghost" id="btnScanBrowserData" type="button">Quét Chrome (gốc + Portable)</button>
             </div>
             <div class="toolbar" style="align-items:end">
-              <label style="flex:1;min-width:260px">Chrome Profile đã login Facebook
-                <select id="oauthBrowserProfile"><option value="">Tự động (profile mặc định)</option></select>
+              <label style="flex:1;min-width:260px">Profile Facebook (GỐC hoặc PORTABLE)
+                <select id="oauthBrowserProfile"><option value="">— Chọn profile —</option></select>
               </label>
-              <button class="btn-ghost" id="btnSaveBrowserProfile" type="button">Dùng profile này</button>
+              <button class="btn-ok" id="btnSaveBrowserProfile" type="button">Dùng profile này</button>
             </div>
             <div style="margin-top:.85rem;padding:.75rem;border:1px dashed rgba(255,255,255,.12);border-radius:12px;background:rgba(0,0,0,.12)">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap">
@@ -542,19 +542,62 @@
     let scannedBrowserProfiles = [];
     let browserProfileHistory = [];
 
+    function profileKindLabel(p) {
+      if (p.kind === "system" || /google[\\/]chrome[\\/]user data/i.test(p.user_data_dir || "")) {
+        return "GỐC";
+      }
+      if (
+        p.kind === "portable" ||
+        /portable/i.test(p.browser_path || "") ||
+        /chromeportable|googlechromeportable/i.test(p.user_data_dir || "")
+      ) {
+        return "PORTABLE";
+      }
+      return "?";
+    }
+
+    function normPath(s) {
+      return String(s || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+    }
+
     function renderBrowserProfiles(r) {
       const select = $("oauthBrowserProfile");
       scannedBrowserProfiles = r.profiles || [];
-      select.innerHTML = '<option value="">Tự động (profile mặc định)</option>';
+      select.innerHTML = '<option value="">— Chọn profile (GỐC hoặc PORTABLE) —</option>';
+      const wantDir = String(r.selected_profile || "").trim();
+      const wantData = normPath(r.custom_user_data_dir || r.user_data_dir || "");
+      const wantBrowser = normPath(r.browser_path || "");
+      let bestIdx = -1;
+      let bestScore = -1;
       for (const [index, p] of scannedBrowserProfiles.entries()) {
         const o = document.createElement("option");
         o.value = String(index);
-        o.textContent = p.user_data_dir ? `${p.name} — ${p.user_data_dir}\\${p.directory}${p.browser_path ? ` · ${p.browser_path}` : ""}` : `${p.name} — ${p.directory}`;
-        if (p.directory === r.selected_profile) o.selected = true;
+        const kind = profileKindLabel(p);
+        const label = `[${kind}] ${p.name || p.directory} · ${p.directory}`;
+        const pathBit = p.user_data_dir ? ` — ${p.user_data_dir}` : "";
+        o.textContent = label + pathBit;
+        o.title =
+          `Loại: ${kind}\nExe: ${p.browser_path || "—"}\nData: ${p.user_data_dir || "—"}\\${p.directory || ""}`;
+        // Score match against currently saved selection (data dir + profile name)
+        if (wantDir && p.directory === wantDir) {
+          let score = 1;
+          if (wantData && normPath(p.user_data_dir) === wantData) score += 3;
+          if (wantBrowser && normPath(p.browser_path) === wantBrowser) score += 1;
+          if (score > bestScore) {
+            bestScore = score;
+            bestIdx = index;
+          }
+        }
         select.appendChild(o);
       }
+      if (bestIdx >= 0) select.value = String(bestIdx);
       if (!(r.profiles || []).length) {
-        $("oauthBrowserStatus").textContent = "Không tìm thấy Chrome Profile. Với ChromePortable, bấm Chọn thư mục rồi chọn ChromePortable hoặc ChromePortable\\Data\\profile.";
+        $("oauthBrowserStatus").textContent =
+          "Không thấy profile. Bấm «Quét Chrome (gốc + Portable)» (ô thư mục trống = tự quét) hoặc chọn thư mục User Data / ChromePortable.";
+      } else if (wantDir && bestIdx >= 0) {
+        const p = scannedBrowserProfiles[bestIdx];
+        $("oauthBrowserStatus").textContent =
+          `Đang ghim [${profileKindLabel(p)}] ${p.directory} — ${p.user_data_dir || ""}. Connect sẽ mở đúng profile này.`;
       }
       if (Array.isArray(r.history)) renderBrowserHistory(r.history);
     }
@@ -681,9 +724,18 @@
 
     async function loadBrowserProfiles() {
       const r = await api("/api/setup/browser");
+      // Keep custom dir only as scan filter hint — empty = next scan does full dual scan
       $("oauthBrowserDataDir").value = r.custom_user_data_dir || "";
       renderBrowserProfiles(r);
       renderBrowserHistory(r.history || []);
+      if ((r.profiles || []).length) {
+        const nSys = r.profiles.filter((p) => p.kind === "system").length;
+        const nPort = r.profiles.filter((p) => p.kind === "portable").length;
+        if (!$("oauthBrowserStatus").textContent || $("oauthBrowserStatus").textContent.includes("Chọn profile")) {
+          $("oauthBrowserStatus").textContent =
+            `Sẵn sàng: ${r.profiles.length} profile (GỐC: ${nSys} · PORTABLE: ${nPort}). Chọn 1 dòng → «Dùng profile này».`;
+        }
+      }
     }
 
     $("btnChooseBrowserData").onclick = async () => {
@@ -698,10 +750,15 @@
     $("btnScanBrowserData").onclick = async () => {
       try {
         const roots = $("oauthBrowserDataDir").value.split(/[;\r\n|]+/).map(x => x.trim()).filter(Boolean);
+        // Empty roots → server quét Chrome GỐC + Portable trên máy này (mọi ổ)
         const r = await api("/api/setup/browser/scan", { method:"POST", body: JSON.stringify({ roots }) });
         renderBrowserProfiles(r);
         if (r.history) renderBrowserHistory(r.history);
-        $("oauthBrowserStatus").textContent = `Đã quét ${r.scanned_directories || 0} thư mục và tìm thấy ${(r.profiles || []).length} profile. Chọn đúng Chrome/Profile rồi bấm Dùng profile này.`;
+        const nSys = (r.profiles || []).filter((p) => p.kind === "system").length;
+        const nPort = (r.profiles || []).filter((p) => p.kind === "portable").length;
+        $("oauthBrowserStatus").textContent =
+          `Máy này: quét ${r.scanned_directories || 0} thư mục · ${(r.profiles || []).length} profile` +
+          ` (GỐC: ${nSys} · PORTABLE: ${nPort}). Chọn 1 dòng → «Dùng profile này» → Connect.`;
       } catch (e) { $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`; }
     };
 
@@ -710,30 +767,30 @@
       btn.disabled = true;
       try {
         const selectedIndex = $("oauthBrowserProfile").value;
-        const chosen = selectedIndex === "" ? null : (scannedBrowserProfiles[Number(selectedIndex)] || null);
-        // Multi-root text (D:\a; E:\b) is only for scanning — never send as a single user-data-dir.
-        const firstRoot = $("oauthBrowserDataDir").value.split(/[;\r\n|]+/).map((x) => x.trim()).filter(Boolean)[0] || "";
+        if (selectedIndex === "" || selectedIndex == null) {
+          throw new Error("Hãy chọn 1 profile trong danh sách (GỐC hoặc PORTABLE), không để trống.");
+        }
+        const chosen = scannedBrowserProfiles[Number(selectedIndex)] || null;
+        if (!chosen?.directory) {
+          throw new Error("Profile không hợp lệ — bấm «Quét tất cả Chrome» rồi chọn lại.");
+        }
         const r = await api("/api/setup/browser", {
           method: "PUT",
           body: JSON.stringify({
-            profile: chosen?.directory || "",
-            user_data_dir: chosen?.user_data_dir || firstRoot,
-            browser_path: chosen?.browser_path || "",
+            profile: chosen.directory,
+            user_data_dir: chosen.user_data_dir || "",
+            browser_path: chosen.browser_path || "",
           }),
         });
         if (r.history) renderBrowserHistory(r.history);
-        const isPortable = /portable/i.test(r.browser_path || "");
+        // Keep selected option visible after save
+        $("oauthBrowserDataDir").value = r.user_data_dir || chosen.user_data_dir || "";
+        const kind = r.kind || (/portable/i.test(r.browser_path || "") ? "Portable" : "Chrome gốc");
         $("oauthBrowserStatus").innerHTML =
-          `<b style="color:#34d399">Đã lưu profile <code>${escapeHtml(r.selected_profile || "Default")}</code></b>` +
-          (r.browser_path
-            ? `<br/>Browser: <code>${escapeHtml(r.browser_path)}</code>`
-            : `<br/><span style="color:#fb7185">⚠ Chưa có FB_BROWSER_PATH — Connect sẽ mở Chrome GỐC. Hãy chọn lại thư mục ChromePortable.</span>`) +
-          (isPortable
-            ? `<br/><span class="muted" style="font-size:.8rem">✓ Portable — Connect mở ChromePortable.exe + profile (không Chrome gốc).</span>`
-            : r.browser_path
-              ? `<br/><span style="color:#fbbf24">Đường dẫn không phải Portable — nên trỏ ChromePortable.exe</span>`
-              : "") +
-          `<br/>Bấm Connect Facebook ngay — không cần restart.`;
+          `<b style="color:#34d399">✓ Đã ghim [${escapeHtml(kind)}] profile <code>${escapeHtml(r.selected_profile || "")}</code></b>` +
+          `<br/>Exe: <code>${escapeHtml(r.browser_path || "—")}</code>` +
+          `<br/>Data: <code>${escapeHtml(r.user_data_dir || "—")}</code>` +
+          `<br/><span class="muted" style="font-size:.8rem">Connect App 1/2 sẽ mở đúng exe + profile (GỐC hoặc PORTABLE). Không cần restart app.</span>`;
       } catch (e) {
         $("oauthBrowserStatus").innerHTML = `<span style="color:#fb7185">${escapeHtml(e.message)}</span>`;
       } finally { btn.disabled = false; }

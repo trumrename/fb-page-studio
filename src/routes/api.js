@@ -119,10 +119,17 @@ function writeEnvValues(envPath, values) {
     if (/[\r\n]/.test(safeValue)) {
       throw new Error(`Giá trị cấu hình ${key} không được chứa xuống dòng`);
     }
+    // Drop obsolete commented lines for this key (old heal disabled system data)
+    text = text.replace(new RegExp(`^[ \\t]*#\\s*${key}\\s*=.*$`, "gim"), "");
     const pattern = new RegExp(`^(\\s*${key}\\s*=).*?$`, "m");
-    if (pattern.test(text)) text = text.replace(pattern, (_match, prefix) => `${prefix}${safeValue}`);
-    else text += `${text && !text.endsWith("\n") ? newline : ""}${key}=${safeValue}${newline}`;
+    if (pattern.test(text)) {
+      text = text.replace(pattern, (_match, prefix) => `${prefix}${safeValue}`);
+    } else {
+      text += `${text && !text.endsWith("\n") ? newline : ""}${key}=${safeValue}${newline}`;
+    }
   }
+  // Collapse excess blank lines after comment removal
+  text = text.replace(/\n{3,}/g, "\n\n");
   fs.mkdirSync(path.dirname(envPath), { recursive: true });
   fs.writeFileSync(envPath, text, "utf8");
 }
@@ -577,45 +584,189 @@ function rankBrowserForProfile(userDataDir, chromeExecutables) {
   }).sort((a, b) => b.common - a.common || a.kind - b.kind || a.len - b.len);
 }
 
+function systemChromeExe() {
+  const local = process.env.LOCALAPPDATA || "";
+  const pf = process.env.ProgramFiles || "C:\\Program Files";
+  const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  return [
+    path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
+  ].find((p) => {
+    try {
+      return fs.existsSync(p);
+    } catch {
+      return false;
+    }
+  }) || "";
+}
+
+function systemChromeUserData() {
+  return path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data");
+}
+
+function isPortableBrowserPath(browserPath) {
+  return /chromeportable|googlechromeportable/i.test(String(browserPath || ""));
+}
+
+function isSystemUserDataDir(dir) {
+  const d = path.resolve(String(dir || "")).toLowerCase();
+  const sys = systemChromeUserData().toLowerCase();
+  return d === sys || /google[\\/]chrome[\\/]user data$/i.test(d);
+}
+
 function scanChromeProfiles(rootsValue) {
-  const roots = splitChromeScanRoots(rootsValue);
-  if (!roots.length) return listChromeProfiles();
+  let roots = splitChromeScanRoots(rootsValue);
+  // Empty roots → system Chrome + Portable on any common drive/path (máy khách)
+  if (!roots.length) {
+    const sysUd = systemChromeUserData();
+    if (fs.existsSync(sysUd)) roots.push(sysUd);
+    const home = process.env.USERPROFILE || process.env.HOME || "";
+    const driveLetters = "CDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+    const rels = [
+      "ChromePortable",
+      "GoogleChromePortable",
+      "PortableApps\\GoogleChromePortable",
+      "PortableApps\\ChromePortable",
+      "Tools\\ChromePortable",
+      "Program\\ChromePortable",
+      "Apps\\ChromePortable",
+    ];
+    for (const L of driveLetters) {
+      for (const rel of rels) {
+        const p = `${L}:\\${rel}`;
+        try {
+          if (fs.existsSync(p)) roots.push(p);
+        } catch {
+          /* skip missing drive */
+        }
+      }
+    }
+    if (home) {
+      for (const rel of [
+        "ChromePortable",
+        "Desktop\\ChromePortable",
+        "Documents\\ChromePortable",
+        "Downloads\\ChromePortable",
+        "PortableApps\\GoogleChromePortable",
+        "PortableApps\\ChromePortable",
+      ]) {
+        const p = path.join(home, rel);
+        if (fs.existsSync(p)) roots.push(p);
+      }
+    }
+  }
   const found = [];
   const chromeExecutables = [];
   const queue = roots.map((dir) => ({ dir, depth: 0 }));
   const seen = new Set();
-  const skipped = new Set(["$recycle.bin", "system volume information", "windows", "node_modules", ".git"]);
+  const skipped = new Set([
+    "$recycle.bin",
+    "system volume information",
+    "windows",
+    "node_modules",
+    ".git",
+    "cache",
+    "code cache",
+    "gpucache",
+  ]);
+  // Always register system chrome.exe for ranking system profiles
+  const sysExe = systemChromeExe();
+  if (sysExe) chromeExecutables.push(sysExe);
+
   while (queue.length && seen.size < 6000) {
     const { dir, depth } = queue.shift();
     const key = dir.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
     const names = entries.map((entry) => entry.name);
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isFile() && /^(chrome|chromeportable)\.exe$/i.test(entry.name)) chromeExecutables.push(full);
+      if (
+        entry.isFile() &&
+        /^(chrome|chromeportable|googlechromeportable)\.exe$/i.test(entry.name)
+      ) {
+        chromeExecutables.push(full);
+      }
     }
     if (looksLikeChromeUserDataRoot(dir, names)) {
       const listed = listChromeProfiles(dir);
-      // Always store the resolved user-data root (ChromePortable may remap to Data\profile).
       for (const profile of listed.profiles) {
-        found.push({ ...profile, user_data_dir: listed.user_data_dir });
+        found.push({
+          ...profile,
+          user_data_dir: listed.user_data_dir,
+          kind: isSystemUserDataDir(listed.user_data_dir) ? "system" : "portable",
+        });
       }
-      // Do not walk Cache/Code Cache/GPUCache inside the profile tree — burns the 6000 budget.
       continue;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory() || depth >= 7 || skipped.has(entry.name.toLowerCase())) continue;
+      if (!entry.isDirectory() || depth >= 7 || skipped.has(entry.name.toLowerCase())) {
+        continue;
+      }
       queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
     }
   }
   for (const profile of found) {
     const ranked = rankBrowserForProfile(profile.user_data_dir, chromeExecutables);
-    profile.browser_path = ranked[0]?.exe || "";
+    let browserPath = ranked[0]?.exe || "";
+    // System profiles → force system chrome.exe (not a random portable nearby)
+    if (isSystemUserDataDir(profile.user_data_dir) && sysExe) {
+      browserPath = sysExe;
+      profile.kind = "system";
+    } else if (isPortableBrowserPath(browserPath) || profile.kind === "portable") {
+      profile.kind = "portable";
+      // Prefer launcher next to portable tree
+      const root = path.dirname(browserPath);
+      const launcher = [
+        path.join(root, "ChromePortable.exe"),
+        path.join(path.dirname(root), "ChromePortable.exe"),
+        path.join(root, "GoogleChromePortable.exe"),
+      ].find((p) => fs.existsSync(p));
+      // walk up for launcher
+      if (!launcher) {
+        let d = path.dirname(profile.user_data_dir || "");
+        for (let i = 0; i < 5; i++) {
+          const L = path.join(d, "ChromePortable.exe");
+          const G = path.join(d, "GoogleChromePortable.exe");
+          if (fs.existsSync(L)) {
+            browserPath = L;
+            break;
+          }
+          if (fs.existsSync(G)) {
+            browserPath = G;
+            break;
+          }
+          const parent = path.dirname(d);
+          if (parent === d) break;
+          d = parent;
+        }
+      } else {
+        browserPath = launcher;
+      }
+    }
+    profile.browser_path = browserPath;
   }
-  const unique = [...new Map(found.map((item) => [`${item.user_data_dir}\u0000${item.directory}`, item])).values()];
+  const unique = [
+    ...new Map(
+      found.map((item) => [`${item.user_data_dir}\u0000${item.directory}`, item])
+    ).values(),
+  ];
+  // System first, then portable; Default before Profile N
+  unique.sort((a, b) => {
+    const ka = a.kind === "system" ? 0 : 1;
+    const kb = b.kind === "system" ? 0 : 1;
+    if (ka !== kb) return ka - kb;
+    return String(a.directory).localeCompare(String(b.directory), undefined, {
+      numeric: true,
+    });
+  });
   return { roots, scanned_directories: seen.size, profiles: unique };
 }
 
@@ -729,18 +880,18 @@ router.post("/setup/ngrok/start", async (_req, res) => {
 router.post("/setup/ngrok/stop", async (_req, res) => { await stopNgrok(); res.json({ ok: true, ...getNgrokStatus() }); });
 
 router.get("/setup/browser", (_req, res) => {
-  const found = listChromeProfiles();
+  // Full dual scan (GỐC + PORTABLE) so UI always can pick either kind
+  const found = scanChromeProfiles("");
   const selectedBrowserPath = String(process.env.FB_BROWSER_PATH || "").trim();
+  const selectedProfile = String(process.env.FB_CHROME_PROFILE || "").trim();
+  const customData = String(process.env.FB_CHROME_USER_DATA_DIR || "").trim();
   res.json({
-    ...found,
-    // Attach root on each row so the UI can show full path (same shape as /scan).
-    profiles: found.profiles.map((profile) => ({
-      ...profile,
-      user_data_dir: found.user_data_dir,
-      browser_path: selectedBrowserPath,
-    })),
-    selected_profile: String(process.env.FB_CHROME_PROFILE || "").trim(),
-    custom_user_data_dir: String(process.env.FB_CHROME_USER_DATA_DIR || "").trim(),
+    roots: found.roots,
+    scanned_directories: found.scanned_directories,
+    user_data_dir: customData || found.profiles[0]?.user_data_dir || "",
+    profiles: found.profiles,
+    selected_profile: selectedProfile,
+    custom_user_data_dir: customData,
     browser_path: selectedBrowserPath,
     history: readChromeProfileHistory(),
   });
@@ -784,78 +935,169 @@ router.put("/setup/browser", (req, res) => {
   try {
     const wanted = String(req.body?.profile || "").trim();
     let requestedDataDir = String(req.body?.user_data_dir || "").trim();
-    // Multi-root scan strings (a;b|c) cannot be a single --user-data-dir. Use the first root only
-    // when the UI forgot to pick a concrete profile after multi-select.
+    // Multi-root scan strings (a;b|c) cannot be a single --user-data-dir
     if (/[;|\r\n]/.test(requestedDataDir)) {
-      requestedDataDir = requestedDataDir.split(/[;\r\n|]+/).map((item) => item.trim()).filter(Boolean)[0] || "";
+      requestedDataDir =
+        requestedDataDir
+          .split(/[;\r\n|]+/)
+          .map((item) => item.trim())
+          .filter(Boolean)[0] || "";
     }
     let requestedBrowserPath = String(req.body?.browser_path || "").trim();
-    // Prefer ChromePortable.exe launcher (not App\Chrome-bin\chrome.exe).
-    // Launcher owns Data\profile; we only pass --profile-directory for correct tab.
-    if (/chrome\.exe$/i.test(requestedBrowserPath) && !/chromeportable/i.test(requestedBrowserPath)) {
-      let dir = path.dirname(requestedBrowserPath);
-      for (let i = 0; i < 5; i++) {
-        const launcher = path.join(dir, "ChromePortable.exe");
-        if (fs.existsSync(launcher)) {
-          requestedBrowserPath = launcher;
-          break;
+    const systemUd = systemChromeUserData();
+    const sysExe = systemChromeExe();
+
+    // Kind decided by the concrete profile the user clicked (data dir wins)
+    const pickingSystem =
+      isSystemUserDataDir(requestedDataDir) ||
+      (!requestedDataDir &&
+        requestedBrowserPath &&
+        sysExe &&
+        path.resolve(requestedBrowserPath).toLowerCase() ===
+          path.resolve(sysExe).toLowerCase() &&
+        !isPortableBrowserPath(requestedBrowserPath));
+
+    let dataDir = "";
+    if (pickingSystem) {
+      // SYSTEM: always pin official User Data + system chrome.exe
+      dataDir = systemUd;
+      requestedBrowserPath = sysExe || requestedBrowserPath;
+    } else if (requestedDataDir) {
+      dataDir = chromeUserDataDir(requestedDataDir);
+      // If user pointed at Portable root (not Data\profile), resolve it
+      if (isSystemUserDataDir(dataDir) && requestedDataDir && !isSystemUserDataDir(requestedDataDir)) {
+        // chromeUserDataDir fell back to system because path invalid — try portable resolve
+        const alt = detectPortableUserDataFromBrowser(requestedBrowserPath);
+        if (alt) dataDir = alt;
+      }
+    } else if (requestedBrowserPath) {
+      dataDir =
+        detectPortableUserDataFromBrowser(requestedBrowserPath) ||
+        chromeUserDataDir(undefined);
+    } else {
+      dataDir = chromeUserDataDir(undefined);
+    }
+
+    // Resolve browser exe for non-system selection
+    if (!pickingSystem) {
+      if (requestedBrowserPath && isPortableBrowserPath(requestedBrowserPath)) {
+        // keep portable launcher
+      } else if (requestedBrowserPath && /chrome\.exe$/i.test(requestedBrowserPath)) {
+        // chrome.exe under portable tree → upgrade to launcher when present
+        let dir = path.dirname(requestedBrowserPath);
+        let foundLauncher = "";
+        for (let i = 0; i < 6; i++) {
+          const L = path.join(dir, "ChromePortable.exe");
+          const G = path.join(dir, "GoogleChromePortable.exe");
+          if (fs.existsSync(L)) {
+            foundLauncher = L;
+            break;
+          }
+          if (fs.existsSync(G)) {
+            foundLauncher = G;
+            break;
+          }
+          const parent = path.dirname(dir);
+          if (parent === dir) break;
+          dir = parent;
         }
-        const parent = path.dirname(dir);
-        if (parent === dir) break;
-        dir = parent;
+        if (foundLauncher) {
+          requestedBrowserPath = foundLauncher;
+          if (!dataDir || isSystemUserDataDir(dataDir)) {
+            dataDir = detectPortableUserDataFromBrowser(foundLauncher) || dataDir;
+          }
+        } else if (
+          sysExe &&
+          path.resolve(requestedBrowserPath).toLowerCase() ===
+            path.resolve(sysExe).toLowerCase()
+        ) {
+          // bare system chrome without system data → treat as system
+          dataDir = systemUd;
+        }
+      } else if (!requestedBrowserPath) {
+        if (isSystemUserDataDir(dataDir) && sysExe) {
+          requestedBrowserPath = sysExe;
+        } else {
+          let d = dataDir;
+          for (let i = 0; i < 6; i++) {
+            const L = path.join(d, "ChromePortable.exe");
+            const G = path.join(d, "GoogleChromePortable.exe");
+            if (fs.existsSync(L)) {
+              requestedBrowserPath = L;
+              break;
+            }
+            if (fs.existsSync(G)) {
+              requestedBrowserPath = G;
+              break;
+            }
+            const parent = path.dirname(d);
+            if (parent === d) break;
+            d = parent;
+          }
+          if (!requestedBrowserPath && sysExe) requestedBrowserPath = sysExe;
+        }
+      }
+      // Portable data missing → bind from launcher
+      if (
+        requestedBrowserPath &&
+        isPortableBrowserPath(requestedBrowserPath) &&
+        (!dataDir || isSystemUserDataDir(dataDir))
+      ) {
+        dataDir = detectPortableUserDataFromBrowser(requestedBrowserPath) || dataDir;
       }
     }
-    if (/chromeportable\.exe$/i.test(requestedBrowserPath)) {
-      // keep launcher path as-is
+
+    if (!requestedBrowserPath || !fs.existsSync(requestedBrowserPath)) {
+      throw new Error(
+        "Chưa có file chrome.exe / ChromePortable.exe. Quét Chrome (gốc + Portable) rồi chọn 1 profile."
+      );
     }
-    // Portable: if UI only sent browser path (or wrong system User Data), bind Data\profile of THAT portable.
-    const portableData = detectPortableUserDataFromBrowser(requestedBrowserPath);
-    const systemUd = path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data");
-    if (portableData) {
-      const reqResolved = requestedDataDir ? path.resolve(requestedDataDir) : "";
-      const isSystemUd =
-        !reqResolved ||
-        reqResolved.toLowerCase() === systemUd.toLowerCase() ||
-        /[\\/]google[\\/]chrome[\\/]user data$/i.test(reqResolved);
-      if (isSystemUd) {
-        requestedDataDir = portableData;
-      }
-    }
-    const found = listChromeProfiles(requestedDataDir);
-    if (wanted && !found.profiles.some((p) => p.directory === wanted)) {
-      throw new Error("Chrome Profile không tồn tại trên máy này");
-    }
+
+    const found = listChromeProfiles(dataDir);
     if (!found.profiles.length) {
-      throw new Error("Không thấy Chrome profile ở thư mục này. Với ChromePortable, chọn thư mục ChromePortable hoặc ChromePortable\\Data\\profile.");
+      throw new Error(
+        "Không thấy profile (Default / Profile 1…). Chọn «User Data» (Chrome gốc) hoặc ChromePortable\\Data\\profile."
+      );
     }
+    if (wanted && !found.profiles.some((p) => p.directory === wanted)) {
+      throw new Error(
+        `Profile «${wanted}» không có trong ${found.user_data_dir}. Các profile: ${found.profiles.map((p) => p.directory).join(", ")}`
+      );
+    }
+    const profileDir = wanted || found.profiles[0].directory;
+    const finalData = found.user_data_dir || dataDir || "";
+    const finalKind = isPortableBrowserPath(requestedBrowserPath)
+      ? "Portable"
+      : isSystemUserDataDir(finalData)
+        ? "Chrome gốc"
+        : "Portable";
+
     writeEnvValues(getEnvPath(), {
-      FB_CHROME_PROFILE: wanted,
-      FB_CHROME_USER_DATA_DIR: found.user_data_dir || "",
+      FB_CHROME_PROFILE: profileDir,
+      FB_CHROME_USER_DATA_DIR: finalData,
       FB_BROWSER_PATH: requestedBrowserPath,
     });
-    process.env.FB_CHROME_PROFILE = wanted;
-    process.env.FB_CHROME_USER_DATA_DIR = found.user_data_dir || "";
+    process.env.FB_CHROME_PROFILE = profileDir;
+    process.env.FB_CHROME_USER_DATA_DIR = finalData;
     process.env.FB_BROWSER_PATH = requestedBrowserPath;
 
-    const matched = found.profiles.find((p) => p.directory === wanted) || found.profiles[0];
+    const matched =
+      found.profiles.find((p) => p.directory === profileDir) || found.profiles[0];
     const history = pushChromeProfileHistory({
-      name: matched?.name || wanted,
-      label: matched?.name
-        ? `${matched.name} — ${found.user_data_dir}\\${matched.directory || wanted}`
-        : `${wanted || "Default"} — ${found.user_data_dir}`,
-      directory: wanted || matched?.directory || "",
-      user_data_dir: found.user_data_dir,
+      name: matched?.name || profileDir,
+      label: `[${finalKind}] ${matched?.name || profileDir} — ${finalData}\\${profileDir}`,
+      directory: profileDir,
+      user_data_dir: finalData,
       browser_path: requestedBrowserPath,
-      scan_roots: found.user_data_dir,
+      scan_roots: finalData,
     });
 
-    // Electron reads this .env file again at every OAuth launch, so the user
-    // can test the chosen profile immediately without restarting the tool.
     res.json({
       ok: true,
-      selected_profile: wanted,
-      user_data_dir: found.user_data_dir,
+      selected_profile: profileDir,
+      user_data_dir: finalData,
       browser_path: requestedBrowserPath,
+      kind: finalKind,
       restart_required: false,
       history,
     });

@@ -2,7 +2,9 @@ appId: com.fbpagestudio.app
 productName: FB Page Studio
 copyright: Copyright © FB Page Studio
 directories:
-  output: dist-desktop-oauth
+  # Ổ C đầy — output Setup/Portable sang F: (còn nhiều dung lượng)
+  # Fallback: set env FBPS_BUILD_OUT nếu muốn đổi ổ (E:/... hoặc khác)
+  output: F:/FB-Page-Studio/dist-desktop-oauth
   buildResources: build
 files:
   - electron/**/*

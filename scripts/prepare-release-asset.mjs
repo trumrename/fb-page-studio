@@ -4,11 +4,11 @@ import path from "path";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { archiveOldInDir } from "./archive-old-builds.mjs";
-import { archiveVaultDir, releaseAssetsDir } from "./deliver-paths.mjs";
+import { archiveVaultDir, releaseAssetsDir, distDesktopDir } from "./deliver-paths.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-const distDir = path.join(root, "dist-desktop-oauth");
+const distDir = distDesktopDir();
 const releaseDir = releaseAssetsDir();
 const source = path.join(distDir, "FB-Page-Studio-Desktop.exe");
 const versionedName = `FB-Page-Studio-Desktop-v${pkg.version}.exe`;
@@ -20,10 +20,15 @@ function shaOf(p) {
   return crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
 }
 
-if (!fs.existsSync(source)) throw new Error(`Chưa có portable EXE: ${source}`);
-fs.copyFileSync(source, target);
-const digest = shaOf(target);
-fs.writeFileSync(checksumFile, `${digest}  ${versionedName}\n`, "utf8");
+// Portable optional (NSIS-only builds still ship Setup)
+let digest = "";
+if (fs.existsSync(source)) {
+  fs.copyFileSync(source, target);
+  digest = shaOf(target);
+  fs.writeFileSync(checksumFile, `${digest}  ${versionedName}\n`, "utf8");
+} else {
+  console.warn(`(skip portable) chưa có: ${source}`);
+}
 
 // NSIS setup (icon + Start Menu + pin taskbar)
 const setupCandidates = [
@@ -66,19 +71,20 @@ if (setupSrc) {
     `${setupHash}  ${stableSetup}\n`,
     "utf8"
   );
-  fs.copyFileSync(target, path.join(releaseDir, stableDesktop));
-  fs.writeFileSync(
-    path.join(releaseDir, `${stableDesktop}.sha256.txt`),
-    `${digest}  ${stableDesktop}\n`,
-    "utf8"
-  );
-  // Also copy versioned portable into release-assets
-  fs.copyFileSync(target, path.join(releaseDir, versionedName));
-  fs.copyFileSync(checksumFile, path.join(releaseDir, `${versionedName}.sha256.txt`));
+  if (digest && fs.existsSync(target)) {
+    fs.copyFileSync(target, path.join(releaseDir, stableDesktop));
+    fs.writeFileSync(
+      path.join(releaseDir, `${stableDesktop}.sha256.txt`),
+      `${digest}  ${stableDesktop}\n`,
+      "utf8"
+    );
+    fs.copyFileSync(target, path.join(releaseDir, versionedName));
+    fs.copyFileSync(checksumFile, path.join(releaseDir, `${versionedName}.sha256.txt`));
+  }
 
   console.log(`Setup installer: ${setupDest}`);
   console.log(`Setup SHA-256: ${setupHash}`);
-  console.log(`Stable latest links ready: ${stableSetup}, ${stableDesktop}`);
+  console.log(`Stable latest link ready: ${stableSetup}`);
 } else {
   console.warn("⚠ Chưa thấy NSIS Setup EXE — kiểm tra electron-builder nsis target");
 }
