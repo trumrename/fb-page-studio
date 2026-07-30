@@ -172,6 +172,15 @@ router.get("/jobs/:id/stream", (req, res) => {
   // Always send slim snapshot (never raw job — OOM after bulk delete)
   send(job);
 
+  // Keep proxies/tunnels from dropping idle long deletes
+  const ping = setInterval(() => {
+    try {
+      res.write(": ping\n\n");
+    } catch {
+      clearInterval(ping);
+    }
+  }, 15_000);
+
   const off = onDeleteJob(req.params.id, () => {
     try {
       const snap = getDeleteJob(req.params.id);
@@ -179,6 +188,7 @@ router.get("/jobs/:id/stream", (req, res) => {
       send(snap);
       if (["ok", "fail", "partial", "stopped"].includes(snap.status)) {
         res.write("event: done\ndata: {}\n\n");
+        clearInterval(ping);
       }
     } catch {
       /* client gone */
@@ -186,6 +196,7 @@ router.get("/jobs/:id/stream", (req, res) => {
   });
 
   req.on("close", () => {
+    clearInterval(ping);
     off();
   });
 });

@@ -27,6 +27,9 @@ try {
 
 let PORT = Number(process.env.PORT || 3847);
 
+/** Unexpected backend exits — auto-restart up to 2 times */
+let backendRestartAttempts = 0;
+
 let mainWindow = null;
 let tray = null;
 let serverProc = null;
@@ -584,45 +587,42 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
       path.join(root, "ChromePortable.exe"),
       path.join(root, "GoogleChromePortable.exe"),
     ].find((p) => fs.existsSync(p));
-    let usedLauncher = false;
-    if (launcher) {
-      exe = launcher;
-      usedLauncher = true;
-    } else {
-      const realChrome = [
-        path.join(root, "App", "Chrome-bin", "chrome.exe"),
-        path.join(root, "App", "Chrome", "chrome.exe"),
-        path.join(root, "chrome.exe"),
-      ].find((c) => fs.existsSync(c));
-      if (realChrome) exe = realChrome;
-    }
-    // Resolve portable user-data (for chrome.exe fallback or logging)
     let userData = "";
     if (configuredData && looksLikeChromeUserDataRoot(configuredData)) {
       userData = path.resolve(configuredData);
     } else {
       userData = findPortableUserDataDir(root) || "";
     }
-    const args = [];
-    // Launcher owns data dir; real chrome.exe needs explicit --user-data-dir
-    if (!usedLauncher && userData && fs.existsSync(userData)) {
-      args.push(`--user-data-dir=${userData}`);
+    // ALWAYS prefer launcher — chrome.exe + --user-data-dir can empty session / captcha
+    if (launcher) {
+      exe = launcher;
+      const args = [];
+      if (profile) args.push(`--profile-directory=${profile}`);
+      log("chrome plan PORTABLE launcher", exe, profile || "Default");
+      return {
+        exe,
+        args,
+        isChrome: true,
+        userData: userData || "",
+        profile: profile || "Default",
+        portable: true,
+        reuseRunning: isChromeProcessRunning(),
+      };
     }
-    if (profile) args.push(`--profile-directory=${profile}`);
+    // No launcher: refuse silent chrome.exe fallback (customer logout risk)
     log(
-      "chrome plan PORTABLE",
-      exe,
-      profile || "Default",
-      usedLauncher ? "launcher" : userData || "no-data"
+      "chrome plan PORTABLE FAIL — missing ChromePortable.exe in",
+      root
     );
     return {
-      exe,
-      args,
-      isChrome: true,
+      exe: "",
+      args: [],
+      isChrome: false,
       userData: userData || "",
       profile: profile || "Default",
       portable: true,
-      reuseRunning: isChromeProcessRunning(),
+      missingLauncher: true,
+      reuseRunning: false,
     };
   }
 
@@ -839,69 +839,90 @@ function openInPreferredBrowser(url) {
 
   if (forcedPath && fs.existsSync(forcedPath)) {
     const plan = resolveChromeLaunchPlan(forcedPath, browserEnv);
-    // Recover Portable/system profile after crash (flash-then-exit)
-    if (plan.userData) {
-      clearStaleChromeSingletonLocks(plan.userData);
-    } else if (plan.portable) {
-      const root =
-        findChromePortableRoot(plan.exe) || path.dirname(plan.exe);
-      const ud = findPortableUserDataDir(root);
-      if (ud) clearStaleChromeSingletonLocks(ud);
-    }
-    // System Chrome already open → profile-directory often ignored (singleton)
-    if (
-      authSensitive &&
-      !plan.portable &&
-      plan.profile &&
-      isChromeRunningForUserData(plan.userData || "")
-    ) {
-      log(
-        "WARN system Chrome already running — profile may open in active tab, not",
-        plan.profile
-      );
-      try {
-        const choice = dialog.showMessageBoxSync(mainWindow || undefined, {
-          type: "warning",
-          title: "Chrome đang mở",
-          message: "Chrome gốc đang chạy — có thể mở sai profile",
-          detail:
-            `Bạn đã chọn profile «${plan.profile}».\n\n` +
-            "Chrome đang mở thường mở URL ở profile hiện tại (bỏ qua --profile-directory).\n\n" +
-            "Cách chắc chắn:\n" +
-            "1) Đóng hết cửa sổ Chrome gốc\n" +
-            "2) Connect lại\n\n" +
-            "Hoặc dùng Chrome Portable riêng cho tool.",
-          buttons: ["Tiếp tục mở", "Hủy"],
-          defaultId: 0,
-          cancelId: 1,
-        });
-        if (choice === 1) {
-          log("user cancelled open — Chrome already running");
-          return false;
+    if (plan.missingLauncher || !plan.exe) {
+      if (authSensitive) {
+        try {
+          dialog.showMessageBoxSync(mainWindow || undefined, {
+            type: "error",
+            title: "Thiếu ChromePortable.exe",
+            message: "Không tìm thấy ChromePortable.exe",
+            detail:
+              "Thư mục Portable thiếu launcher.\n" +
+              "Hãy chọn lại profile Portable (quét Chrome) hoặc trỏ FB_BROWSER_PATH tới ChromePortable.exe.\n" +
+              "Không mở chrome.exe trong App\\Chrome-bin (gây logout / profile trống).",
+            buttons: ["OK"],
+          });
+        } catch {
+          /* ignore */
         }
-      } catch {
-        /* dialog unavailable — continue */
       }
-    }
-    try {
-      const spawnArgs = [...plan.args, url];
-      spawn(plan.exe, spawnArgs, {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: false,
-        cwd: plan.portable ? path.dirname(plan.exe) : undefined,
-      }).unref();
-      log(
-        "openInPreferredBrowser OK",
-        plan.portable ? "PORTABLE" : "SYSTEM",
-        plan.exe,
-        `profile=${plan.profile || "Default"}`,
-        plan.userData ? `data=${plan.userData}` : "data=launcher",
-        url.slice(0, 70)
-      );
-      return true;
-    } catch (e) {
-      log("openInPreferredBrowser spawn fail", e.message);
+      log("openInPreferredBrowser FAIL — portable missing launcher");
+      if (authSensitive) return false;
+    } else {
+      // Recover Portable/system profile after crash (flash-then-exit)
+      if (plan.userData) {
+        clearStaleChromeSingletonLocks(plan.userData);
+      } else if (plan.portable) {
+        const root =
+          findChromePortableRoot(plan.exe) || path.dirname(plan.exe);
+        const ud = findPortableUserDataDir(root);
+        if (ud) clearStaleChromeSingletonLocks(ud);
+      }
+      // System Chrome already open → profile-directory often ignored (singleton)
+      if (
+        authSensitive &&
+        !plan.portable &&
+        plan.profile &&
+        isChromeRunningForUserData(plan.userData || "")
+      ) {
+        log(
+          "WARN system Chrome already running — profile may open in active tab, not",
+          plan.profile
+        );
+        try {
+          const choice = dialog.showMessageBoxSync(mainWindow || undefined, {
+            type: "warning",
+            title: "Chrome đang mở",
+            message: "Chrome gốc đang chạy — có thể mở sai profile",
+            detail:
+              `Bạn đã chọn profile «${plan.profile}».\n\n` +
+              "Chrome đang mở thường mở URL ở profile hiện tại (bỏ qua --profile-directory).\n\n" +
+              "Cách chắc chắn:\n" +
+              "1) Đóng hết cửa sổ Chrome gốc\n" +
+              "2) Connect lại\n\n" +
+              "Hoặc dùng Chrome Portable riêng cho tool.",
+            buttons: ["Tiếp tục mở", "Hủy"],
+            defaultId: 0,
+            cancelId: 1,
+          });
+          if (choice === 1) {
+            log("user cancelled open — Chrome already running");
+            return false;
+          }
+        } catch {
+          /* dialog unavailable — continue */
+        }
+      }
+      try {
+        const spawnArgs = [...plan.args, url];
+        spawn(plan.exe, spawnArgs, {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: false,
+          cwd: plan.portable ? path.dirname(plan.exe) : undefined,
+        }).unref();
+        log(
+          "openInPreferredBrowser OK",
+          plan.portable ? "PORTABLE" : "SYSTEM",
+          plan.exe,
+          `profile=${plan.profile || "Default"}`,
+          plan.userData ? `data=${plan.userData}` : "data=launcher",
+          url.slice(0, 70)
+        );
+        return true;
+      } catch (e) {
+        log("openInPreferredBrowser spawn fail", e.message);
+      }
     }
   }
 
@@ -1044,7 +1065,38 @@ function startBackend() {
 
   serverProc.stdout.on("data", (d) => log("SRV", d.toString().trim()));
   serverProc.stderr.on("data", (d) => log("ERR", d.toString().trim()));
-  serverProc.on("exit", (code) => log("Server exit", String(code)));
+  serverProc.on("exit", (code) => {
+    log("Server exit", String(code));
+    // Unexpected death: one auto-restart so customer machines don't stay dead UI
+    if (app.isQuitting || applyingUpdate) return;
+    if (backendRestartAttempts >= 2) {
+      log("backend restart exhausted");
+      try {
+        dialog.showMessageBoxSync(mainWindow || undefined, {
+          type: "error",
+          title: "Backend dừng",
+          message: "Server tool đã tắt bất ngờ",
+          detail:
+            `Mã thoát: ${code}\n\nĐóng app mở lại. Log: ${logFile || "?"}`,
+          buttons: ["OK"],
+        });
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    backendRestartAttempts += 1;
+    log("backend auto-restart attempt", String(backendRestartAttempts));
+    setTimeout(() => {
+      if (app.isQuitting || applyingUpdate) return;
+      startBackend()
+        .then(() => {
+          log("backend restarted OK");
+          backendRestartAttempts = 0;
+        })
+        .catch((e) => log("backend restart fail", e.message));
+    }, 1200);
+  });
   serverProc.on("error", (e) => log("Server spawn error", e.message));
   serverProc.on("message", (msg) => {
     if (msg?.type !== "fbps-apply-update" || !msg.batPath) return;

@@ -1021,6 +1021,24 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     return true;
   }
 
+  /**
+   * One canonical Graph id per object (avoids matched/OK ~2× + double DELETE quota).
+   * Feed-style edges: pageId_objectId. Videos/photos/reels: plain numeric id.
+   */
+  function canonicalContentId(rawId, kind) {
+    const rid = String(rawId || "").trim();
+    if (!rid) return "";
+    if (rid.includes("_") || !/^\d+$/.test(rid)) return rid;
+    if (
+      /published_posts|feed|posts|visitor|tagged|shared|enrich/i.test(
+        String(kind || "")
+      )
+    ) {
+      return `${pid}_${rid}`;
+    }
+    return rid;
+  }
+
   function normalizeItem(raw, kind) {
     if (!raw || !raw.id) return [];
     const out = [];
@@ -1031,15 +1049,9 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
       created_time: raw.created_time || null,
       permalink_url: raw.permalink_url || raw.link || null,
     };
-    out.push({ ...base, id: String(raw.id) });
-    // Also pageId_objectId form sometimes used on feed
-    if (String(raw.id).indexOf("_") < 0 && /^\d+$/.test(String(raw.id))) {
-      out.push({
-        ...base,
-        id: `${pid}_${raw.id}`,
-        _source: `${kind}+page_compound`,
-      });
-    }
+    const primary = canonicalContentId(raw.id, kind);
+    if (primary) out.push({ ...base, id: primary });
+    // Linked objects only when they are different objects — one form each
     const extras = [
       raw.post_id,
       raw.object_id,
@@ -1047,47 +1059,53 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
       raw.video?.id,
       raw.video_id,
     ].filter(Boolean);
+    const seenLocal = new Set(primary ? [primary] : []);
     for (const ex of extras) {
-      const eid = String(ex);
-      if (eid && eid !== String(raw.id)) {
-        out.push({
-          ...base,
-          id: eid,
-          _source: `${kind}+linked`,
-        });
-        if (eid.indexOf("_") < 0) {
-          out.push({
-            ...base,
-            id: `${pid}_${eid}`,
-            _source: `${kind}+linked_compound`,
-          });
-        }
-      }
+      const eid = canonicalContentId(ex, kind);
+      if (!eid || seenLocal.has(eid)) continue;
+      // skip plain↔compound duplicate of same numeric object
+      const plain = String(ex).includes("_") ? String(ex).split("_").pop() : String(ex);
+      const primaryPlain = primary.includes("_") ? primary.split("_").pop() : primary;
+      if (plain && plain === primaryPlain) continue;
+      seenLocal.add(eid);
+      out.push({
+        ...base,
+        id: eid,
+        _source: `${kind}+linked`,
+      });
     }
     try {
       const atts = raw.attachments?.data || [];
       for (const a of atts) {
         if (a?.target?.id && String(a.target.id) !== String(raw.id)) {
-          out.push({
-            id: String(a.target.id),
-            message: base.message,
-            created_time: base.created_time,
-            permalink_url: a.url || base.permalink_url,
-            _source: `${kind}+attachment_target`,
-            status_type: a.media_type || a.type || null,
-          });
+          const aid = canonicalContentId(a.target.id, kind);
+          if (aid && !seenLocal.has(aid)) {
+            seenLocal.add(aid);
+            out.push({
+              id: aid,
+              message: base.message,
+              created_time: base.created_time,
+              permalink_url: a.url || base.permalink_url,
+              _source: `${kind}+attachment_target`,
+              status_type: a.media_type || a.type || null,
+            });
+          }
         }
         // nested subattachments (album / multi-video)
         const subs = a?.subattachments?.data || [];
         for (const s of subs) {
           if (s?.target?.id) {
-            out.push({
-              id: String(s.target.id),
-              message: base.message,
-              created_time: base.created_time,
-              permalink_url: s.url || base.permalink_url,
-              _source: `${kind}+subattachment`,
-            });
+            const sid = canonicalContentId(s.target.id, kind);
+            if (sid && !seenLocal.has(sid)) {
+              seenLocal.add(sid);
+              out.push({
+                id: sid,
+                message: base.message,
+                created_time: base.created_time,
+                permalink_url: s.url || base.permalink_url,
+                _source: `${kind}+subattachment`,
+              });
+            }
           }
         }
       }
@@ -1132,7 +1150,17 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
       if (!next) break;
       // hard safety: 500 pages * 100 = 50k per edge
       if (pages >= 500) break;
-      if (maxPosts > 0 && byId.size >= maxPosts * 5) break;
+      // Time filter → many out-of-range ids fill Map before in-range enough.
+      // Without filter: stop soon after maxPosts*5. With filter: much higher cap.
+      if (maxPosts > 0) {
+        const hasTimeFilter =
+          (opts.since != null && opts.since !== "") ||
+          (opts.until != null && opts.until !== "");
+        const rawCap = hasTimeFilter
+          ? Math.max(maxPosts * 30, 10_000)
+          : maxPosts * 5;
+        if (byId.size >= rawCap) break;
+      }
       data = await withRateLimitRetry(
         () => graphFetchAbsolute(next, pageToken, graphOpts),
         {
@@ -1272,17 +1300,10 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
           );
           for (const [vid, obj] of Object.entries(data || {})) {
             if (!obj || obj.error) continue;
-            for (const item of normalizeItem(obj, "enrich")) {
+            // normalizeItem(enrich) already picks one canonical id (no dual)
+            const objWithId = obj.id ? obj : { ...obj, id: vid };
+            for (const item of normalizeItem(objWithId, "enrich")) {
               addItem(item);
-            }
-            if (vid.indexOf("_") < 0) {
-              addItem({
-                id: `${pid}_${vid}`,
-                message: obj.description || obj.message || "",
-                created_time: obj.created_time || null,
-                permalink_url: obj.permalink_url || null,
-                _source: "enrich+page_compound",
-              });
             }
           }
         } catch {
