@@ -152,7 +152,16 @@
                     <button type="button" class="btn-ghost btn-sm" id="btnManagePageGroups">Quản lý page</button>
                   </div>
                 </div>
-                <div id="selGroupStatus" class="muted" style="margin-top:.45rem;font-size:.78rem"></div>
+                <!-- Electron không hỗ trợ window.prompt — form tên nhóm ngay trên UI -->
+                <div id="selGroupNameBox" style="display:none;margin-top:.55rem;padding:.55rem .6rem;border:1px dashed rgba(61,214,140,.4);border-radius:10px;background:rgba(61,214,140,.06)">
+                  <label class="muted" style="font-size:.78rem;display:block;margin-bottom:.3rem" id="selGroupNameLabel">Tên nhóm</label>
+                  <div style="display:flex;gap:.35rem;flex-wrap:wrap;align-items:center">
+                    <input type="text" id="selGroupNameInput" placeholder="VD: Team A · Fashion 20 page" style="flex:1;min-width:10rem" maxlength="80" autocomplete="off" />
+                    <button type="button" class="btn-ok btn-sm" id="btnConfirmSaveGroup">Lưu nhóm</button>
+                    <button type="button" class="btn-ghost btn-sm" id="btnCancelSaveGroup">Hủy</button>
+                  </div>
+                </div>
+                <div id="selGroupStatus" class="muted" style="margin-top:.45rem;font-size:.78rem;min-height:1.2rem"></div>
               </div>
 
               <p class="muted" style="margin:0 .35rem .45rem;font-size:.78rem">
@@ -1325,8 +1334,61 @@
     function setSelGroupStatus(msg, ok = true) {
       const el = $("selGroupStatus");
       if (!el) return;
-      el.style.color = ok ? "" : "#fb7185";
+      el.style.color = ok ? "#34d399" : "#fb7185";
       el.textContent = msg || "";
+      if (msg) {
+        try {
+          if (typeof flash === "function") flash(msg, ok);
+        } catch {
+          /* flash optional */
+        }
+      }
+    }
+
+    /** pending: { kind: 'account'|'page', account_ids?, page_row_ids? } */
+    let pendingGroupSave = null;
+
+    function hideGroupNameBox() {
+      pendingGroupSave = null;
+      const box = $("selGroupNameBox");
+      if (box) box.style.display = "none";
+      const inp = $("selGroupNameInput");
+      if (inp) {
+        inp.value = "";
+        inp.placeholder = "VD: Team A · Fashion 20 page";
+      }
+      const conf = $("btnConfirmSaveGroup");
+      if (conf) conf.textContent = "Lưu nhóm";
+      const label = $("selGroupNameLabel");
+      if (label) label.textContent = "Tên nhóm";
+    }
+
+    function showGroupNameBox(kind, payload, defaultName) {
+      pendingGroupSave = { kind, ...payload };
+      const box = $("selGroupNameBox");
+      const label = $("selGroupNameLabel");
+      const inp = $("selGroupNameInput");
+      if (!box || !inp) {
+        setSelGroupStatus("Lỗi UI: thiếu form tên nhóm", false);
+        return;
+      }
+      if (label) {
+        label.textContent =
+          kind === "account"
+            ? `Tên nhóm tài khoản (${(payload.account_ids || []).length} TK)`
+            : `Tên nhóm page (${(payload.page_row_ids || []).length} page)`;
+      }
+      inp.value = defaultName || "";
+      box.style.display = "block";
+      setSelGroupStatus("Nhập tên nhóm rồi bấm «Lưu nhóm» (Electron không có popup prompt)", true);
+      setTimeout(() => {
+        try {
+          inp.focus();
+          inp.select();
+        } catch {
+          /* ignore */
+        }
+      }, 30);
     }
 
     async function loadSelectionGroups() {
@@ -1434,55 +1496,69 @@
       return [...set];
     }
 
-    async function saveAccGroupFromSelection() {
+    function saveAccGroupFromSelection() {
       const account_ids = accountIdsFromSelection();
       if (!account_ids.length) {
-        return setSelGroupStatus("Tick ít nhất 1 page (để lấy tài khoản) trước", false);
+        setSelGroupStatus("Tick ít nhất 1 page (để lấy tài khoản) trước", false);
+        return;
       }
-      const name = prompt(
-        `Tên nhóm tài khoản (${account_ids.length} TK từ selection):`,
-        `TK ${account_ids.length} · ${new Date().toLocaleDateString("vi-VN")}`
-      );
-      if (name == null) return;
-      try {
-        const r = await api("/api/posting/selection-groups/account", {
-          method: "POST",
-          body: JSON.stringify({ name: name.trim() || "Nhóm TK", account_ids }),
-        });
-        selectionGroups = {
-          account_groups: r.account_groups || [],
-          page_groups: r.page_groups || selectionGroups.page_groups,
-        };
-        renderSelectionGroupChips();
-        setSelGroupStatus(`Đã lưu nhóm TK «${name.trim()}» · ${account_ids.length} tài khoản`);
-      } catch (e) {
-        setSelGroupStatus(e.message, false);
-      }
+      const def = `TK ${account_ids.length} · ${new Date().toLocaleDateString("vi-VN")}`;
+      showGroupNameBox("account", { account_ids }, def);
     }
 
-    async function savePageGroupFromSelection() {
+    function savePageGroupFromSelection() {
       const page_row_ids = selectedPageIds();
       if (!page_row_ids.length) {
-        return setSelGroupStatus("Tick ít nhất 1 page trước", false);
+        setSelGroupStatus("Tick ít nhất 1 page trước", false);
+        return;
       }
-      const name = prompt(
-        `Tên nhóm page (${page_row_ids.length} page):`,
-        `Page ${page_row_ids.length} · ${new Date().toLocaleDateString("vi-VN")}`
-      );
-      if (name == null) return;
+      const def = `Page ${page_row_ids.length} · ${new Date().toLocaleDateString("vi-VN")}`;
+      showGroupNameBox("page", { page_row_ids }, def);
+    }
+
+    async function confirmSaveGroup() {
+      if (!pendingGroupSave) {
+        setSelGroupStatus("Bấm «+ Lưu nhóm…» trước", false);
+        return;
+      }
+      const name = String($("selGroupNameInput")?.value || "").trim();
+      if (!name) {
+        setSelGroupStatus("Nhập tên nhóm", false);
+        $("selGroupNameInput")?.focus();
+        return;
+      }
+      const kind = pendingGroupSave.kind;
       try {
-        const r = await api("/api/posting/selection-groups/page", {
-          method: "POST",
-          body: JSON.stringify({ name: name.trim() || "Nhóm page", page_row_ids }),
-        });
-        selectionGroups = {
-          account_groups: selectionGroups.account_groups,
-          page_groups: r.page_groups || [],
-        };
-        renderSelectionGroupChips();
-        setSelGroupStatus(`Đã lưu nhóm page «${name.trim()}» · ${page_row_ids.length} page`);
+        setSelGroupStatus("Đang lưu…", true);
+        if (kind === "account") {
+          const account_ids = pendingGroupSave.account_ids || [];
+          const r = await api("/api/posting/selection-groups/account", {
+            method: "POST",
+            body: JSON.stringify({ name, account_ids }),
+          });
+          selectionGroups = {
+            account_groups: r.account_groups || [],
+            page_groups: r.page_groups || selectionGroups.page_groups,
+          };
+          renderSelectionGroupChips();
+          hideGroupNameBox();
+          setSelGroupStatus(`✓ Đã lưu nhóm TK «${name}» · ${account_ids.length} tài khoản`);
+        } else {
+          const page_row_ids = pendingGroupSave.page_row_ids || [];
+          const r = await api("/api/posting/selection-groups/page", {
+            method: "POST",
+            body: JSON.stringify({ name, page_row_ids }),
+          });
+          selectionGroups = {
+            account_groups: selectionGroups.account_groups,
+            page_groups: r.page_groups || [],
+          };
+          renderSelectionGroupChips();
+          hideGroupNameBox();
+          setSelGroupStatus(`✓ Đã lưu nhóm page «${name}» · ${page_row_ids.length} page`);
+        }
       } catch (e) {
-        setSelGroupStatus(e.message, false);
+        setSelGroupStatus(e.message || "Lưu nhóm thất bại", false);
       }
     }
 
@@ -1492,31 +1568,50 @@
           ? selectionGroups.account_groups || []
           : selectionGroups.page_groups || [];
       if (!list.length) {
-        return setSelGroupStatus(
+        setSelGroupStatus(
           kind === "account" ? "Chưa có nhóm TK để quản lý" : "Chưa có nhóm page để quản lý",
           false
         );
+        return;
       }
-      const lines = list
-        .map((g, i) => {
-          const n =
-            kind === "account"
-              ? (g.account_ids || []).length + " TK"
-              : (g.page_row_ids || []).length + " page";
-          return `${i + 1}. ${g.name} (${n}) · id=${g.id}`;
-        })
-        .join("\n");
-      const pick = prompt(
-        `Nhóm ${kind === "account" ? "tài khoản" : "page"}:\n${lines}\n\n` +
-          `Nhập số thứ tự để XÓA (hoặc Cancel):`
-      );
-      if (pick == null || !String(pick).trim()) return;
-      const idx = Number(pick) - 1;
+      // Inline delete UI (no prompt/confirm — Electron blocks them)
+      const box = $("selGroupNameBox");
+      const label = $("selGroupNameLabel");
+      const inp = $("selGroupNameInput");
+      if (!box || !inp) return;
+      pendingGroupSave = { kind: "delete", deleteKind: kind, list };
+      if (label) {
+        label.innerHTML =
+          `Xóa nhóm ${kind === "account" ? "TK" : "page"} — chọn trong danh sách rồi bấm «Lưu nhóm» (nút = Xóa):<br/>` +
+          list
+            .map(
+              (g, i) =>
+                `${i + 1}. ${esc(g.name)} (${
+                  kind === "account"
+                    ? (g.account_ids || []).length + " TK"
+                    : (g.page_row_ids || []).length + " page"
+                })`
+            )
+            .join(" · ");
+      }
+      inp.value = "1";
+      inp.placeholder = "Số thứ tự nhóm cần xóa (1, 2, …)";
+      box.style.display = "block";
+      const conf = $("btnConfirmSaveGroup");
+      if (conf) conf.textContent = "Xóa nhóm";
+      setSelGroupStatus("Nhập số thứ tự nhóm cần xóa → bấm «Xóa nhóm»", true);
+    }
+
+    async function confirmDeleteGroupFromForm() {
+      if (!pendingGroupSave || pendingGroupSave.kind !== "delete") return false;
+      const list = pendingGroupSave.list || [];
+      const idx = Number(String($("selGroupNameInput")?.value || "").trim()) - 1;
       if (!Number.isFinite(idx) || idx < 0 || idx >= list.length) {
-        return setSelGroupStatus("Số thứ tự không hợp lệ", false);
+        setSelGroupStatus("Số thứ tự không hợp lệ", false);
+        return true;
       }
       const g = list[idx];
-      if (!confirm(`Xóa nhóm «${g.name}»?`)) return;
+      const kind = pendingGroupSave.deleteKind;
       try {
         const path =
           kind === "account"
@@ -1528,10 +1623,14 @@
           page_groups: r.page_groups || [],
         };
         renderSelectionGroupChips();
-        setSelGroupStatus(`Đã xóa nhóm «${g.name}»`);
+        hideGroupNameBox();
+        const conf = $("btnConfirmSaveGroup");
+        if (conf) conf.textContent = "Lưu nhóm";
+        setSelGroupStatus(`✓ Đã xóa nhóm «${g.name}»`);
       } catch (e) {
         setSelGroupStatus(e.message, false);
       }
+      return true;
     }
 
     async function loadPages() {
@@ -2302,6 +2401,29 @@
     $("btnSavePageGroup")?.addEventListener("click", () => savePageGroupFromSelection());
     $("btnManageAccGroups")?.addEventListener("click", () => manageGroups("account"));
     $("btnManagePageGroups")?.addEventListener("click", () => manageGroups("page"));
+    $("btnConfirmSaveGroup")?.addEventListener("click", async () => {
+      if (pendingGroupSave?.kind === "delete") {
+        await confirmDeleteGroupFromForm();
+        return;
+      }
+      await confirmSaveGroup();
+    });
+    $("btnCancelSaveGroup")?.addEventListener("click", () => {
+      hideGroupNameBox();
+      const conf = $("btnConfirmSaveGroup");
+      if (conf) conf.textContent = "Lưu nhóm";
+      setSelGroupStatus("Đã hủy");
+    });
+    $("selGroupNameInput")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        $("btnConfirmSaveGroup")?.click();
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        $("btnCancelSaveGroup")?.click();
+      }
+    });
 
     (() => {
       if ($("bulkStart") && !$("bulkStart").value) {
