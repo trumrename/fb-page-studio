@@ -383,9 +383,9 @@ function portableLauncherMissing(browserPath) {
 }
 
 /**
- * Heal mismatched Chrome env — valid system OR portable.
- * On NEW machine: clear stale Portable path from old PC so Connect works with
- * system Chrome (or re-found Portable) instead of "Thiếu ChromePortable.exe".
+ * Heal Chrome env for new machines.
+ * NEVER force system Chrome when user had Portable — only rebind Portable on
+ * this PC, or clear broken paths so UI can re-pick (do not overwrite to system).
  */
 function healChromeSessionEnv(userDir) {
   if (!userDir) return;
@@ -400,77 +400,76 @@ function healChromeSessionEnv(userDir) {
     let dataDir = String(
       (cur.match(/^FB_CHROME_USER_DATA_DIR=(.*)$/m) || [])[1] || ""
     ).trim();
-    const isPortableExe = /chromeportable|googlechromeportable|portable/i.test(
-      browserPath
-    );
+    const wantedPortable =
+      /chromeportable|googlechromeportable|portable|chrome-bin/i.test(
+        browserPath
+      ) ||
+      (/data[\\/]profile/i.test(dataDir) &&
+        !/google[\\/]chrome[\\/]user data/i.test(dataDir));
     const isSystemData =
       /google[\\/]chrome[\\/]user data/i.test(dataDir) &&
       !/chromeportable/i.test(dataDir);
 
-    // Stale path from another PC (exe missing) or Portable without launcher
     const pathGone = browserPath && !fs.existsSync(browserPath);
     const badPortable =
       browserPath &&
-      (isPortableExe || /portable|chrome-bin/i.test(browserPath)) &&
+      wantedPortable &&
       portableLauncherMissing(browserPath);
     const dataGone = dataDir && !fs.existsSync(dataDir);
 
-    if (pathGone || badPortable || (dataGone && isPortableExe)) {
-      // Prefer Portable on THIS machine if any
+    if (pathGone || badPortable || (dataGone && wantedPortable)) {
+      // ONLY try Portable on this PC — never rewrite .env to system chrome
+      // (that caused "vẫn ra chrome gốc" on customer machines)
       const localPortable = findChromePortableExe({
         FB_BROWSER_PATH: "",
-        FB_CHROME_USER_DATA_DIR: "",
+        FB_CHROME_USER_DATA_DIR: dataDir && !dataGone ? dataDir : "",
       });
-      const sysExe = systemChromeExePath();
-      const sysUd = systemChromeUserDataPath();
       if (localPortable) {
         browserPath = localPortable;
         const root =
           findChromePortableRoot(localPortable) || path.dirname(localPortable);
         dataDir = findPortableUserDataDir(root) || dataDir;
-        log("healed: rebind browser → Portable on this PC", localPortable);
-      } else if (sysExe) {
-        browserPath = sysExe;
-        dataDir = fs.existsSync(sysUd) ? sysUd : "";
-        log("healed: Portable missing on new PC → system Chrome", sysExe);
-      } else {
-        // clear broken keys so UI forces re-pick
-        browserPath = "";
-        dataDir = "";
-        log("healed: clear broken Chrome paths (no browser found)");
-      }
-      if (browserPath) {
+        log("healed: rebind → Portable on this PC", localPortable, dataDir);
         if (/^FB_BROWSER_PATH=/m.test(cur)) {
-          cur = cur.replace(/^FB_BROWSER_PATH=.*$/m, `FB_BROWSER_PATH=${browserPath}`);
+          cur = cur.replace(
+            /^FB_BROWSER_PATH=.*$/m,
+            `FB_BROWSER_PATH=${browserPath}`
+          );
+        } else if (/^[ \t]*#\s*FB_BROWSER_PATH=/m.test(cur)) {
+          cur = cur.replace(
+            /^[ \t]*#\s*FB_BROWSER_PATH=.*$/m,
+            `FB_BROWSER_PATH=${browserPath}`
+          );
         } else {
           cur += `\nFB_BROWSER_PATH=${browserPath}\n`;
         }
+        if (dataDir) {
+          if (/^FB_CHROME_USER_DATA_DIR=/m.test(cur)) {
+            cur = cur.replace(
+              /^FB_CHROME_USER_DATA_DIR=.*$/m,
+              `FB_CHROME_USER_DATA_DIR=${dataDir}`
+            );
+          } else {
+            cur += `\nFB_CHROME_USER_DATA_DIR=${dataDir}\n`;
+          }
+        }
+        if (/^FB_CHROME_PROFILE=/m.test(cur)) {
+          // keep profile name if set
+        } else {
+          cur += `\nFB_CHROME_PROFILE=Default\n`;
+        }
       } else {
+        // Clear broken keys only — force user to quét lại (không ghim Chrome gốc)
+        log("healed: clear stale Portable path (not found on this PC)");
         cur = cur.replace(/^FB_BROWSER_PATH=.*$/m, "# FB_BROWSER_PATH=");
-      }
-      if (dataDir) {
-        if (/^FB_CHROME_USER_DATA_DIR=/m.test(cur)) {
+        if (dataGone || wantedPortable) {
           cur = cur.replace(
             /^FB_CHROME_USER_DATA_DIR=.*$/m,
-            `FB_CHROME_USER_DATA_DIR=${dataDir}`
+            "# FB_CHROME_USER_DATA_DIR="
           );
-        } else {
-          cur += `\nFB_CHROME_USER_DATA_DIR=${dataDir}\n`;
-        }
-      } else if (dataGone || badPortable) {
-        cur = cur.replace(
-          /^FB_CHROME_USER_DATA_DIR=.*$/m,
-          "# FB_CHROME_USER_DATA_DIR="
-        );
-      }
-      // Reset profile to Default when switching machines (old Profile N may not exist)
-      if (pathGone || badPortable) {
-        if (/^FB_CHROME_PROFILE=/m.test(cur)) {
-          cur = cur.replace(/^FB_CHROME_PROFILE=.*$/m, "FB_CHROME_PROFILE=Default");
         }
       }
-    } else if (isPortableExe && isSystemData) {
-      // Portable browser must not point at system User Data
+    } else if (wantedPortable && isSystemData && browserPath && fs.existsSync(browserPath)) {
       const root =
         findChromePortableRoot(browserPath) || path.dirname(browserPath);
       const portableData = findPortableUserDataDir(root);
@@ -483,7 +482,24 @@ function healChromeSessionEnv(userDir) {
       }
     }
 
-    // Remove old heal comments that disabled system profile selection (v1.2.7x)
+    // Undo accidental heal that pinned system chrome while user had portable data
+    // (v1.2.83 side-effect): if path is system but data dir is portable, re-find Portable
+    if (
+      browserPath &&
+      /google[\\/]chrome[\\/]application[\\/]chrome\.exe/i.test(browserPath) &&
+      dataDir &&
+      /portable|data[\\/]profile/i.test(dataDir)
+    ) {
+      const localPortable = findChromePortableExe({
+        FB_BROWSER_PATH: "",
+        FB_CHROME_USER_DATA_DIR: dataDir,
+      });
+      if (localPortable) {
+        cur = cur.replace(/^FB_BROWSER_PATH=.*$/m, `FB_BROWSER_PATH=${localPortable}`);
+        log("healed: undo system pin → Portable", localPortable);
+      }
+    }
+
     if (
       /#\s*FB_CHROME_USER_DATA_DIR=.*disabled:\s*system User Data/i.test(cur)
     ) {
@@ -491,7 +507,6 @@ function healChromeSessionEnv(userDir) {
         /^[ \t]*#\s*FB_CHROME_USER_DATA_DIR=.*disabled:.*$/gim,
         ""
       );
-      log("healed: removed obsolete system-data disable comments");
     }
 
     if (cur !== orig) {
@@ -702,7 +717,7 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
     } else {
       userData = findPortableUserDataDir(root) || "";
     }
-    // ALWAYS prefer launcher — chrome.exe + --user-data-dir can empty session / captcha
+    // Prefer launcher (sets Data\profile correctly)
     if (launcher) {
       exe = launcher;
       const args = [];
@@ -718,11 +733,36 @@ function resolveChromeLaunchPlan(rawExe, browserEnv) {
         reuseRunning: isChromeProcessRunning(),
       };
     }
-    // No launcher: refuse silent chrome.exe fallback (customer logout risk)
-    log(
-      "chrome plan PORTABLE FAIL — missing ChromePortable.exe in",
-      root
-    );
+    // No launcher: still open portable chrome.exe + --user-data-dir
+    // (better than falling back to system Chrome / empty profile)
+    const realChrome = [
+      path.join(root, "App", "Chrome-bin", "chrome.exe"),
+      path.join(root, "App", "Chrome", "chrome.exe"),
+      path.join(root, "chrome.exe"),
+      /chrome\.exe$/i.test(exe) && fs.existsSync(exe) ? exe : "",
+    ].find((c) => c && fs.existsSync(c));
+    if (realChrome && userData && fs.existsSync(userData)) {
+      const args = [
+        `--user-data-dir=${userData}`,
+      ];
+      if (profile) args.push(`--profile-directory=${profile}`);
+      log(
+        "chrome plan PORTABLE chrome.exe+user-data-dir",
+        realChrome,
+        userData,
+        profile || "Default"
+      );
+      return {
+        exe: realChrome,
+        args,
+        isChrome: true,
+        userData,
+        profile: profile || "Default",
+        portable: true,
+        reuseRunning: isChromeProcessRunning(),
+      };
+    }
+    log("chrome plan PORTABLE FAIL — no launcher and no usable chrome.exe", root);
     return {
       exe: "",
       args: [],
@@ -791,18 +831,33 @@ function isFacebookAuthUrl(url) {
 }
 
 /**
- * Resolve ChromePortable.exe aggressively — customers often forget FB_BROWSER_PATH.
+ * Resolve ChromePortable.exe aggressively.
  * Never return system Google\Chrome\Application\chrome.exe as "portable".
+ * Also accepts chrome.exe under a Portable tree (returns launcher if present).
  */
 function findChromePortableExe(browserEnv = {}) {
   const tried = [];
+  const seen = new Set();
   const push = (p) => {
     const s = String(p || "").trim();
-    if (s) tried.push(s);
+    if (!s) return;
+    const key = s.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    tried.push(s);
   };
 
-  push(browserEnv.BROWSER_PATH || process.env.BROWSER_PATH);
-  push(browserEnv.FB_BROWSER_PATH || process.env.FB_BROWSER_PATH);
+  // Only use FB_BROWSER_PATH if it is already portable (not system chrome)
+  const saved = String(
+    browserEnv.FB_BROWSER_PATH ||
+      process.env.FB_BROWSER_PATH ||
+      browserEnv.BROWSER_PATH ||
+      process.env.BROWSER_PATH ||
+      ""
+  ).trim();
+  if (saved && /portable|chromeportable|googlechromeportable/i.test(saved)) {
+    push(saved);
+  }
 
   // Walk up from configured portable user-data (Data\profile)
   const ud = String(
@@ -813,52 +868,93 @@ function findChromePortableExe(browserEnv = {}) {
     for (let i = 0; i < 8; i++) {
       push(path.join(dir, "ChromePortable.exe"));
       push(path.join(dir, "GoogleChromePortable.exe"));
+      push(path.join(dir, "App", "Chrome-bin", "chrome.exe"));
       const parent = path.dirname(dir);
       if (parent === dir) break;
       dir = parent;
     }
   }
 
-  // Máy khách: Portable có thể nằm bất kỳ ổ (USB D–Z), Desktop, PortableApps…
   const home = process.env.USERPROFILE || process.env.HOME || "";
   const drives = "CDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+  const rels = [
+    "ChromePortable\\ChromePortable.exe",
+    "GoogleChromePortable\\GoogleChromePortable.exe",
+    "PortableApps\\GoogleChromePortable\\GoogleChromePortable.exe",
+    "PortableApps\\ChromePortable\\ChromePortable.exe",
+    "Tools\\ChromePortable\\ChromePortable.exe",
+    "Program\\ChromePortable\\ChromePortable.exe",
+    "Apps\\ChromePortable\\ChromePortable.exe",
+    "Soft\\ChromePortable\\ChromePortable.exe",
+    "Browser\\ChromePortable\\ChromePortable.exe",
+  ];
   for (const L of drives) {
-    push(`${L}:\\ChromePortable\\ChromePortable.exe`);
-    push(`${L}:\\GoogleChromePortable\\GoogleChromePortable.exe`);
-    push(`${L}:\\PortableApps\\GoogleChromePortable\\GoogleChromePortable.exe`);
-    push(`${L}:\\PortableApps\\ChromePortable\\ChromePortable.exe`);
-    push(`${L}:\\Tools\\ChromePortable\\ChromePortable.exe`);
-    push(`${L}:\\Program\\ChromePortable\\ChromePortable.exe`);
-    push(`${L}:\\Apps\\ChromePortable\\ChromePortable.exe`);
+    for (const rel of rels) push(`${L}:\\${rel}`);
   }
   if (home) {
-    push(path.join(home, "ChromePortable", "ChromePortable.exe"));
-    push(path.join(home, "Desktop", "ChromePortable", "ChromePortable.exe"));
-    push(path.join(home, "Documents", "ChromePortable", "ChromePortable.exe"));
-    push(path.join(home, "Downloads", "ChromePortable", "ChromePortable.exe"));
-    push(
-      path.join(
-        home,
-        "PortableApps",
-        "GoogleChromePortable",
-        "GoogleChromePortable.exe"
-      )
-    );
+    for (const rel of [
+      "ChromePortable\\ChromePortable.exe",
+      "Desktop\\ChromePortable\\ChromePortable.exe",
+      "Documents\\ChromePortable\\ChromePortable.exe",
+      "Downloads\\ChromePortable\\ChromePortable.exe",
+      "PortableApps\\GoogleChromePortable\\GoogleChromePortable.exe",
+      "PortableApps\\ChromePortable\\ChromePortable.exe",
+    ]) {
+      push(path.join(home, rel));
+    }
+  }
+
+  // Shallow scan of drive roots for *ChromePortable* folders (depth 1–2)
+  for (const L of drives) {
+    const root = `${L}:\\`;
+    try {
+      if (!fs.existsSync(root)) continue;
+      const top = fs.readdirSync(root, { withFileTypes: true });
+      for (const ent of top) {
+        if (!ent.isDirectory()) continue;
+        if (!/chrome|portable|browser|tools|soft|program|apps/i.test(ent.name)) {
+          continue;
+        }
+        const d1 = path.join(root, ent.name);
+        push(path.join(d1, "ChromePortable.exe"));
+        push(path.join(d1, "GoogleChromePortable.exe"));
+        // one more level: D:\Tools\ChromePortable\ChromePortable.exe
+        try {
+          const sub = fs.readdirSync(d1, { withFileTypes: true });
+          for (const s of sub) {
+            if (!s.isDirectory()) continue;
+            if (!/chrome|portable/i.test(s.name)) continue;
+            const d2 = path.join(d1, s.name);
+            push(path.join(d2, "ChromePortable.exe"));
+            push(path.join(d2, "GoogleChromePortable.exe"));
+          }
+        } catch {
+          /* skip unreadable */
+        }
+      }
+    } catch {
+      /* missing drive */
+    }
   }
 
   for (const p of tried) {
     try {
-      if (p && fs.existsSync(p) && /portable/i.test(p) && /\.exe$/i.test(p)) {
+      if (!p || !fs.existsSync(p)) continue;
+      // Reject system chrome
+      if (/google[\\/]chrome[\\/]application[\\/]chrome\.exe$/i.test(p)) continue;
+      if (/chromeportable\.exe$|googlechromeportable\.exe$/i.test(p)) {
         return path.resolve(p);
       }
-      // Path is chrome.exe under a Portable tree → use launcher
-      if (p && fs.existsSync(p) && /chrome\.exe$/i.test(p)) {
+      // chrome.exe under Portable tree → prefer launcher beside root
+      if (/chrome\.exe$/i.test(p) && /portable|chrome-bin/i.test(p)) {
         const root = findChromePortableRoot(p);
         if (root) {
           const launcher = path.join(root, "ChromePortable.exe");
           if (fs.existsSync(launcher)) return launcher;
           const g = path.join(root, "GoogleChromePortable.exe");
           if (fs.existsSync(g)) return g;
+          // return chrome.exe itself — resolveChromeLaunchPlan adds --user-data-dir
+          return path.resolve(p);
         }
       }
     } catch {
@@ -869,8 +965,8 @@ function findChromePortableExe(browserEnv = {}) {
 }
 
 /**
- * Open OAuth in the browser+profile the user saved (system OR Portable).
- * Never openExternal first for OAuth — that ignores profile selection.
+ * Open OAuth in browser+profile user saved.
+ * Prefer Portable when user selected it — NEVER silent switch to system Chrome.
  */
 function openInPreferredBrowser(url) {
   let parsed;
@@ -889,15 +985,6 @@ function openInPreferredBrowser(url) {
   const browserEnv = readBrowserEnv();
   const authSensitive = isFacebookAuthUrl(url);
 
-  // Priority: saved FB_BROWSER_PATH (system chrome.exe OR ChromePortable.exe)
-  let forcedPath = String(
-    browserEnv.BROWSER_PATH ||
-      process.env.BROWSER_PATH ||
-      browserEnv.FB_BROWSER_PATH ||
-      process.env.FB_BROWSER_PATH ||
-      ""
-  ).trim();
-
   const systemChromeCandidates = () => {
     const local = process.env.LOCALAPPDATA || "";
     const pf = process.env.ProgramFiles || "C:\\Program Files";
@@ -909,79 +996,108 @@ function openInPreferredBrowser(url) {
     ];
   };
 
-  // Infer from saved user-data when browser path missing
-  if ((!forcedPath || !fs.existsSync(forcedPath)) && browserEnv.FB_CHROME_USER_DATA_DIR) {
-    const ud = String(browserEnv.FB_CHROME_USER_DATA_DIR).trim();
-    if (/google[\\/]chrome[\\/]user data/i.test(ud)) {
-      forcedPath = systemChromeCandidates().find((p) => fs.existsSync(p)) || "";
-      if (forcedPath) log("inferred system Chrome from user-data-dir", forcedPath);
-    } else {
+  const savedPath = String(
+    browserEnv.BROWSER_PATH ||
+      process.env.BROWSER_PATH ||
+      browserEnv.FB_BROWSER_PATH ||
+      process.env.FB_BROWSER_PATH ||
+      ""
+  ).trim();
+  const savedData = String(
+    browserEnv.FB_CHROME_USER_DATA_DIR || process.env.FB_CHROME_USER_DATA_DIR || ""
+  ).trim();
+  const wantPortable =
+    /chromeportable|googlechromeportable|portable|chrome-bin/i.test(savedPath) ||
+    (savedData &&
+      !/google[\\/]chrome[\\/]user data/i.test(savedData) &&
+      (/portable|data[\\/]profile/i.test(savedData) ||
+        looksLikeChromeUserDataRoot(savedData)));
+  const wantSystem =
+    /google[\\/]chrome[\\/]application[\\/]chrome\.exe/i.test(savedPath) ||
+    /google[\\/]chrome[\\/]user data/i.test(savedData);
+
+  let forcedPath = savedPath && fs.existsSync(savedPath) ? savedPath : "";
+
+  // If saved is system chrome but user had portable data → force portable search
+  if (
+    forcedPath &&
+    /google[\\/]chrome[\\/]application[\\/]chrome\.exe/i.test(forcedPath) &&
+    wantPortable
+  ) {
+    log("saved path is system chrome but portable data — prefer Portable");
+    forcedPath = "";
+  }
+
+  // Broken / missing saved portable path
+  if (forcedPath && wantPortable && portableLauncherMissing(forcedPath)) {
+    // still try resolve plan with chrome.exe+user-data — clear only if unusable
+    const probe = resolveChromeLaunchPlan(forcedPath, browserEnv);
+    if (probe.missingLauncher || !probe.exe) {
+      log("saved portable unusable, re-scan this PC", forcedPath);
+      forcedPath = "";
+    }
+  }
+
+  // Prefer Portable when wanted (or unknown kind)
+  if (!forcedPath || !fs.existsSync(forcedPath)) {
+    if (wantPortable || !wantSystem) {
       const portable = findChromePortableExe(browserEnv);
       if (portable) {
         forcedPath = portable;
-        log("inferred Portable from user-data-dir", portable);
+        log("resolved Portable", portable);
       }
     }
   }
 
-  // Last resort auto-detect (prefer path matching profile kind already saved)
-  if (!forcedPath || !fs.existsSync(forcedPath)) {
-    const ud = String(
-      browserEnv.FB_CHROME_USER_DATA_DIR || process.env.FB_CHROME_USER_DATA_DIR || ""
-    ).trim();
-    const wantSystem = /google[\\/]chrome[\\/]user data/i.test(ud);
-    if (!wantSystem) {
-      const portable = findChromePortableExe(browserEnv);
-      if (portable) {
-        forcedPath = portable;
-        log("auto-found Portable", portable);
-      }
+  if ((!forcedPath || !fs.existsSync(forcedPath)) && wantSystem) {
+    const systemChrome = systemChromeCandidates().find((p) => fs.existsSync(p));
+    if (systemChrome) {
+      forcedPath = systemChrome;
+      log("resolved system Chrome", systemChrome);
     }
-    if (!forcedPath || !fs.existsSync(forcedPath)) {
+  }
+
+  // Last resort only if nothing selected yet
+  if (!forcedPath || !fs.existsSync(forcedPath)) {
+    const portable = findChromePortableExe(browserEnv);
+    if (portable) {
+      forcedPath = portable;
+      log("auto Portable (last resort)", portable);
+    } else {
       const systemChrome = systemChromeCandidates().find((p) => fs.existsSync(p));
       if (systemChrome) {
         forcedPath = systemChrome;
-        log("auto-found system Chrome", systemChrome);
+        log("auto system Chrome (last resort)", systemChrome);
       }
     }
   }
 
-  // Broken Portable path (other PC / missing launcher) → try other Portable, then system
   if (forcedPath && fs.existsSync(forcedPath)) {
-    let plan = resolveChromeLaunchPlan(forcedPath, browserEnv);
-    if (plan.missingLauncher || !plan.exe) {
-      log(
-        "openInPreferredBrowser: saved path not usable (portable/launcher)",
-        forcedPath
-      );
-      const altPortable = findChromePortableExe({
-        ...browserEnv,
+    // Build env for plan: if portable, keep portable data dir
+    let planEnv = { ...browserEnv };
+    const plan0 = resolveChromeLaunchPlan(forcedPath, planEnv);
+    if (plan0.portable && (!plan0.userData || !fs.existsSync(plan0.userData))) {
+      const root =
+        findChromePortableRoot(forcedPath) || path.dirname(forcedPath);
+      const ud = findPortableUserDataDir(root);
+      if (ud) planEnv = { ...planEnv, FB_CHROME_USER_DATA_DIR: ud };
+    }
+    let plan = resolveChromeLaunchPlan(forcedPath, planEnv);
+
+    // Portable broken → re-scan Portable only (do NOT jump to system silently)
+    if ((plan.missingLauncher || !plan.exe) && wantPortable) {
+      const alt = findChromePortableExe({
         FB_BROWSER_PATH: "",
+        FB_CHROME_USER_DATA_DIR: planEnv.FB_CHROME_USER_DATA_DIR || "",
       });
-      if (altPortable && altPortable !== forcedPath) {
-        forcedPath = altPortable;
-        plan = resolveChromeLaunchPlan(forcedPath, browserEnv);
-        log("fallback Portable on this PC", altPortable);
-      }
-      if (plan.missingLauncher || !plan.exe) {
-        const sys = systemChromeCandidates().find((p) => fs.existsSync(p));
-        if (sys) {
-          forcedPath = sys;
-          // Don't force old portable user-data onto system chrome
-          const softEnv = {
-            ...browserEnv,
-            FB_CHROME_USER_DATA_DIR:
-              systemChromeUserDataPath() || browserEnv.FB_CHROME_USER_DATA_DIR,
-            FB_CHROME_PROFILE: browserEnv.FB_CHROME_PROFILE || "Default",
-          };
-          plan = resolveChromeLaunchPlan(forcedPath, softEnv);
-          log("fallback system Chrome (new machine / no Portable)", sys);
-        }
+      if (alt) {
+        forcedPath = alt;
+        plan = resolveChromeLaunchPlan(alt, planEnv);
+        log("re-scan Portable OK", alt);
       }
     }
 
-    if (plan && plan.exe && !plan.missingLauncher && fs.existsSync(plan.exe)) {
-      // Recover Portable/system profile after crash (flash-then-exit)
+    if (plan && plan.exe && fs.existsSync(plan.exe) && !plan.missingLauncher) {
       if (plan.userData) {
         clearStaleChromeSingletonLocks(plan.userData);
       } else if (plan.portable) {
@@ -990,48 +1106,39 @@ function openInPreferredBrowser(url) {
         const ud = findPortableUserDataDir(root);
         if (ud) clearStaleChromeSingletonLocks(ud);
       }
-      // System Chrome already open → profile-directory often ignored (singleton)
       if (
         authSensitive &&
         !plan.portable &&
         plan.profile &&
         isChromeRunningForUserData(plan.userData || "")
       ) {
-        log(
-          "WARN system Chrome already running — profile may open in active tab, not",
-          plan.profile
-        );
         try {
           const choice = dialog.showMessageBoxSync(mainWindow || undefined, {
             type: "warning",
             title: "Chrome đang mở",
             message: "Chrome gốc đang chạy — có thể mở sai profile",
             detail:
-              `Bạn đã chọn profile «${plan.profile}».\n\n` +
-              "Chrome đang mở thường mở URL ở profile hiện tại (bỏ qua --profile-directory).\n\n" +
-              "Cách chắc chắn:\n" +
-              "1) Đóng hết cửa sổ Chrome gốc\n" +
-              "2) Connect lại\n\n" +
-              "Hoặc dùng Chrome Portable riêng cho tool.",
+              `Profile đã chọn: «${plan.profile}».\n` +
+              "Nên đóng hết Chrome gốc hoặc dùng Chrome Portable.",
             buttons: ["Tiếp tục mở", "Hủy"],
             defaultId: 0,
             cancelId: 1,
           });
-          if (choice === 1) {
-            log("user cancelled open — Chrome already running");
-            return false;
-          }
+          if (choice === 1) return false;
         } catch {
-          /* dialog unavailable — continue */
+          /* ignore */
         }
       }
       try {
         const spawnArgs = [...plan.args, url];
+        const cwd = plan.portable
+          ? findChromePortableRoot(plan.exe) || path.dirname(plan.exe)
+          : undefined;
         spawn(plan.exe, spawnArgs, {
           detached: true,
           stdio: "ignore",
           windowsHide: false,
-          cwd: plan.portable ? path.dirname(plan.exe) : undefined,
+          cwd,
         }).unref();
         log(
           "openInPreferredBrowser OK",
@@ -1052,21 +1159,28 @@ function openInPreferredBrowser(url) {
     try {
       dialog.showMessageBoxSync(mainWindow || undefined, {
         type: "error",
-        title: "Chưa cấu hình Chrome",
-        message: "Không mở được Chrome trên máy này",
+        title: "Không mở được Chrome Portable",
+        message: wantPortable
+          ? "Không tìm thấy Chrome Portable trên máy này"
+          : "Không mở được Chrome / profile đã chọn",
         detail:
-          "Máy mới: path Portable máy cũ không còn, hoặc thiếu ChromePortable.exe.\n\n" +
-          "Cách làm:\n" +
-          "1) «Kết nối Meta» → «Quét Chrome (gốc + Portable)»\n" +
-          "2) Chọn [GỐC] hoặc [PORTABLE] trên máy này → «Dùng profile này»\n" +
+          (wantPortable
+            ? "Bạn đã chọn Portable nhưng máy này không có ChromePortable.exe (hoặc path máy cũ).\n\n"
+            : "") +
+          "1) Copy full folder Chrome Portable (phải có ChromePortable.exe)\n" +
+          "2) «Kết nối Meta» → Quét Chrome → chọn [PORTABLE] → «Dùng profile này»\n" +
           "3) Connect lại\n\n" +
-          "Hoặc cài Chrome gốc / copy Chrome Portable (có file ChromePortable.exe).",
+          "Hoặc chọn [GỐC] nếu muốn dùng Chrome hệ thống.",
         buttons: ["OK"],
       });
     } catch {
       /* ignore */
     }
-    log("openInPreferredBrowser FAIL — no browser exe");
+    log("openInPreferredBrowser FAIL — no usable browser", {
+      wantPortable,
+      savedPath,
+      forcedPath,
+    });
     return false;
   }
 
