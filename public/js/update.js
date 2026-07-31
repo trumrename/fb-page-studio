@@ -607,37 +607,29 @@
       }
 
       const finished = await watchUpdateProgress(startedAt);
-      // Program Files path: progress ends in ready + setup_mode
-      if (finished.progress?.setup_mode || finished.progress?.setup_path) {
-        const sp = finished.progress.setup_path || "";
+      // Setup or portable: both should quit + relaunch via _apply_update.bat
+      if (
+        finished.progress?.will_restart ||
+        finished.restarting ||
+        finished.progress?.state === "restarting" ||
+        finished.progress?.state === "ready"
+      ) {
+        const sp = finished.progress?.setup_path || "";
         setUiProgress({
           percent: 100,
-          text: "Đã mở Setup",
+          text: finished.progress?.setup_mode
+            ? "Đang tắt app → cài Setup → mở bản mới…"
+            : "Đang tắt app → thay EXE → mở bản mới…",
           log:
-            (finished.progress.message || "") +
-            (sp ? `\nFile: ${sp}` : "") +
-            "\n\nCài đè xong → Thoát tool (khay) → mở lại từ Start Menu.",
+            (finished.progress?.message || "") +
+            (sp ? `\nSetup: ${sp}` : "") +
+            "\n\nCửa sổ app sẽ đóng trong vài giây. Chờ bản mới tự mở.",
         });
-        alert(
-          (finished.progress.message || "Đã tải Setup.") +
-            "\n\nCài đè xong hãy THOÁT tool cũ (khay hệ thống) rồi mở lại FB Page Studio."
-        );
+        // Keep busy — Electron parent should exit after BAT starts
         return;
       }
       if (finished.latest) {
         alert("Đã là bản mới nhất (hoặc phiên cập nhật không chạy).");
-      } else if (finished.restarting) {
-        // If ready was setup, already handled; else portable restart
-        if (finished.progress?.state === "ready" && finished.progress?.setup_mode) {
-          return;
-        }
-        setUiProgress({
-          percent: 100,
-          text: "Restarting…",
-          log: "App đang đóng và thay file EXE.\nNếu 15s không mở lại: chạy file Desktop-v…exe mới trong thư mục app.",
-        });
-        // Keep busy — process should exit
-        return;
       }
     } catch (e) {
       const text = networkHint(e);

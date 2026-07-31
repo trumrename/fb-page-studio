@@ -1338,37 +1338,80 @@ function startBackend() {
   serverProc.on("message", (msg) => {
     if (msg?.type !== "fbps-apply-update" || !msg.batPath) return;
     const batPath = path.resolve(String(msg.batPath));
-    const cwd = path.resolve(String(msg.cwd || USER_DIR));
-    // Only a staged update BAT beside this portable app may request shutdown.
-    if (path.basename(batPath) !== "_apply_update.bat" || path.dirname(batPath) !== cwd) {
-      log("Ignored invalid update restart request", batPath);
+    const cwd = path.resolve(String(msg.cwd || path.dirname(batPath) || USER_DIR));
+    // Allow _apply_update.bat only under user data / updates / beside outer EXE
+    const baseOk = path.basename(batPath).toLowerCase() === "_apply_update.bat";
+    const batDir = path.dirname(batPath).toLowerCase();
+    const allowedDirs = [
+      USER_DIR && path.resolve(USER_DIR),
+      USER_DIR && path.join(path.resolve(USER_DIR), "updates"),
+      cwd,
+      process.env.FB_OUTER_EXE && path.dirname(path.resolve(process.env.FB_OUTER_EXE)),
+      process.env.PORTABLE_EXECUTABLE_DIR &&
+        path.resolve(process.env.PORTABLE_EXECUTABLE_DIR),
+    ]
+      .filter(Boolean)
+      .map((d) => path.resolve(d).toLowerCase());
+    const dirOk = allowedDirs.some((d) => batDir === d || batDir.startsWith(d + path.sep));
+    if (!baseOk || !dirOk || !fs.existsSync(batPath)) {
+      log("Ignored invalid update restart request", batPath, "cwd", cwd);
       return;
     }
     log("Update ready; Electron will quit before replacement", batPath);
     if (applyingUpdate) return;
     applyingUpdate = true;
+    // Prevent tray "close to tray" from keeping process alive
+    app.isQuitting = true;
     setTimeout(() => {
       try {
+        // Detached cmd so BAT survives after we exit
         spawn("cmd.exe", ["/c", batPath], {
           detached: true,
           stdio: "ignore",
-          cwd,
+          cwd: path.dirname(batPath),
           windowsHide: true,
         }).unref();
+        log("Update BAT started", batPath);
       } catch (e) {
         log("Update BAT spawn error", e.message);
+        applyingUpdate = false;
+        app.isQuitting = false;
         return;
       }
-      shutdownBackend();
-      // Portable Electron may keep the outer EXE locked when a renderer/tray
-      // delays normal app.quit(). Destroy all UI resources, then terminate the
-      // Electron process immediately so the hidden updater can replace the EXE.
-      try { if (tray) { tray.destroy(); tray = null; } } catch { /* ignore */ }
       try {
-        for (const win of BrowserWindow.getAllWindows()) win.destroy();
-      } catch { /* ignore */ }
-      app.exit(0);
-    }, 150);
+        shutdownBackend();
+      } catch {
+        /* ignore */
+      }
+      try {
+        if (tray) {
+          tray.destroy();
+          tray = null;
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        for (const win of BrowserWindow.getAllWindows()) {
+          try {
+            win.removeAllListeners("close");
+            win.destroy();
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      // Hard exit so Windows unlocks FB Page Studio.exe for Setup / ren
+      setTimeout(() => {
+        try {
+          app.exit(0);
+        } catch {
+          process.exit(0);
+        }
+      }, 200);
+    }, 400);
   });
 
   return waitForServer(PORT);

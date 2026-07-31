@@ -275,6 +275,31 @@ function isProtectedInstallDir(dir) {
   return !isDirWritable(dir);
 }
 
+/**
+ * True when running the NSIS-installed app (Start Menu "FB Page Studio"),
+ * not the portable Desktop.exe next to user files.
+ */
+function isNsisInstalledApp(currentExe, exeDir) {
+  const base = path.basename(String(currentExe || ""));
+  const dir = path.resolve(String(exeDir || "")).toLowerCase();
+  if (/^FB Page Studio\.exe$/i.test(base)) return true;
+  if (dir.includes("\\programs\\") && /fb.?page.?studio/i.test(dir)) return true;
+  if (isProtectedInstallDir(exeDir)) return true;
+  return false;
+}
+
+/** Default NSIS per-user install locations to relaunch after Setup. */
+function nsisAppLaunchCandidates() {
+  const local = process.env.LOCALAPPDATA || "";
+  const pf = process.env.ProgramFiles || "C:\\Program Files";
+  const names = [
+    path.join(local, "Programs", "FB Page Studio", "FB Page Studio.exe"),
+    path.join(local, "Programs", "fb-page-studio", "FB Page Studio.exe"),
+    path.join(pf, "FB Page Studio", "FB Page Studio.exe"),
+  ];
+  return names;
+}
+
 function downloadFileOnce(url, dest, onProgress, maxRedirects = 8) {
   return new Promise((resolve, reject) => {
     if (maxRedirects < 0) {
@@ -562,35 +587,29 @@ export async function applyUpdate() {
     getExeDir();
   const protectedInstall = isProtectedInstallDir(exeDir);
 
-  // ── NSIS / Program Files: cannot replace in-place (EPERM). Use Setup. ──
-  if (protectedInstall) {
+  // ── NSIS / Start Menu install: cannot swap EXE while running → Setup + quit + relaunch ──
+  if (protectedInstall || isNsisInstalledApp(currentExe, exeDir)) {
     const setupName = `FB-Page-Studio-Setup-v${check.latest_version}.exe`;
-    const assets = Array.isArray(check._assets) ? check._assets : [];
-    // Prefer setup asset from release list if available via re-fetch fields
     let setupUrl = null;
     let setupSize = 0;
     try {
-      // Re-use check fields: if API returned only desktop, build known URL
-      const base =
-        check.release_url?.replace(/\/tag\/.*/, "/download/") ||
-        `https://github.com/${getUpdateConfig().github_repo}/releases/download/`;
       const tag = check.tag_name || `v${check.latest_version}`;
       setupUrl = `https://github.com/${getUpdateConfig().github_repo}/releases/download/${tag}/${setupName}`;
     } catch {
       setupUrl = null;
     }
-    // Prefer asset from check if we stored full release (optional)
     if (check.setup_asset?.download_url) {
       setupUrl = check.setup_asset.download_url;
       setupSize = Number(check.setup_asset.size) || 0;
     }
+    // Stable latest name also on GH
+    const setupUrlStable = `https://github.com/${getUpdateConfig().github_repo}/releases/latest/download/FB-Page-Studio-Setup.exe`;
 
     const stageDir = path.join(userWritable, "updates");
     if (!isDirWritable(userWritable) && !isDirWritable(stageDir)) {
       const err =
-        `Bản cài Setup nằm trong Program Files (không ghi được).\n` +
-        `Tải tay và cài đè (Run as admin):\n${MANUAL_RELEASE}\n` +
-        `File: ${setupName}`;
+        `Không ghi được thư mục cập nhật.\n` +
+        `Tải tay và cài đè:\n${MANUAL_RELEASE}\nFile: ${setupName}`;
       setUpdateProgress({ state: "error", error: err, message: "Cần cài Setup thủ công" });
       return { ok: false, error: err, needs_setup: true, manual_url: MANUAL_RELEASE, ...check };
     }
@@ -604,10 +623,10 @@ export async function applyUpdate() {
       bytes: 0,
       total: setupSize || 0,
       percent: 0,
-      message: `Bản Setup (Program Files) — đang tải ${setupName}…`,
+      message: `Bản cài Setup — đang tải ${setupName}…`,
     });
     try {
-      await downloadFile(setupUrl, destSetup, (bytes, total) => {
+      await downloadFile(setupUrl || setupUrlStable, destSetup, (bytes, total) => {
         const expected = total || setupSize || 0;
         setUpdateProgress({
           state: "downloading",
@@ -617,44 +636,102 @@ export async function applyUpdate() {
           message: `Đang tải Setup v${check.latest_version}…`,
         });
       });
-    } catch (e) {
-      const err =
-        `${e.message || e}\n\nMở trang tải tay:\n${MANUAL_RELEASE}`;
-      setUpdateProgress({ state: "error", error: err, message: "Tải Setup thất bại" });
-      return { ok: false, error: err, needs_setup: true, manual_url: MANUAL_RELEASE, ...check };
+    } catch (e1) {
+      try {
+        await downloadFile(setupUrlStable, destSetup, (bytes, total) => {
+          const expected = total || setupSize || 0;
+          setUpdateProgress({
+            state: "downloading",
+            bytes,
+            total: expected,
+            percent: expected ? Math.min(100, Math.floor((bytes / expected) * 100)) : 0,
+            message: `Đang tải Setup (latest)…`,
+          });
+        });
+      } catch (e) {
+        const err = `${e.message || e}\n\nMở trang tải tay:\n${MANUAL_RELEASE}`;
+        setUpdateProgress({ state: "error", error: err, message: "Tải Setup thất bại" });
+        return { ok: false, error: err, needs_setup: true, manual_url: MANUAL_RELEASE, ...check };
+      }
     }
 
-    // Launch installer (UAC). User finishes wizard → overwrites Program Files.
-    try {
-      spawn(
-        "cmd.exe",
-        ["/c", "start", "", destSetup],
-        { detached: true, stdio: "ignore", windowsHide: true }
-      ).unref();
-    } catch (e) {
-      const err = `Đã tải Setup nhưng không mở được:\n${destSetup}\n${e.message}\nHãy chạy file Setup thủ công.`;
-      setUpdateProgress({ state: "error", error: err, message: "Mở Setup thất bại" });
-      return { ok: false, error: err, setup_path: destSetup, ...check };
-    }
+    // BAT: wait until this app exits → run Setup → start new install
+    // (Cannot replace files while "FB Page Studio.exe" still running.)
+    const batPath = path.join(userWritable, "_apply_update.bat");
+    const setupQuoted = destSetup.replace(/"/g, "");
+    const launchLines = nsisAppLaunchCandidates()
+      .map(
+        (p) =>
+          `if exist "${p.replace(/"/g, "")}" (\r\n  start "" "${p.replace(/"/g, "")}"\r\n  goto started\r\n)`
+      )
+      .join("\r\n");
+    const bat = [
+      "@echo off",
+      "setlocal EnableExtensions",
+      `cd /d "${userWritable.replace(/"/g, "")}"`,
+      "del /f /q \"_update-error.txt\" 2>nul",
+      "echo Dang cho app cu tat... > \"_update-status.txt\"",
+      "timeout /t 2 /nobreak >nul",
+      "set /a tries=0",
+      ":waitapp",
+      "set /a tries+=1",
+      "if %tries% GTR 90 goto locked",
+      // Wait until NSIS / Electron product process is gone
+      'tasklist /FI "IMAGENAME eq FB Page Studio.exe" 2>nul | find /I "FB Page Studio.exe" >nul',
+      "if not errorlevel 1 (",
+      "  timeout /t 1 /nobreak >nul",
+      "  goto waitapp",
+      ")",
+      `if not exist "${setupQuoted}" (`,
+      `  echo LOI: thieu Setup > "_update-error.txt"`,
+      "  exit /b 1",
+      ")",
+      "echo Dang chay Setup... > \"_update-status.txt\"",
+      // Prefer silent; if fails, show UI
+      `start /wait "" "${setupQuoted}" /S`,
+      "if errorlevel 1 (",
+      `  start /wait "" "${setupQuoted}"`,
+      ")",
+      "timeout /t 2 /nobreak >nul",
+      "echo Dang mo ban moi... > \"_update-status.txt\"",
+      launchLines,
+      // Start Menu shortcut name
+      'start "" "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\FB Page Studio.lnk" 2>nul',
+      ":started",
+      "del /f /q \"_update-status.txt\" 2>nul",
+      'del /f /q "%~f0" 2>nul',
+      "endlocal",
+      "exit /b 0",
+      ":locked",
+      'echo LOI: app cu van dang chay sau 90s — hay thoat khay he thong roi chay Setup tay > "_update-error.txt"',
+      `if exist "${setupQuoted}" start "" "${setupQuoted}"`,
+      "exit /b 1",
+      "",
+    ].join("\r\n");
+    fs.writeFileSync(batPath, bat, "utf8");
 
     setUpdateProgress({
       state: "ready",
       percent: 100,
-      message: `Đã mở Setup v${check.latest_version}. Cài đè xong → thoát tool (khay) → mở lại từ Start Menu.`,
+      message: `Đã tải Setup v${check.latest_version}. Đang tắt app cũ → cài đè → mở bản mới…`,
       from: check.current_version,
       to: check.latest_version,
       setup_mode: true,
       setup_path: destSetup,
+      will_restart: true,
     });
     return {
       ok: true,
       updated: true,
       setup_mode: true,
       setup_path: destSetup,
+      bat: batPath,
+      target_exe: nsisAppLaunchCandidates()[0],
+      will_restart: true,
       message:
-        `Bản cài Program Files không thay EXE trực tiếp.\n` +
-        `Đã tải + mở ${setupName}.\n` +
-        `Trong cửa sổ cài: Next → cài đè → xong → thoát tool cũ → mở "FB Page Studio" từ Start Menu.`,
+        `Đã tải Setup v${check.latest_version}.\n` +
+        `App sẽ TỰ TẮT → chạy Setup cài đè → mở lại bản mới.\n` +
+        `License/data trong %APPDATA%\\fb-page-studio giữ nguyên.`,
       ...check,
     };
   }
@@ -884,11 +961,33 @@ export function scheduleRestart(batPath, cwd) {
 
 /** Ask Electron parent to exit first; plain Node keeps a safe fallback. */
 export function requestUpdateRestart(batPath, cwd) {
-  setUpdateProgress({ state: "restarting", message: "Đang đóng app cũ và thay EXE…" });
+  setUpdateProgress({
+    state: "restarting",
+    message: "Đang đóng app cũ và cài / mở bản mới…",
+    will_restart: true,
+  });
+  const bat = path.resolve(String(batPath || ""));
+  const workDir = path.resolve(String(cwd || path.dirname(bat)));
   if (typeof process.send === "function") {
-    process.send({ type: "fbps-apply-update", batPath, cwd });
-    return true;
+    try {
+      process.send({
+        type: "fbps-apply-update",
+        batPath: bat,
+        cwd: workDir,
+      });
+      // If Electron parent never kills us (IPC bug), force-exit so BAT can ren EXE
+      setTimeout(() => {
+        try {
+          process.exit(0);
+        } catch {
+          /* ignore */
+        }
+      }, 6000);
+      return true;
+    } catch {
+      /* fall through */
+    }
   }
-  scheduleRestart(batPath, cwd);
+  scheduleRestart(bat, workDir);
   return false;
 }

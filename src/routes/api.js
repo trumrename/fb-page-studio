@@ -1375,17 +1375,10 @@ router.post("/update/apply", async (req, res) => {
     if (started.started) {
       started.promise.then((result) => {
         if (!result?.ok) return;
-        // Program Files / NSIS: Setup already launched; no bat restart.
-        if (result.setup_mode) return;
+        // Portable in-place OR NSIS Setup: both write _apply_update.bat then quit app
         if (result.updated && restart && result.bat) {
-          setTimeout(
-            () =>
-              requestUpdateRestart(
-                result.bat,
-                path.dirname(result.target_exe || result.bat)
-              ),
-            700
-          );
+          const cwd = path.dirname(result.bat);
+          setTimeout(() => requestUpdateRestart(result.bat, cwd), 700);
         }
       });
     }
