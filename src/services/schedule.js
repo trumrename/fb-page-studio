@@ -520,6 +520,8 @@ export async function scheduleBulk(body = {}) {
 
     if (mode === "fixed") {
       if (Array.isArray(body.times) && body.times.length) {
+        // List thời điểm = mốc gốc (HH:mm hoặc đủ ngày). Page 0 = đúng giờ.
+        // Page N = giờ + pageStagger. Khoảng giữa các dòng list giữ nguyên.
         slots = parseFixedTimes(body.times, tz).map(
           (d) => new Date(d.getTime() + pageStagger * 60 * 1000)
         );
@@ -598,6 +600,12 @@ export async function scheduleBulk(body = {}) {
       }
       activeMeta = {
         source: "fixed",
+        timing_source: Array.isArray(body.times) && body.times.length
+          ? "list_times"
+          : "start_at_interval",
+        list_times: Array.isArray(body.times) && body.times.length
+          ? body.times.length
+          : 0,
         min_gap_minutes: minGap,
         page_stagger_minutes: pageStagger,
         page_gap_minutes_min: pageGapMin,
@@ -794,10 +802,21 @@ export async function scheduleBulk(body = {}) {
   const limited = enforceBulkLimits(plan, { ...body, strict_timing: strictTiming });
   const finalPlan = limited.plan;
 
+  const timingSource =
+    body.timing_source ||
+    (mode === "fixed"
+      ? Array.isArray(body.times) && body.times.length
+        ? "list_times"
+        : "start_at_interval"
+      : mode === "windows"
+        ? "windows"
+        : "active_times");
+
   if (dryRun) {
     return {
       dry_run: true,
       mode,
+      timing_source: timingSource,
       tz_offset_minutes: tz,
       anti_spam_enabled: antiOn,
       anti_spam_trimmed: limited.trimmed,
@@ -868,6 +887,7 @@ export async function scheduleBulk(body = {}) {
   return {
     dry_run: false,
     mode,
+    timing_source: timingSource,
     tz_offset_minutes: tz,
     anti_spam_enabled: antiOn,
     anti_spam_trimmed: limited.trimmed,

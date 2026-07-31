@@ -571,11 +571,31 @@ export function buildSlotsFromWindows(windows, opts = {}) {
 }
 
 /**
- * Parse fixed times: ISO strings or "YYYY-MM-DD HH:mm" with tz offset.
+ * Parse fixed times with flexible formats (wall clock in tzOffsetMinutes):
+ * - "YYYY-MM-DD HH:mm" / "YYYY-MM-DDTHH:mm"
+ * - "DD/MM/YYYY HH:mm" / "DD-MM-YYYY HH:mm" (kiểu VN)
+ * - "HH:mm" / "H:mm" only → hôm nay (theo tz); nếu đã qua ≥10 phút thì sang ngày mai
+ * - ISO with Z / offset
  */
 export function parseFixedTimes(times, tzOffsetMinutes = 420) {
   if (!Array.isArray(times)) return [];
+  const tz = Number(tzOffsetMinutes) || 420;
+  const minOkMs = Date.now() + 10 * 60 * 1000;
   const out = [];
+
+  const wallToUtcMs = (y, mo, d, hh, mm, ss = 0) =>
+    Date.UTC(y, mo - 1, d, hh, mm, ss) - tz * 60 * 1000;
+
+  /** Today Y/M/D in the given offset timezone */
+  const todayPartsInTz = () => {
+    const shifted = new Date(Date.now() + tz * 60 * 1000);
+    return {
+      y: shifted.getUTCFullYear(),
+      mo: shifted.getUTCMonth() + 1,
+      d: shifted.getUTCDate(),
+    };
+  };
+
   for (const t of times) {
     if (t == null || t === "") continue;
     if (typeof t === "number" && t > 1e9) {
@@ -589,23 +609,57 @@ export function parseFixedTimes(times, tzOffsetMinutes = 420) {
       if (!Number.isNaN(d.getTime())) out.push(d);
       continue;
     }
-    // "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD HH:mm" as wall time in tz
-    const m = s.match(
+    // "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD HH:mm"
+    let m = s.match(
       /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/
     );
     if (m) {
-      const realMs =
-        Date.UTC(
-          Number(m[1]),
-          Number(m[2]) - 1,
-          Number(m[3]),
-          Number(m[4]),
-          Number(m[5]),
-          Number(m[6] || 0)
-        ) -
-        tzOffsetMinutes * 60 * 1000;
-      out.push(new Date(realMs));
+      out.push(
+        new Date(
+          wallToUtcMs(
+            Number(m[1]),
+            Number(m[2]),
+            Number(m[3]),
+            Number(m[4]),
+            Number(m[5]),
+            Number(m[6] || 0)
+          )
+        )
+      );
       continue;
+    }
+    // "DD/MM/YYYY HH:mm" or "DD-MM-YYYY HH:mm"
+    m = s.match(
+      /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/
+    );
+    if (m) {
+      out.push(
+        new Date(
+          wallToUtcMs(
+            Number(m[3]),
+            Number(m[2]),
+            Number(m[1]),
+            Number(m[4]),
+            Number(m[5]),
+            Number(m[6] || 0)
+          )
+        )
+      );
+      continue;
+    }
+    // "HH:mm" or "H:mm" or "HH:mm:ss" only → today in tz (or tomorrow if past)
+    m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (m) {
+      const hh = Number(m[1]);
+      const mm = Number(m[2]);
+      const ss = Number(m[3] || 0);
+      if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) {
+        const { y, mo, d } = todayPartsInTz();
+        let realMs = wallToUtcMs(y, mo, d, hh, mm, ss);
+        if (realMs < minOkMs) realMs += 24 * 60 * 60 * 1000;
+        out.push(new Date(realMs));
+        continue;
+      }
     }
     const d = new Date(s);
     if (!Number.isNaN(d.getTime())) out.push(d);

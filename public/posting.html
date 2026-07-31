@@ -5,6 +5,50 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Publish · FB Page Studio</title>
   <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    /* Mutual-exclusive schedule options: active vs dimmed */
+    .bulk-mode-pick { display:flex; flex-wrap:wrap; gap:.5rem; margin:.35rem 0 .65rem; }
+    .bulk-mode-card {
+      flex:1; min-width:12rem; cursor:pointer; margin:0;
+      padding:.7rem .8rem; border-radius:12px;
+      border:1px solid rgba(255,255,255,.12); background:rgba(0,0,0,.18);
+      display:flex; gap:.55rem; align-items:flex-start;
+    }
+    .bulk-mode-card:has(input:checked) {
+      border-color: rgba(61,214,140,.55);
+      background: rgba(61,214,140,.12);
+      box-shadow: 0 0 0 1px rgba(61,214,140,.25);
+    }
+    .bulk-mode-card b { display:block; font-size:.9rem; margin-bottom:.15rem; }
+    .bulk-mode-card small { display:block; color:var(--muted,#9aa0a6); font-size:.75rem; line-height:1.35; }
+    .bulk-opt-panel {
+      border:1px solid rgba(255,255,255,.1); border-radius:12px;
+      padding:.75rem .85rem; margin-top:.55rem; background:rgba(0,0,0,.12);
+      transition: opacity .15s, filter .15s;
+    }
+    .bulk-opt-panel.is-active {
+      border-color: rgba(96,165,250,.45);
+      background: rgba(96,165,250,.08);
+    }
+    .bulk-opt-panel.is-dim {
+      opacity: .38;
+      filter: grayscale(.35);
+      pointer-events: none;
+      user-select: none;
+    }
+    .bulk-opt-panel .bulk-opt-hd {
+      display:flex; align-items:center; gap:.5rem; font-weight:700; margin:0 0 .55rem;
+      font-size:.9rem;
+    }
+    .bulk-opt-panel.is-dim .bulk-opt-hd::after {
+      content: " (không dùng)";
+      font-weight:500; font-size:.75rem; color:#fb7185;
+    }
+    .bulk-opt-panel.is-active .bulk-opt-hd::after {
+      content: " · đang chọn";
+      font-weight:600; font-size:.75rem; color:#34d399;
+    }
+  </style>
 </head>
 <body>
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
@@ -201,14 +245,27 @@
               <button type="button" class="btn-ghost btn-sm" id="btnBulkAntiToggle" style="margin-left:.5rem">Bật/Tắt</button>
               <a href="/antispam.html" class="muted" style="margin-left:.35rem;font-size:.78rem">Cấu hình chi tiết →</a>
             </div>
-            <div class="row3">
-              <div>
-                <label>Mode</label>
-                <select id="bulkMode">
-                  <option value="active_times">Giờ từng page (preferred / preset VN)</option>
-                  <option value="fixed">Giờ cố định / start + interval</option>
-                </select>
-              </div>
+            <div class="bulk-mode-pick" role="radiogroup" aria-label="Chế độ hẹn giờ hàng loạt">
+              <label class="bulk-mode-card">
+                <input type="radio" name="bulkModeRadio" id="bulkModeActive" value="active_times" checked />
+                <span>
+                  <b>A · Giờ tích cực / preferred</b>
+                  <small>Giờ ưa thích từng page · nhiều ngày · không dùng Start at / list</small>
+                </span>
+              </label>
+              <label class="bulk-mode-card">
+                <input type="radio" name="bulkModeRadio" id="bulkModeFixed" value="fixed" />
+                <span>
+                  <b>B · Giờ cố định</b>
+                  <small>Chọn 1 trong 2: Start at+ngày <em>hoặc</em> list thời điểm (không dùng chung)</small>
+                </span>
+              </label>
+            </div>
+            <select id="bulkMode" style="display:none" aria-hidden="true">
+              <option value="active_times">active_times</option>
+              <option value="fixed">fixed</option>
+            </select>
+            <div class="row2">
               <div>
                 <label>Loại bài</label>
                 <select id="bulkPostType">
@@ -261,7 +318,8 @@
               </div>
             </div>
 
-            <div id="bulkActive">
+            <div id="bulkActive" class="bulk-opt-panel is-active">
+              <div class="bulk-opt-hd">A · Giờ tích cực / preferred từng page</div>
               <div class="row3" style="margin-top:.25rem">
                 <div>
                   <label>Số ngày tới</label>
@@ -281,9 +339,7 @@
                 <label class="checks" style="margin:0"><input type="checkbox" id="bulkForceActive" /> Force (bỏ cache insights cũ)</label>
               </div>
               <p class="muted" style="margin:.35rem 0 0;font-size:.78rem">
-                Mỗi page: giờ ưa thích + <b>max bài/ngày</b> + <b>interval</b> (config Bước 2) + anti-spam.
-                Bài/ngày bulk bị cap theo max page; hôm nay trừ slot đã đăng/hẹn.
-                Trải giờ: 9,12,19,21 + 2 bài → 9h &amp; 21h.
+                Mỗi page: giờ ưa thích + max bài/ngày + interval (Bước 2) + anti-spam + gap page A→B.
               </p>
 
               <div class="panel section-gap" id="metaScheduledPanel" style="margin-top:.75rem">
@@ -313,55 +369,80 @@
               </div>
             </div>
 
-            <div id="bulkFixed">
-              <div class="row2" style="margin-top:.25rem">
-                <div>
-                  <label>Start at · giờ bắt đầu ngày 1 (máy local)</label>
-                  <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap">
-                    <input type="datetime-local" id="bulkStart" step="60" style="min-width:13.5rem;flex:1" />
-                    <button type="button" class="btn-ok btn-sm" id="btnBulkStartApply" title="Khóa giờ đã chọn vào form + lưu workspace">Áp dụng giờ</button>
-                    <button type="button" class="btn-ghost btn-sm" id="btnBulkStartPlus2h">+2 giờ</button>
-                  </div>
-                  <div id="bulkStartHint" class="muted" style="margin-top:.3rem;font-size:.78rem;line-height:1.4">
-                    Chọn giờ trên picker → bấm <b>Áp dụng giờ</b>. Ngày 2+ lặp cùng giờ + interval.
-                  </div>
-                </div>
-                <div class="row2">
-                  <div>
-                    <label>Số ngày hẹn</label>
-                    <input type="number" id="bulkFixedDays" min="1" max="30" value="3" title="Hẹn nhiều ngày — mỗi ngày lặp số bài/page" />
-                  </div>
-                  <div>
-                    <label>Bài / page / ngày</label>
-                    <input type="number" id="bulkCount" min="1" max="50" value="3" title="Số bài mỗi page trong 1 ngày" />
-                  </div>
-                </div>
-              </div>
-              <div class="row2" style="margin-top:.45rem">
-                <div>
-                  <label>Cách 2 bài <b>cùng page</b> (phút) — tối thiểu</label>
-                  <input type="number" id="bulkIntervalMin" min="10" value="120" title="Giữa bài 1 và bài 2 của cùng 1 page" />
-                </div>
-                <div>
-                  <label>cùng page — tối đa (phút)</label>
-                  <input type="number" id="bulkIntervalMax" min="10" value="120" title="= min → cách đều; &gt; min → random trong khoảng" />
-                </div>
-              </div>
-              <input type="hidden" id="bulkInterval" value="120" />
-              <label style="margin-top:.55rem;display:block">Hoặc list thời điểm (mỗi dòng · YYYY-MM-DD HH:mm) — nếu có list thì bỏ qua Start at / số ngày</label>
-              <textarea id="bulkTimes" placeholder="2026-07-18 09:00&#10;2026-07-18 19:00&#10;2026-07-19 09:00"></textarea>
-              <p class="muted" style="margin:.35rem 0 0;font-size:.78rem">
-                VD: 3 ngày × 2 bài/page × 5 page = 30 slot. Mỗi ngày bắt đầu lúc Start at, cách bài theo interval.
+            <div id="bulkFixed" style="display:none">
+              <p class="muted" style="margin:.5rem 0 .35rem;font-size:.8rem">
+                Chọn <b>đúng 1</b> cách dưới đây — cách kia sẽ mờ và không gửi lên server.
               </p>
+
+              <input type="hidden" id="bulkFixedSubMode" value="start_at" />
+              <div id="bulkFixedSubStart" class="bulk-opt-panel is-active">
+                <label class="bulk-opt-hd" style="cursor:pointer">
+                  <input type="radio" name="bulkFixedSub" id="bulkFixedSubStartRadio" value="start_at" checked />
+                  B1 · Start at + số ngày + interval (cùng page)
+                </label>
+                <div class="row2" style="margin-top:.25rem">
+                  <div>
+                    <label>Start at · giờ bắt đầu ngày 1 (máy local)</label>
+                    <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap">
+                      <input type="datetime-local" id="bulkStart" step="60" style="min-width:13.5rem;flex:1" />
+                      <button type="button" class="btn-ok btn-sm" id="btnBulkStartApply" title="Khóa giờ đã chọn vào form + lưu workspace">Áp dụng giờ</button>
+                      <button type="button" class="btn-ghost btn-sm" id="btnBulkStartPlus2h">+2 giờ</button>
+                    </div>
+                    <div id="bulkStartHint" class="muted" style="margin-top:.3rem;font-size:.78rem;line-height:1.4">
+                      Chọn giờ → bấm <b>Áp dụng giờ</b>. Ngày 2+ lặp cùng giờ + interval.
+                    </div>
+                  </div>
+                  <div class="row2">
+                    <div>
+                      <label>Số ngày hẹn</label>
+                      <input type="number" id="bulkFixedDays" min="1" max="30" value="3" title="Hẹn nhiều ngày" />
+                    </div>
+                    <div>
+                      <label>Bài / page / ngày</label>
+                      <input type="number" id="bulkCount" min="1" max="50" value="3" />
+                    </div>
+                  </div>
+                </div>
+                <div class="row2" style="margin-top:.45rem">
+                  <div>
+                    <label>Cách 2 bài <b>cùng page</b> (phút) — tối thiểu</label>
+                    <input type="number" id="bulkIntervalMin" min="10" value="120" />
+                  </div>
+                  <div>
+                    <label>cùng page — tối đa (phút)</label>
+                    <input type="number" id="bulkIntervalMax" min="10" value="120" />
+                  </div>
+                </div>
+                <input type="hidden" id="bulkInterval" value="120" />
+              </div>
+
+              <div id="bulkFixedSubList" class="bulk-opt-panel is-dim" style="margin-top:.55rem">
+                <label class="bulk-opt-hd" style="cursor:pointer">
+                  <input type="radio" name="bulkFixedSub" id="bulkFixedSubListRadio" value="list_times" />
+                  B2 · List thời điểm (tự viết mốc)
+                </label>
+                <textarea id="bulkTimes" rows="4" placeholder="09:00&#10;19:00&#10;hoặc: 2026-07-31 09:00&#10;hoặc: 31/07/2026 09:00"></textarea>
+                <p class="muted" style="margin:.35rem 0 0;font-size:.78rem;line-height:1.5">
+                  • Chỉ giờ <code>09:00</code> · <code>19:30</code> = hôm nay (đã qua → ngày mai).<br/>
+                  • Đủ ngày: <code>2026-07-31 09:00</code> / <code>31/07/2026 09:00</code><br/>
+                  Page 1 = đúng mốc · Page 2+ = mốc + gap A→B. <b>Không</b> dùng Start at khi chọn B2.
+                </p>
+              </div>
             </div>
 
-            <!-- Gap giữa các page — dùng cả mode giờ tích cực + cố định -->
+            <div id="bulkTimingModeBadge" style="margin-top:.65rem;padding:.55rem .75rem;border-radius:10px;border:1px solid rgba(96,165,250,.4);background:rgba(96,165,250,.1);font-size:.84rem;line-height:1.45">
+              <b>Đang nhận loại hẹn:</b> <span id="bulkTimingModeText">—</span>
+            </div>
+
+            <!-- Gap giữa các page — dùng cả mode giờ tích cực + cố định + list thời điểm -->
             <div class="panel section-gap" style="margin-top:.75rem;border-color:rgba(96,165,250,.35)">
               <h2 class="panel-hd" style="font-size:.9rem">Cách giờ giữa các page (A → B → C…)</h2>
               <div class="panel-body">
                 <p class="muted" style="margin:.15rem 0 .5rem;font-size:.78rem;line-height:1.45">
+                  Áp dụng cho <b>Start at</b>, <b>list thời điểm</b> và <b>giờ tích cực</b>.
                   Page đầu không lệch. Page sau lệch thêm <b>random trong khoảng</b> so với page trước
-                  (cùng mốc bài). VD min=15 max=45 → page B trễ 15–45 phút so với page A; page C trễ thêm 15–45 phút so với B.
+                  (cả dãy mốc trượt cùng offset). VD min=15 max=45 → page B trễ 15–45 phút so với page A.
+                  Muốn <b>mọi page đúng một giờ</b> (list viết sao hẹn vậy): đặt min=0 và max=0.
                 </p>
                 <div class="row2">
                   <div>
@@ -749,7 +830,7 @@
     }
 
     const bulkWorkspaceControlIds = [
-      "bulkMode", "bulkPostType", "bulkTz", "bulkDays", "bulkPerDay",
+      "bulkMode", "bulkFixedSubMode", "bulkPostType", "bulkTz", "bulkDays", "bulkPerDay",
       "bulkForceActive", "bulkStart", "bulkCount", "bulkFixedDays", "bulkInterval", "bulkTimes",
       "bulkIntervalMin", "bulkIntervalMax", "bulkPageGapMin", "bulkPageGapMax", "bulkIgnoreQuota",
       "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder",
@@ -853,6 +934,202 @@
       ).getTime();
     }
 
+    /**
+     * Parse one bulk list line (local machine clock):
+     * HH:mm | YYYY-MM-DD HH:mm | DD/MM/YYYY HH:mm
+     */
+    function parseBulkTimeLineMs(line) {
+      const s = String(line || "").trim();
+      if (!s) return NaN;
+      // full ISO-like
+      let t = parseLocalDateTimeValue(s.replace(" ", "T"));
+      if (Number.isFinite(t)) return t;
+      // DD/MM/YYYY HH:mm or DD-MM-YYYY HH:mm
+      let m = s.match(
+        /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/
+      );
+      if (m) {
+        return new Date(
+          Number(m[3]),
+          Number(m[2]) - 1,
+          Number(m[1]),
+          Number(m[4]),
+          Number(m[5]),
+          Number(m[6] || 0),
+          0
+        ).getTime();
+      }
+      // HH:mm only → today local, or tomorrow if past
+      m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+      if (m) {
+        const hh = Number(m[1]);
+        const mm = Number(m[2]);
+        if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return NaN;
+        const now = new Date();
+        t = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          hh,
+          mm,
+          Number(m[3] || 0),
+          0
+        ).getTime();
+        if (t < Date.now() + 10 * 60 * 1000) t += 24 * 60 * 60 * 1000;
+        return t;
+      }
+      return NaN;
+    }
+
+    function setPanelDim(el, dim) {
+      if (!el) return;
+      el.classList.toggle("is-dim", !!dim);
+      el.classList.toggle("is-active", !dim);
+      el.querySelectorAll("input, textarea, select, button").forEach((node) => {
+        // keep radios enabled so user can switch mode
+        if (node.type === "radio" && (node.name === "bulkFixedSub" || node.name === "bulkModeRadio")) {
+          node.disabled = false;
+          return;
+        }
+        if (dim) {
+          if (!node.dataset.wasDisabled) node.dataset.wasDisabled = node.disabled ? "1" : "0";
+          node.disabled = true;
+        } else {
+          if (node.dataset.wasDisabled === "1") node.disabled = true;
+          else node.disabled = false;
+          delete node.dataset.wasDisabled;
+        }
+      });
+    }
+
+    function getBulkTopMode() {
+      if ($("bulkModeFixed")?.checked) return "fixed";
+      if ($("bulkModeActive")?.checked) return "active_times";
+      return $("bulkMode")?.value || "active_times";
+    }
+
+    function getBulkFixedSubMode() {
+      if ($("bulkFixedSubListRadio")?.checked) return "list_times";
+      if ($("bulkFixedSubStartRadio")?.checked) return "start_at";
+      const h = $("bulkFixedSubMode")?.value;
+      return h === "list_times" ? "list_times" : "start_at";
+    }
+
+    /**
+     * Exclusive UI: only one timing path active; others dimmed + disabled.
+     * Top: active_times XOR fixed.
+     * Inside fixed: start_at XOR list_times.
+     */
+    function applyBulkExclusiveUi() {
+      const top = getBulkTopMode();
+      if ($("bulkMode")) $("bulkMode").value = top;
+      if ($("bulkModeActive")) $("bulkModeActive").checked = top === "active_times";
+      if ($("bulkModeFixed")) $("bulkModeFixed").checked = top === "fixed";
+
+      const activeEl = $("bulkActive");
+      const fixedEl = $("bulkFixed");
+      if (top === "active_times") {
+        if (activeEl) activeEl.style.display = "";
+        if (fixedEl) fixedEl.style.display = "none";
+        setPanelDim(activeEl, false);
+      } else {
+        if (activeEl) activeEl.style.display = "none";
+        if (fixedEl) fixedEl.style.display = "";
+        setPanelDim(activeEl, true);
+        // prefer hidden field if restored from workspace
+        let sub = $("bulkFixedSubMode")?.value || getBulkFixedSubMode();
+        if (sub !== "list_times" && sub !== "start_at") sub = "start_at";
+        if ($("bulkFixedSubStartRadio")) $("bulkFixedSubStartRadio").checked = sub === "start_at";
+        if ($("bulkFixedSubListRadio")) $("bulkFixedSubListRadio").checked = sub === "list_times";
+        if ($("bulkFixedSubMode")) $("bulkFixedSubMode").value = sub;
+        setPanelDim($("bulkFixedSubStart"), sub !== "start_at");
+        setPanelDim($("bulkFixedSubList"), sub !== "list_times");
+        // re-enable the radio on dimmed panel so user can switch
+        $("bulkFixedSubStartRadio") && ($("bulkFixedSubStartRadio").disabled = false);
+        $("bulkFixedSubListRadio") && ($("bulkFixedSubListRadio").disabled = false);
+      }
+      if ($("bulkFixedSubMode")) $("bulkFixedSubMode").value = getBulkFixedSubMode();
+      updateBulkTimingModeBadge();
+    }
+
+    /** Badge: đang dùng list / Start at / giờ tích cực */
+    function updateBulkTimingModeBadge() {
+      const el = $("bulkTimingModeText");
+      const box = $("bulkTimingModeBadge");
+      if (!el) return;
+      const mode = getBulkTopMode();
+      if (mode === "active_times") {
+        el.innerHTML =
+          `<span class="ok">A · Giờ tích cực / preferred</span> · ` +
+          `ngày=<b>${esc($("bulkDays")?.value || "3")}</b> · bài/ngày=<b>${esc($("bulkPerDay")?.value || "2")}</b>` +
+          ` · + gap page A→B · <span class="muted">Start at / list mờ</span>`;
+        if (box) box.style.borderColor = "rgba(52,211,153,.45)";
+        return;
+      }
+      const sub = getBulkFixedSubMode();
+      if (sub === "list_times") {
+        const n = ($("bulkTimes")?.value || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean).length;
+        el.innerHTML =
+          `<span class="ok">B2 · List thời điểm</span> · <b>${n}</b> dòng` +
+          ` · page1=đúng giờ · page2+=gap · <span class="muted">Start at / số ngày / interval mờ</span>`;
+        if (box) box.style.borderColor = "rgba(251,191,36,.5)";
+        return;
+      }
+      el.innerHTML =
+        `<span class="ok">B1 · Start at + ngày + interval</span> · ` +
+        `bắt đầu <b>${esc($("bulkStart")?.value || "—")}</b> · ` +
+        `<b>${esc($("bulkFixedDays")?.value || "1")}</b> ngày × ` +
+        `<b>${esc($("bulkCount")?.value || "1")}</b> bài/page · + gap A→B · <span class="muted">List mờ</span>`;
+      if (box) box.style.borderColor = "rgba(96,165,250,.45)";
+    }
+
+    /** Rotation FB schedule: windows XOR fixed_gap */
+    function applyRotExclusiveUi() {
+      const m = $("rotMode")?.value || "windows";
+      const win = $("rotWindowsBox");
+      const fix = $("rotFixedBox");
+      if (win) {
+        win.classList.add("bulk-opt-panel");
+        win.style.display = "";
+        setPanelDim(win, m !== "windows");
+      }
+      if (fix) {
+        fix.classList.add("bulk-opt-panel");
+        fix.style.display = "";
+        setPanelDim(fix, m !== "fixed_gap");
+      }
+      // Manual groups vs auto meta
+      const auto = $("rotAutoMeta")?.checked;
+      const man = $("rotManualGroups");
+      if (man) {
+        man.classList.add("bulk-opt-panel");
+        setPanelDim(man, !!auto);
+      }
+    }
+
+    /** Direct Local time mode radios */
+    function applyRotNowTimeExclusiveUi() {
+      const mode =
+        document.querySelector('input[name="rotNowTimeMode"]:checked')?.value ||
+        "gap_chain";
+      const winBox = $("rotNowWindowsBox");
+      if (winBox) {
+        winBox.classList.add("bulk-opt-panel");
+        const useWin = mode === "windows";
+        winBox.style.display = useWin ? "" : "none";
+        setPanelDim(winBox, !useWin);
+      }
+      const help = $("rotNowTimeHelp");
+      if (help) {
+        help.innerHTML =
+          mode === "gap_chain"
+            ? "Treo liên tục: gap giữa task (page A→B). <b>Không</b> dùng khung Sáng/Tối."
+            : mode === "windows"
+              ? "Dùng khung Sáng/Tối bên dưới. Gap chain mờ."
+              : "Giờ ưa thích từng page (như hẹn FB active_times).";
+      }
+    }
+
     function formatVnLocal(ms) {
       if (!Number.isFinite(ms)) return "(chưa chọn)";
       return new Date(ms).toLocaleString("vi-VN", {
@@ -948,9 +1225,17 @@
         if (el.type === "checkbox") el.checked = !!values[id];
         else el.value = values[id] ?? "";
       }
-      $("bulkMode")?.dispatchEvent(new Event("change"));
+      // sync bulk mode radios from hidden select
+      const m = $("bulkMode")?.value || "active_times";
+      if ($("bulkModeActive")) $("bulkModeActive").checked = m === "active_times";
+      if ($("bulkModeFixed")) $("bulkModeFixed").checked = m === "fixed";
+      const sub = $("bulkFixedSubMode")?.value || "start_at";
+      if ($("bulkFixedSubStartRadio")) $("bulkFixedSubStartRadio").checked = sub !== "list_times";
+      if ($("bulkFixedSubListRadio")) $("bulkFixedSubListRadio").checked = sub === "list_times";
+      applyBulkExclusiveUi();
       ensureBulkStartFuture({ silent: true });
       rotToggleMode();
+      applyRotNowTimeExclusiveUi();
       $("rotAppStrategy")?.dispatchEvent(new Event("change"));
     }
 
@@ -2080,7 +2365,8 @@
 
     function bulkBody(dryRun) {
       const ids = selectedPageIds();
-      const mode = $("bulkMode").value;
+      applyBulkExclusiveUi();
+      const mode = getBulkTopMode();
       // Gap page A → B (cả 2 mode)
       const pgMin = Number($("bulkPageGapMin")?.value);
       const pgMaxRaw = Number($("bulkPageGapMax")?.value);
@@ -2108,32 +2394,53 @@
         body.meta_publish_window_days = Number($("metaPublishWindowDays")?.value) || 30;
         body.meta_min_interval_minutes = Number($("metaMinIntervalMinutes")?.value) || 120;
         body.meta_ignore_graph_limit = $("metaIgnoreGraphLimit")?.checked || false;
+        body.timing_source = "active_times";
+        // never send fixed fields
+        delete body.times;
+        delete body.start_at;
       } else {
-        const rawLines = $("bulkTimes").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-        // Facebook chỉ nhận mốc ≥ 10 phút kể từ hiện tại. List thời điểm cũng được
-        // lưu lại workspace nên hôm sau mở tool là toàn bộ đã ở quá khứ → server
-        // lọc sạch và báo "Không còn slot hợp lệ". Lọc + cảnh báo ngay tại UI.
-        const minMs = Date.now() + 10 * 60 * 1000;
-        const lines = rawLines.filter((s) => {
-          const t = parseLocalDateTimeValue(s.replace(" ", "T"));
-          return Number.isFinite(t) && t >= minMs;
-        });
-        const droppedPast = rawLines.length - lines.length;
-        if (droppedPast > 0) {
-          flash(`Đã bỏ ${droppedPast} mốc giờ đã qua trong "list thời điểm" (Facebook cần ≥10 phút kể từ hiện tại)`, false);
-        }
-        if (lines.length) {
-          body.times = lines;
-          if ($("bulkStart")?.value) {
-            updateBulkStartHint("bị bỏ qua vì đã có list thời điểm", true);
+        const sub = getBulkFixedSubMode();
+        if (sub === "list_times") {
+          const rawLines = ($("bulkTimes")?.value || "")
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          const minMs = Date.now() + 10 * 60 * 1000;
+          const lines = [];
+          let droppedPast = 0;
+          let droppedBad = 0;
+          for (const s of rawLines) {
+            const t = parseBulkTimeLineMs(s);
+            if (!Number.isFinite(t)) {
+              droppedBad++;
+              continue;
+            }
+            if (t < minMs) {
+              droppedPast++;
+              continue;
+            }
+            lines.push(s);
           }
+          if (droppedPast > 0) {
+            flash(
+              `Đã bỏ ${droppedPast} mốc đã qua (FB ≥10 phút). «09:00» = hôm nay/mai.`,
+              false
+            );
+          }
+          if (droppedBad > 0) {
+            flash(`${droppedBad} dòng không đọc được — 09:00 hoặc 31/07/2026 09:00`, false);
+          }
+          if (!lines.length) {
+            flash("Chế độ List: hãy viết ít nhất 1 mốc (vd 09:00)", false);
+          }
+          body.times = lines;
+          body.timing_source = "list_times";
+          // do NOT send start_at / days / interval
         } else {
           ensureBulkStartFuture({ silent: true });
           const startVal = $("bulkStart")?.value || "";
-          body.start_at = startVal
-            ? startVal.replace("T", " ")
-            : null;
-          // Hẹn nhiều ngày × bài/page/ngày
+          body.start_at = startVal ? startVal.replace("T", " ") : null;
+          body.timing_source = "start_at_interval";
           body.days_ahead = Math.min(30, Math.max(1, Number($("bulkFixedDays")?.value) || 1));
           body.count_per_page = Number($("bulkCount").value) || 1;
           const iMin = Number($("bulkIntervalMin")?.value) || 120;
@@ -2142,8 +2449,10 @@
           body.interval_minutes_min = iMin;
           body.interval_minutes_max = iMax;
           body.interval_minutes = iMin === iMax ? iMin : undefined;
+          // do NOT send times even if textarea still has text
         }
       }
+      updateBulkTimingModeBadge();
       return body;
     }
 
@@ -2175,12 +2484,24 @@
       if (r.dry_run) {
         const totalSlots = (r.plan || []).reduce((n, p) => n + (p.slots?.length || 0), 0);
         const errN = (r.plan || []).filter((p) => p.error).length;
+        const srcHint =
+          r.timing_source === "list_times" || (r.plan || []).some((p) => p.active?.source === "fixed" && p.active?.list_times)
+            ? "List thời điểm (mốc bạn viết + gap page)"
+            : r.timing_source === "start_at_interval" || r.mode === "fixed"
+              ? "Start at + số ngày + interval cùng page + gap page"
+              : r.mode === "active_times"
+                ? "Giờ tích cực / preferred từng page"
+                : esc(r.mode || "?");
         box.innerHTML =
           `<b>Dry-run · ${esc(r.mode)}</b> · ${(r.plan || []).length} page · ${totalSlots} slot` +
           (errN ? ` · <span class="fail">${errN} lỗi</span>` : "") +
           antiLine +
+          `<div style="margin:0 0 .45rem;font-size:.82rem;padding:.4rem .55rem;border-radius:8px;background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.3)">` +
+          `<b>Loại hẹn đang dùng:</b> ${srcHint}` +
+          (r.timing_source ? ` · <code>${esc(r.timing_source)}</code>` : "") +
+          `</div>` +
           (r.mode === "active_times"
-            ? `<div class="muted" style="margin:0 0 .45rem;font-size:.78rem">Nguồn giờ: preferred từng page / preset VN (Meta không còn page_fans_online). Jitter phút + min-gap theo anti.</div>`
+            ? `<div class="muted" style="margin:0 0 .45rem;font-size:.78rem">Nguồn giờ: preferred từng page / preset VN. Jitter + min-gap theo anti · gap page A→B.</div>`
             : "") +
           (r.plan || []).map((p) => {
             if (p.error) {
@@ -2343,12 +2664,51 @@
       }).join("");
     }
 
+    function syncBulkModeFromRadios() {
+      applyBulkExclusiveUi();
+      if (getBulkTopMode() === "fixed") ensureBulkStartFuture({ silent: true });
+      queueWorkspaceSave(200);
+    }
+    $("bulkModeActive")?.addEventListener("change", syncBulkModeFromRadios);
+    $("bulkModeFixed")?.addEventListener("change", syncBulkModeFromRadios);
+    $("bulkFixedSubStartRadio")?.addEventListener("change", () => {
+      if ($("bulkFixedSubMode")) $("bulkFixedSubMode").value = "start_at";
+      applyBulkExclusiveUi();
+      queueWorkspaceSave(200);
+    });
+    $("bulkFixedSubListRadio")?.addEventListener("change", () => {
+      if ($("bulkFixedSubMode")) $("bulkFixedSubMode").value = "list_times";
+      applyBulkExclusiveUi();
+      queueWorkspaceSave(200);
+    });
+    // legacy hidden select still fires from workspace restore
     $("bulkMode").onchange = () => {
       const m = $("bulkMode").value;
-      $("bulkActive").style.display = m === "active_times" ? "block" : "none";
-      $("bulkFixed").style.display = m === "fixed" ? "block" : "none";
+      if ($("bulkModeActive")) $("bulkModeActive").checked = m === "active_times";
+      if ($("bulkModeFixed")) $("bulkModeFixed").checked = m === "fixed";
+      applyBulkExclusiveUi();
       if (m === "fixed") ensureBulkStartFuture({ silent: true });
     };
+    ["bulkTimes", "bulkStart", "bulkFixedDays", "bulkCount", "bulkDays", "bulkPerDay"].forEach(
+      (id) => {
+        $(id)?.addEventListener("input", () => updateBulkTimingModeBadge());
+        $(id)?.addEventListener("change", () => updateBulkTimingModeBadge());
+      }
+    );
+    $("rotMode")?.addEventListener("change", () => applyRotExclusiveUi());
+    $("rotAutoMeta")?.addEventListener("change", () => applyRotExclusiveUi());
+    document.querySelectorAll('input[name="rotNowTimeMode"]').forEach((r) => {
+      r.addEventListener("change", () => applyRotNowTimeExclusiveUi());
+    });
+    setTimeout(() => {
+      try {
+        applyBulkExclusiveUi();
+        applyRotExclusiveUi();
+        applyRotNowTimeExclusiveUi();
+      } catch {
+        /* ignore */
+      }
+    }, 0);
     $("btnDryRun").onclick = () => runBulk(true);
     $("btnBulkSchedule").onclick = () => runBulk(false);
 
@@ -2528,9 +2888,7 @@
     }
 
     function rotToggleMode() {
-      const m = $("rotMode").value;
-      $("rotWindowsBox").style.display = m === "windows" ? "block" : "none";
-      $("rotFixedBox").style.display = m === "fixed_gap" ? "block" : "none";
+      applyRotExclusiveUi();
       syncRotationWindowTotal();
     }
 
