@@ -199,7 +199,9 @@ export function validateScheduleUnix(unixSec) {
 
 /**
  * @param {object} [schedule] { scheduled_publish_time: unixSec }
- *   When set → published=false + scheduled_publish_time (FB Page scheduler).
+ *   When set → published=false + scheduled_publish_time + unpublished_content_type=SCHEDULED.
+ *   Meta docs (Page photos/feed schedule): thiếu unpublished_content_type dễ tạo bài
+ *   "admin-only / content isn't available" sau giờ hẹn.
  */
 function scheduleFields(schedule) {
   if (!schedule?.scheduled_publish_time) return { published: "true" };
@@ -207,7 +209,81 @@ function scheduleFields(schedule) {
   return {
     published: "false",
     scheduled_publish_time: String(t),
+    /** Bắt buộc với scheduled Page content — không set = hay kẹt chỉ admin thấy */
+    unpublished_content_type: "SCHEDULED",
   };
+}
+
+/**
+ * Ép bài hẹn (đã qua giờ) lên timeline public.
+ * Workaround glitch Graph: is_published=false / is_hidden=true dù scheduled_publish_time đã qua.
+ * @see Medium/FB eng notes — POST is_published + timeline_visibility + backdated_time
+ */
+export async function forcePublishScheduledObject(
+  objectId,
+  pageToken,
+  scheduledUnixSec = null,
+  metaAppKey = ""
+) {
+  if (!objectId) throw new Error("Missing Facebook object id");
+  const body = {
+    is_published: true,
+    timeline_visibility: "normal",
+  };
+  const unix = Number(scheduledUnixSec);
+  if (Number.isFinite(unix) && unix > 0) {
+    // Giữ mốc giờ hẹn trên timeline (tránh hiện "vừa đăng")
+    body.backdated_time = Math.floor(unix);
+  }
+  try {
+    return await graphPostJson(`/${objectId}`, pageToken, body, metaAppKey);
+  } catch (e) {
+    // Video object đôi khi không nhận backdated_time — thử tối thiểu
+    if (body.backdated_time != null) {
+      try {
+        return await graphPostJson(
+          `/${objectId}`,
+          pageToken,
+          { is_published: true, timeline_visibility: "normal" },
+          metaAppKey
+        );
+      } catch {
+        /* fall through */
+      }
+    }
+    // published=true alternate (một số edge video)
+    try {
+      return await graphPostJson(
+        `/${objectId}`,
+        pageToken,
+        { published: true },
+        metaAppKey
+      );
+    } catch {
+      throw e;
+    }
+  }
+}
+
+/** Enrich post/video id → permalink + publish flags (best-effort). */
+export async function enrichPublishResult(objectId, pageToken, base = {}) {
+  if (!objectId) return base;
+  try {
+    const st = await getFacebookPostStatus(objectId, pageToken);
+    const permalink =
+      st.permalink_url || st.link || base.post_url || null;
+    return {
+      ...base,
+      post_id: base.post_id || st.id || objectId,
+      post_url: permalink || (objectId ? `https://www.facebook.com/${objectId}` : base.post_url),
+      is_published: st.is_published,
+      is_hidden: st.is_hidden,
+      permalink_url: permalink,
+      raw_status: st,
+    };
+  } catch {
+    return base;
+  }
 }
 
 /** Text post on Page feed (or schedule via schedule.scheduled_publish_time) */
@@ -216,15 +292,17 @@ export async function publishText(pageId, pageToken, message, schedule = null) {
     message: message || "",
     ...scheduleFields(schedule),
   });
-  return {
-    post_id: data.id || null,
-    post_url: data.id ? `https://www.facebook.com/${data.id}` : null,
+  const postId = data.id || null;
+  const base = {
+    post_id: postId,
+    post_url: postId ? `https://www.facebook.com/${postId}` : null,
     scheduled: !!schedule?.scheduled_publish_time,
     scheduled_publish_time: schedule?.scheduled_publish_time
       ? Number(schedule.scheduled_publish_time)
       : null,
     raw: data,
   };
+  return enrichPublishResult(postId, pageToken, base);
 }
 
 /** Photo post — local file required */
@@ -249,7 +327,7 @@ export async function publishPhoto(
   );
   // photos return { id: photo_id, post_id?: ... }
   const postId = data.post_id || data.id || null;
-  return {
+  const base = {
     post_id: postId,
     photo_id: data.id || null,
     post_url: postId ? `https://www.facebook.com/${postId}` : null,
@@ -259,6 +337,8 @@ export async function publishPhoto(
       : null,
     raw: data,
   };
+  // Prefer post_id for status/permalink (photo node ≠ feed post)
+  return enrichPublishResult(data.post_id || postId, pageToken, base);
 }
 
 /** Video post — local file */
@@ -277,12 +357,13 @@ export async function publishVideo(
     pageToken,
     {
       description: description || "",
+      title: description ? String(description).slice(0, 255) : undefined,
       ...scheduleFields(schedule),
     },
     { name: "source", filePath }
   );
   const postId = data.id || data.post_id || null;
-  return {
+  const base = {
     post_id: postId,
     post_url: postId ? `https://www.facebook.com/${postId}` : null,
     scheduled: !!schedule?.scheduled_publish_time,
@@ -291,6 +372,7 @@ export async function publishVideo(
       : null,
     raw: data,
   };
+  return enrichPublishResult(postId, pageToken, base);
 }
 
 /** List posts scheduled on Page (Graph: /{page-id}/scheduled_posts) */
@@ -321,7 +403,7 @@ export async function getFacebookPostStatus(postId, pageToken) {
     return await graphGetJson(
       `/${postId}`,
       pageToken,
-      "id,created_time,permalink_url,is_published,scheduled_publish_time,status_type,reactions.summary(true).limit(0),likes.summary(true).limit(0)"
+      "id,created_time,permalink_url,is_published,is_hidden,scheduled_publish_time,status_type,from,reactions.summary(true).limit(0),likes.summary(true).limit(0)"
     );
   } catch (e) {
     // Fallback without engagement fields (permission / API variance)
@@ -329,7 +411,7 @@ export async function getFacebookPostStatus(postId, pageToken) {
       return await graphGetJson(
         `/${postId}`,
         pageToken,
-        "id,created_time,permalink_url,is_published,scheduled_publish_time,status_type"
+        "id,created_time,permalink_url,is_published,is_hidden,scheduled_publish_time,status_type"
       );
     } catch (e2) {
       if (Number(e2.code) !== 100 && Number(e.code) !== 100) throw e2;

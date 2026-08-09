@@ -13,6 +13,7 @@ import {
   getFacebookPostStatus,
   extractPostLikeCount,
   validateScheduleUnix,
+  forcePublishScheduledObject,
 } from "./publish.js";
 import path from "path";
 import { pickCaption, buildComment, assignCommentForPost } from "./mediaLibrary.js";
@@ -1322,29 +1323,97 @@ export async function reconcileScheduledLogs({ limit = 50 } = {}) {
       const stillPending = [...pendingIds].some((id) =>
         id === String(row.fb_post_id) || id.endsWith(`_${row.fb_post_id}`) || String(row.fb_post_id).endsWith(`_${id}`)
       );
-      if (stillPending) {
-        db.prepare(`UPDATE post_logs SET status = 'schedule_overdue', error = ? WHERE id = ?`)
-          .run("Đã qua giờ dự kiến nhưng bài vẫn còn trong scheduled_posts của Facebook", row.id);
-        results.push({ id: row.id, page_name: row.page_name, status: "schedule_overdue", post_url: row.fb_post_url });
+      const publishUnix =
+        Math.floor(Date.parse(row.scheduled_publish_time || "") / 1000) || null;
+      // Đã qua giờ hẹn ≥ 2 phút: nếu FB vẫn kẹt unpublished / hidden / scheduled_posts
+      // → ép publish public (glitch Graph hay gặp với video hẹn giờ).
+      const pastGrace =
+        publishUnix != null && Date.now() / 1000 >= publishUnix + 120;
+
+      if (stillPending && pastGrace) {
+        try {
+          await forcePublishScheduledObject(row.fb_post_id, token, publishUnix);
+          pendingIds.delete(String(row.fb_post_id));
+        } catch (forceErr) {
+          db.prepare(
+            `UPDATE post_logs SET status = 'schedule_overdue', error = ? WHERE id = ?`
+          ).run(
+            `Đã qua giờ nhưng vẫn trong scheduled_posts — ép publish fail: ${forceErr.message || forceErr}`,
+            row.id
+          );
+          results.push({
+            id: row.id,
+            page_name: row.page_name,
+            status: "schedule_overdue",
+            post_url: row.fb_post_url,
+            force_publish_error: forceErr.message || String(forceErr),
+          });
+          await sleep(250);
+          continue;
+        }
+      } else if (stillPending) {
+        db.prepare(
+          `UPDATE post_logs SET status = 'schedule_overdue', error = ? WHERE id = ?`
+        ).run(
+          "Đã qua giờ dự kiến nhưng bài vẫn còn trong scheduled_posts của Facebook",
+          row.id
+        );
+        results.push({
+          id: row.id,
+          page_name: row.page_name,
+          status: "schedule_overdue",
+          post_url: row.fb_post_url,
+        });
         await sleep(250);
         continue;
       }
-      const fb = await getFacebookPostStatus(row.fb_post_id, token);
+
+      let fb = await getFacebookPostStatus(row.fb_post_id, token);
+      let forceNote = null;
+      // Kẹt admin-only: is_published=false hoặc is_hidden=true sau giờ hẹn
+      const stuckUnpublished =
+        pastGrace &&
+        (fb.is_published === false ||
+          fb.is_hidden === true ||
+          (fb.scheduled_publish_time != null &&
+            Number(fb.scheduled_publish_time) * 1000 < Date.now() - 120_000));
+      if (stuckUnpublished) {
+        try {
+          await forcePublishScheduledObject(row.fb_post_id, token, publishUnix);
+          forceNote = "force_publish_ok";
+          await sleep(500);
+          fb = await getFacebookPostStatus(row.fb_post_id, token);
+        } catch (forceErr) {
+          forceNote = `force_publish_fail: ${forceErr.message || forceErr}`;
+        }
+      }
+
       const explicitPublished = fb.is_published === true;
       const explicitUnpublished = fb.is_published === false;
-      const looksPublished = !!fb.permalink_url && !fb.scheduled_publish_time;
-      const objectExists = !!fb.id;
-      const status = explicitPublished || (!explicitUnpublished && (looksPublished || objectExists))
-        ? "published"
-        : "schedule_overdue";
+      const hidden = fb.is_hidden === true;
+      const looksPublished =
+        !!fb.permalink_url && !fb.scheduled_publish_time && !hidden;
+      const objectExists = !!fb.id && !hidden;
+      const status =
+        (explicitPublished || (!explicitUnpublished && looksPublished) ||
+          (forceNote === "force_publish_ok" && objectExists)) &&
+        !hidden
+          ? "published"
+          : "schedule_overdue";
       const url = fb.permalink_url || row.fb_post_url || null;
-      db.prepare(`UPDATE post_logs SET status = ?, fb_post_url = COALESCE(?, fb_post_url), error = ? WHERE id = ?`)
-        .run(
-          status,
-          url,
-          status === "schedule_overdue" ? "Đã qua giờ dự kiến nhưng Facebook vẫn báo chưa xuất bản" : null,
-          row.id
-        );
+      const errMsg =
+        status === "schedule_overdue"
+          ? forceNote && forceNote.startsWith("force_publish_fail")
+            ? `Đã qua giờ — bài có thể chỉ admin thấy. ${forceNote}`
+            : hidden
+              ? "Đã qua giờ nhưng Facebook is_hidden=true (chỉ admin thấy) — mở Business Suite → Edit → Save hoặc bấm Đối soát lại"
+              : "Đã qua giờ dự kiến nhưng Facebook vẫn báo chưa xuất bản / chưa public"
+          : forceNote === "force_publish_ok"
+            ? null
+            : null;
+      db.prepare(
+        `UPDATE post_logs SET status = ?, fb_post_url = COALESCE(?, fb_post_url), error = ? WHERE id = ?`
+      ).run(status, url, errMsg, row.id);
 
       let commentResult = null;
       if (status === "published") {
