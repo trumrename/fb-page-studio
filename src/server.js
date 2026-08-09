@@ -12,8 +12,14 @@ import jobsRoutes from "./routes/jobs.js";
 import licenseRoutes from "./routes/license.js";
 import deletePostsRoutes from "./routes/deletePosts.js";
 import deleteGroupPostsRoutes from "./routes/deleteGroupPosts.js";
+import httpOpsRoutes from "./routes/httpOps.js";
 import { runSchedulerTick, getPagePostConfig, mediaStats, getCaptionStats } from "./services/poster.js";
 import { reconcileScheduledLogs } from "./services/schedule.js";
+import {
+  initHttpOps,
+  httpOpsSchedulerTick,
+  getHttpOpsWorkerState,
+} from "./services/httpOps/index.js";
 import { exportAllDailyReports, exportPostingHistoryDaily, vnDay, yesterdayVn } from "./services/dailyReports.js";
 import { enrichAllPages } from "./services/enrich.js";
 import { ensureAntiSpamTables } from "./services/antiSpam.js";
@@ -268,7 +274,24 @@ app.use("/api/posting", postingRoutes);
 app.use("/api/jobs", jobsRoutes);
 app.use("/api/delete-posts", deletePostsRoutes);
 app.use("/api/delete-group-posts", deleteGroupPostsRoutes);
+// Session/login APIs only if explicitly enabled (default: separate Session Ops tool)
+if (process.env.ENABLE_HTTP_OPS === "1") {
+  app.use("/api/http-ops", httpOpsRoutes);
+}
 app.use(express.static(publicDir));
+
+// SAFE product: Graph/OAuth only.
+// Session cookie / id|pass|2fa lives in separate tool: fb-session-ops (F:\FB-Page-Studio\projects\fb-session-ops)
+// Optional graph story-slot queue only if ENABLE_HTTP_OPS=1 (default off in SAFE builds).
+if (process.env.ENABLE_HTTP_OPS === "1") {
+  try {
+    const conc = Number(process.env.HTTP_OPS_CONCURRENCY || 3);
+    initHttpOps({ startWorkers: true, concurrency: conc });
+    console.log(`[http-ops] optional queue on · workers=${conc}`);
+  } catch (e) {
+    console.warn("[http-ops] init failed:", e?.message || e);
+  }
+}
 
 // Startup: log if GitHub has a newer release (non-blocking)
 import("./services/updater.js")
@@ -337,6 +360,7 @@ app.get("/api/runtime", (_req, res) => {
     server_time: new Date().toISOString(),
     scheduler: { ...schedulerState, enabled_pages: enabledPages },
     config_health: configHealth,
+    http_ops: getHttpOpsWorkerState(),
   });
 });
 
@@ -365,6 +389,18 @@ setInterval(() => {
           `[scheduler] posted ${posted.length}:`,
           posted.map((p) => p.post_type || p.page_row_id).join(", ")
         );
+      }
+      // Story slots (HTTP ops queue) — max/day + khung giờ
+      try {
+        const st = httpOpsSchedulerTick();
+        if (st.enqueued?.length) {
+          console.log(
+            `[http-ops/story] enqueued ${st.enqueued.length}:`,
+            st.enqueued.map((e) => `${e.page_id}@${e.slot}`).join(", ")
+          );
+        }
+      } catch (se) {
+        console.warn("[http-ops/story]", se?.message || se);
       }
     })
     .catch((e) => {

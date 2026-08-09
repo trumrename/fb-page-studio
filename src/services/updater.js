@@ -288,16 +288,238 @@ function isNsisInstalledApp(currentExe, exeDir) {
   return false;
 }
 
-/** Default NSIS per-user install locations to relaunch after Setup. */
-function nsisAppLaunchCandidates() {
+/** Default NSIS install locations to relaunch after Setup. */
+function nsisAppLaunchCandidates(preferredExe) {
   const local = process.env.LOCALAPPDATA || "";
   const pf = process.env.ProgramFiles || "C:\\Program Files";
+  const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
   const names = [
+    preferredExe && /\.exe$/i.test(preferredExe) ? preferredExe : null,
     path.join(local, "Programs", "FB Page Studio", "FB Page Studio.exe"),
     path.join(local, "Programs", "fb-page-studio", "FB Page Studio.exe"),
     path.join(pf, "FB Page Studio", "FB Page Studio.exe"),
-  ];
-  return names;
+    path.join(pf86, "FB Page Studio", "FB Page Studio.exe"),
+  ].filter(Boolean);
+  // unique, preserve order
+  const seen = new Set();
+  return names.filter((p) => {
+    const k = path.resolve(p).toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/** Delay safe when BAT has no console (timeout.exe can hang with redirected stdio). */
+function batDelaySeconds(seconds) {
+  const n = Math.max(1, Math.min(30, Number(seconds) || 1));
+  // ping -n N waits ~N-1 seconds
+  return `ping 127.0.0.1 -n ${n + 1} >nul`;
+}
+
+/**
+ * Snapshot user data BEFORE update so NSIS / force-kill never "mất dữ liệu".
+ * Copies .env, license, app.db(+wal/shm), jobs-state, app_settings-critical files.
+ * Never deletes originals. AppData is outside install dir — Setup must not touch it.
+ */
+export function backupUserDataBeforeUpdate(userDir, label = "pre-update") {
+  const root = path.resolve(String(userDir || getExeDir() || ""));
+  if (!root || !fs.existsSync(root)) return null;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const bakDir = path.join(root, "data", "backups", `${label}-${stamp}`);
+  try {
+    fs.mkdirSync(bakDir, { recursive: true });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+  const copyOne = (rel) => {
+    const src = path.join(root, rel);
+    if (!fs.existsSync(src)) return false;
+    const dest = path.join(bakDir, path.basename(rel));
+    try {
+      fs.copyFileSync(src, dest);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const copied = [];
+  for (const rel of [
+    ".env",
+    "license.backup.json",
+    path.join("data", "license.json"),
+    path.join("data", "app.db"),
+    path.join("data", "app.db-wal"),
+    path.join("data", "app.db-shm"),
+    path.join("data", "jobs-state.json"),
+  ]) {
+    if (copyOne(rel)) copied.push(rel);
+  }
+  // Keep last 8 backup folders
+  try {
+    const parent = path.join(root, "data", "backups");
+    const dirs = fs
+      .readdirSync(parent, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => ({ name: d.name, t: fs.statSync(path.join(parent, d.name)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    for (const old of dirs.slice(8)) {
+      try {
+        fs.rmSync(path.join(parent, old.name), { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { ok: true, dir: bakDir, copied };
+}
+
+/**
+ * Write PowerShell apply script — NO cmd find/tasklist pipes (user hung on "find").
+ * Preserves %APPDATA%\fb-page-studio (never deletes data/).
+ */
+function writeNsisUpdateScript({
+  userWritable,
+  setupPath,
+  currentExe,
+  fromVersion,
+  toVersion,
+}) {
+  const psPath = path.join(userWritable, "_apply_update.ps1");
+  const launchList = nsisAppLaunchCandidates(currentExe);
+  const setupEsc = setupPath.replace(/'/g, "''");
+  const userEsc = userWritable.replace(/'/g, "''");
+  const ps = `# FB Page Studio auto-update (PowerShell) — do not use cmd find.exe
+$ErrorActionPreference = 'Continue'
+$userDir = '${userEsc}'
+$setup = '${setupEsc}'
+$log = Join-Path $userDir '_update-log.txt'
+$status = Join-Path $userDir '_update-status.txt'
+$errFile = Join-Path $userDir '_update-error.txt'
+$launch = @(${launchList.map((p) => `'${String(p).replace(/'/g, "''")}'`).join(",")})
+function Log([string]$m) {
+  try { Add-Content -LiteralPath $log -Value ("{0} {1}" -f (Get-Date -Format o), $m) -Encoding UTF8 } catch {}
+}
+function Set-Status([string]$m) {
+  try { Set-Content -LiteralPath $status -Value $m -Encoding UTF8 } catch {}
+  Log $m
+}
+try { Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue } catch {}
+Set-Status "Backup data truoc khi cap nhat..."
+# --- NEVER wipe AppData: only copy snapshot ---
+try {
+  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  $bak = Join-Path $userDir ("data\\backups\\pre-update-" + $stamp)
+  New-Item -ItemType Directory -Force -Path $bak | Out-Null
+  foreach ($rel in @('.env','license.backup.json','data\\license.json','data\\app.db','data\\app.db-wal','data\\app.db-shm','data\\jobs-state.json')) {
+    $src = Join-Path $userDir $rel
+    if (Test-Path -LiteralPath $src) {
+      Copy-Item -LiteralPath $src -Destination (Join-Path $bak (Split-Path $rel -Leaf)) -Force -ErrorAction SilentlyContinue
+    }
+  }
+  Log ("Backup OK " + $bak)
+} catch { Log ("Backup warn: " + $_.Exception.Message) }
+
+Set-Status "Dang tat app cu (giu nguyen data)..."
+# Soft then hard stop — by process name only, never delete data folders
+for ($i = 0; $i -lt 8; $i++) {
+  Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | ForEach-Object {
+    try { $_.CloseMainWindow() | Out-Null } catch {}
+  }
+  Start-Sleep -Milliseconds 400
+}
+Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+
+if (-not (Test-Path -LiteralPath $setup)) {
+  Set-Content -LiteralPath $errFile -Value 'LOI: thieu Setup' -Encoding UTF8
+  exit 1
+}
+
+Set-Status "Dang cai Setup silent (khong xoa AppData)..."
+# Run Setup WITHOUT -Wait forever. NSIS runAfterFinish keeps setup alive if we Wait.
+$p = $null
+try {
+  $p = Start-Process -FilePath $setup -ArgumentList '/S' -PassThru -WindowStyle Minimized
+} catch {
+  Log ("Start-Process fail: " + $_.Exception.Message)
+  try { Start-Process -FilePath $setup } catch {}
+  exit 1
+}
+
+$deadline = (Get-Date).AddSeconds(150)
+$startedApp = $false
+while ((Get-Date) -lt $deadline) {
+  Start-Sleep -Seconds 2
+  if ($p -and $p.HasExited) { Log ("Setup exited code=" + $p.ExitCode); break }
+  $appRunning = @(Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue).Count -gt 0
+  if ($appRunning) {
+    $startedApp = $true
+    # App relaunched by NSIS — Setup may stay open; kill Setup so we never hang
+    if ($p -and -not $p.HasExited -and ((Get-Date) - $p.StartTime).TotalSeconds -gt 12) {
+      Log 'App already running — stopping Setup remnant'
+      try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+      break
+    }
+  }
+}
+if ($p -and -not $p.HasExited) {
+  Log 'Setup still running after timeout — force stop Setup only'
+  try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+}
+# Kill leftover setup image names (never touch user data)
+Get-Process -ErrorAction SilentlyContinue | Where-Object {
+  $_.ProcessName -like 'FB-Page-Studio-Setup*' -or $_.Path -like '*FB-Page-Studio-Setup*'
+} | Stop-Process -Force -ErrorAction SilentlyContinue
+
+Start-Sleep -Seconds 1
+Set-Status "Dang mo ban moi..."
+$appNow = @(Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue).Count -gt 0
+if (-not $appNow) {
+  $launched = $false
+  foreach ($exe in $launch) {
+    if ($exe -and (Test-Path -LiteralPath $exe)) {
+      try {
+        Start-Process -FilePath $exe
+        Log ("Launched " + $exe)
+        $launched = $true
+        break
+      } catch { Log ("Launch fail " + $exe + " " + $_.Exception.Message) }
+    }
+  }
+  if (-not $launched) {
+    $lnk = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\FB Page Studio.lnk'
+    if (Test-Path -LiteralPath $lnk) {
+      try { Start-Process -FilePath $lnk; Log 'Launched Start Menu shortcut' } catch {}
+    }
+  }
+} else {
+  Log 'App already running — skip second launch'
+}
+
+try { Remove-Item -LiteralPath $status -Force -ErrorAction SilentlyContinue } catch {}
+Log "Update script done from=${fromVersion} to=${toVersion} (data dir kept: $userDir)"
+# Self-delete
+try { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue } catch {}
+exit 0
+`;
+  fs.writeFileSync(psPath, ps, "utf8");
+  // Tiny launcher .bat only starts PowerShell (no find/tasklist loops)
+  const batPath = path.join(userWritable, "_apply_update.bat");
+  const bat = [
+    "@echo off",
+    "title FB Page Studio - Cap nhat",
+    `cd /d "${userWritable.replace(/"/g, "")}"`,
+    `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${psPath.replace(/"/g, "")}"`,
+    "exit /b %ERRORLEVEL%",
+    "",
+  ].join("\r\n");
+  fs.writeFileSync(batPath, bat, "utf8");
+  return { batPath, psPath, launchList };
 }
 
 function downloadFileOnce(url, dest, onProgress, maxRedirects = 8) {
@@ -655,70 +877,26 @@ export async function applyUpdate() {
       }
     }
 
-    // BAT: wait until this app exits → run Setup → start new install
-    // (Cannot replace files while "FB Page Studio.exe" still running.)
-    const batPath = path.join(userWritable, "_apply_update.bat");
-    const setupQuoted = destSetup.replace(/"/g, "");
-    const launchLines = nsisAppLaunchCandidates()
-      .map(
-        (p) =>
-          `if exist "${p.replace(/"/g, "")}" (\r\n  start "" "${p.replace(/"/g, "")}"\r\n  goto started\r\n)`
-      )
-      .join("\r\n");
-    const bat = [
-      "@echo off",
-      "setlocal EnableExtensions",
-      `cd /d "${userWritable.replace(/"/g, "")}"`,
-      "del /f /q \"_update-error.txt\" 2>nul",
-      "echo Dang cho app cu tat... > \"_update-status.txt\"",
-      "timeout /t 2 /nobreak >nul",
-      "set /a tries=0",
-      ":waitapp",
-      "set /a tries+=1",
-      "if %tries% GTR 90 goto locked",
-      // Wait until NSIS / Electron product process is gone
-      'tasklist /FI "IMAGENAME eq FB Page Studio.exe" 2>nul | find /I "FB Page Studio.exe" >nul',
-      "if not errorlevel 1 (",
-      "  timeout /t 1 /nobreak >nul",
-      "  goto waitapp",
-      ")",
-      `if not exist "${setupQuoted}" (`,
-      `  echo LOI: thieu Setup > "_update-error.txt"`,
-      "  exit /b 1",
-      ")",
-      "echo Dang chay Setup... > \"_update-status.txt\"",
-      // Prefer silent; if fails, show UI
-      `start /wait "" "${setupQuoted}" /S`,
-      "if errorlevel 1 (",
-      `  start /wait "" "${setupQuoted}"`,
-      ")",
-      "timeout /t 2 /nobreak >nul",
-      "echo Dang mo ban moi... > \"_update-status.txt\"",
-      launchLines,
-      // Start Menu shortcut name
-      'start "" "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\FB Page Studio.lnk" 2>nul',
-      ":started",
-      "del /f /q \"_update-status.txt\" 2>nul",
-      'del /f /q "%~f0" 2>nul',
-      "endlocal",
-      "exit /b 0",
-      ":locked",
-      'echo LOI: app cu van dang chay sau 90s — hay thoat khay he thong roi chay Setup tay > "_update-error.txt"',
-      `if exist "${setupQuoted}" start "" "${setupQuoted}"`,
-      "exit /b 1",
-      "",
-    ].join("\r\n");
-    fs.writeFileSync(batPath, bat, "utf8");
+    // Snapshot data first — Setup only replaces Program Files, never AppData.
+    const dataBackup = backupUserDataBeforeUpdate(userWritable, "pre-nsis-update");
+    const { batPath, psPath, launchList } = writeNsisUpdateScript({
+      userWritable,
+      setupPath: destSetup,
+      currentExe,
+      fromVersion: check.current_version,
+      toVersion: check.latest_version,
+    });
 
     setUpdateProgress({
       state: "ready",
       percent: 100,
-      message: `Đã tải Setup v${check.latest_version}. Đang tắt app cũ → cài đè → mở bản mới…`,
+      message: `Đã tải Setup v${check.latest_version}. Đã backup data → tắt app → cài đè (giữ AppData)…`,
       from: check.current_version,
       to: check.latest_version,
       setup_mode: true,
       setup_path: destSetup,
       will_restart: true,
+      data_backup: dataBackup?.dir || null,
     });
     return {
       ok: true,
@@ -726,12 +904,16 @@ export async function applyUpdate() {
       setup_mode: true,
       setup_path: destSetup,
       bat: batPath,
-      target_exe: nsisAppLaunchCandidates()[0],
+      ps1: psPath,
+      target_exe: launchList[0],
       will_restart: true,
+      data_backup: dataBackup?.dir || null,
+      preserves: ["%APPDATA%\\fb-page-studio\\data", ".env", "license"],
       message:
         `Đã tải Setup v${check.latest_version}.\n` +
-        `App sẽ TỰ TẮT → chạy Setup cài đè → mở lại bản mới.\n` +
-        `License/data trong %APPDATA%\\fb-page-studio giữ nguyên.`,
+        `App sẽ TẮT → cài đè EXE → mở lại.\n` +
+        `Data/license/token giữ nguyên trong %APPDATA%\\fb-page-studio (không xóa).\n` +
+        (dataBackup?.dir ? `Backup: ${dataBackup.dir}` : ""),
       ...check,
     };
   }
@@ -802,7 +984,7 @@ export async function applyUpdate() {
     );
   }
 
-  // Snapshot license (data/ never deleted)
+  // Snapshot license + full user data (never deleted by update)
   try {
     const dataLic = path.join(exeDir, "data", "license.json");
     const bakLic = path.join(exeDir, "license.backup.json");
@@ -812,6 +994,7 @@ export async function applyUpdate() {
   } catch {
     /* ignore */
   }
+  backupUserDataBeforeUpdate(userWritable || exeDir, "pre-portable-update");
 
   // 1) Unlock current EXE → .bak  2) Place new as finalName (v{new})  3) DELETE all other Desktop EXEs
   //    so Explorer shows the new version number and no leftover v1.2.25/v1.2.27.
@@ -820,9 +1003,13 @@ export async function applyUpdate() {
   const bat = [
     "@echo off",
     "setlocal EnableExtensions",
+    "title FB Page Studio - Dang cap nhat",
     `cd /d "${exeDir}"`,
     `del /f /q "_update-error.txt" 2>nul`,
-    "timeout /t 1 /nobreak >nul",
+    // Kill portable process by image name so ren succeeds
+    `taskkill /F /IM "${currentName}" >nul 2>&1`,
+    `taskkill /F /IM "${finalName}" >nul 2>&1`,
+    batDelaySeconds(1),
     "set /a tries=0",
     `:retry`,
     "set /a tries+=1",
@@ -832,7 +1019,7 @@ export async function applyUpdate() {
     `  del /f /q "${bakBase}" 2>nul`,
     `  ren "${currentName}" "${bakBase}" 2>nul`,
     `  if exist "${currentName}" (`,
-    `    timeout /t 1 /nobreak >nul`,
+    `    ${batDelaySeconds(1)}`,
     `    goto retry`,
     `  )`,
     `)`,
@@ -841,7 +1028,7 @@ export async function applyUpdate() {
     `  del /f /q "${finalName}.old" 2>nul`,
     `  ren "${finalName}" "${finalName}.old" 2>nul`,
     `  if exist "${finalName}" (`,
-    `    timeout /t 1 /nobreak >nul`,
+    `    ${batDelaySeconds(1)}`,
     `    goto retry`,
     `  )`,
     `)`,
@@ -948,34 +1135,54 @@ export function startUpdate() {
   return { started: true, already_running: false, progress: getUpdateProgress(), promise: activeUpdate };
 }
 
-/** Spawn update bat and exit process shortly after */
-export function scheduleRestart(batPath, cwd) {
-  spawn("cmd.exe", ["/c", batPath], {
-    detached: true,
-    stdio: "ignore",
-    cwd: cwd || getExeDir(),
-    windowsHide: true,
-  }).unref();
-  setTimeout(() => process.exit(0), 600);
+/** Spawn update script (bat/ps1) and exit process shortly after. */
+export function scheduleRestart(scriptPath, cwd) {
+  const resolved = path.resolve(String(scriptPath || ""));
+  const dir = cwd || path.dirname(resolved) || getExeDir();
+  const isPs1 = /\.ps1$/i.test(resolved);
+  try {
+    if (isPs1) {
+      spawn(
+        "powershell.exe",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", resolved],
+        { detached: true, stdio: "ignore", cwd: dir, windowsHide: true }
+      ).unref();
+    } else {
+      spawn("cmd.exe", ["/c", resolved], {
+        detached: true,
+        stdio: "ignore",
+        cwd: dir,
+        windowsHide: true,
+      }).unref();
+    }
+  } catch {
+    spawn("cmd.exe", ["/c", resolved], {
+      detached: true,
+      stdio: "ignore",
+      cwd: dir,
+      windowsHide: false,
+    }).unref();
+  }
+  setTimeout(() => process.exit(0), 800);
 }
 
 /** Ask Electron parent to exit first; plain Node keeps a safe fallback. */
-export function requestUpdateRestart(batPath, cwd) {
+export function requestUpdateRestart(scriptPath, cwd) {
   setUpdateProgress({
     state: "restarting",
-    message: "Đang đóng app cũ và cài / mở bản mới…",
+    message: "Đang đóng app cũ và cài / mở bản mới (giữ nguyên data)…",
     will_restart: true,
   });
-  const bat = path.resolve(String(batPath || ""));
-  const workDir = path.resolve(String(cwd || path.dirname(bat)));
+  const script = path.resolve(String(scriptPath || ""));
+  const workDir = path.resolve(String(cwd || path.dirname(script)));
   if (typeof process.send === "function") {
     try {
       process.send({
         type: "fbps-apply-update",
-        batPath: bat,
+        batPath: script,
         cwd: workDir,
       });
-      // If Electron parent never kills us (IPC bug), force-exit so BAT can ren EXE
+      // If Electron parent never kills us (IPC bug), force-exit so script can ren EXE
       setTimeout(() => {
         try {
           process.exit(0);
@@ -988,6 +1195,6 @@ export function requestUpdateRestart(batPath, cwd) {
       /* fall through */
     }
   }
-  scheduleRestart(bat, workDir);
+  scheduleRestart(script, workDir);
   return false;
 }

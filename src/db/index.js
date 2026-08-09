@@ -13,7 +13,39 @@ export function getDb() {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   migrate(db);
+  // One-shot: page cũ thiếu comment_when → immediate (comment ngay sau hẹn API)
+  try {
+    migrateCommentWhenDefault(db);
+  } catch {
+    /* non-fatal */
+  }
   return db;
+}
+
+/** Pages with auto-comment but no comment_when → set immediate (user expectation: after schedule API). */
+function migrateCommentWhenDefault(database) {
+  const rows = database
+    .prepare(
+      `SELECT page_row_id, link_lists_json FROM page_post_config WHERE comment_enabled = 1`
+    )
+    .all();
+  const upd = database.prepare(
+    `UPDATE page_post_config SET link_lists_json = ?, updated_at = datetime('now') WHERE page_row_id = ?`
+  );
+  for (const row of rows) {
+    let ll = {};
+    try {
+      ll = JSON.parse(row.link_lists_json || "{}") || {};
+    } catch {
+      ll = {};
+    }
+    if (ll.comment_when) continue; // already explicit
+    ll.comment_when = "immediate";
+    // Don't force min_likes wait if they never opted in
+    if (ll.comment_min_likes == null) ll.comment_min_likes = 0;
+    if (ll.comment_delay_minutes == null) ll.comment_delay_minutes = 0;
+    upd.run(JSON.stringify(ll), row.page_row_id);
+  }
 }
 
 function migrate(database) {

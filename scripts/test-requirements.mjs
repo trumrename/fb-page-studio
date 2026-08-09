@@ -133,6 +133,14 @@ const updater = read("src/services/updater.js");
 const updateUi = read("public/js/update.js");
 check("direct updater exposes progress", updater.includes("getUpdateProgress") && updater.includes("startUpdate") && apiRoutes.includes('"/update/progress"'));
 check("desktop updater exits Electron before replace", updater.includes("requestUpdateRestart") && read("electron/main.cjs").includes("fbps-apply-update"));
+check(
+  "NSIS update uses PowerShell (no cmd find hang) + data backup",
+  updater.includes("writeNsisUpdateScript") &&
+    updater.includes("backupUserDataBeforeUpdate") &&
+    updater.includes("_apply_update.ps1") &&
+    updater.includes("Get-Process -Name 'FB Page Studio'") &&
+    !updater.includes('| find /I "FB Page Studio.exe"')
+);
 check("update UI displays live download progress", updateUi.includes("watchUpdateProgress") && updateUi.includes("Đang tải"));
 check("updater bypasses stale GitHub cache", updater.includes('"Cache-Control"') && updater.includes("Date.now()"));
 check("updater prefers exact versioned asset over stale generic EXE", updater.includes("const cleanVersion") && updater.includes("FB-Page-Studio-Desktop-v") && updater.includes("pickReleaseAsset(assets, cfg.asset_name, remoteVersion)"));

@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quản lý Fanpage — Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    .stats { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.7rem; margin-bottom:1rem; }
+    @media(max-width:900px){ .stats{ grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    .stat {
+      border:1px solid var(--border); border-radius:14px; padding:.75rem .85rem;
+      background:rgba(255,255,255,.03);
+    }
+    .stat b { display:block; font-size:1.25rem; font-variant-numeric:tabular-nums; }
+    .stat span { color:var(--muted); font-size:.75rem; }
+    .acc-block {
+      border:1px solid var(--border); border-radius:16px; margin-bottom:1rem;
+      overflow:hidden; background:rgba(0,0,0,.18);
+    }
+    .acc-head {
+      display:flex; gap:.85rem; align-items:center; padding:.9rem 1rem;
+      background:rgba(255,255,255,.04); border-bottom:1px solid var(--border);
+      flex-wrap:wrap;
+    }
+    .acc-head img {
+      width:44px; height:44px; border-radius:50%; object-fit:cover; background:#123;
+    }
+    .acc-head .meta { color:var(--muted); font-size:.8rem; }
+    .page-row {
+      display:grid;
+      grid-template-columns: 52px 1.4fr .7fr .6fr .55fr 1.2fr auto;
+      gap:.65rem; align-items:center; padding:.7rem 1rem;
+      border-bottom:1px solid var(--border); font-size:.84rem;
+    }
+    @media(max-width:1100px){
+      .page-row { grid-template-columns: 44px 1fr; }
+      .page-row > :nth-child(n+3) { grid-column: 2; }
+    }
+    .page-row:last-child { border-bottom:0; }
+    .page-row img {
+      width:44px; height:44px; border-radius:10px; object-fit:cover; background:#0d2135;
+    }
+    .grade {
+      display:inline-flex; align-items:center; justify-content:center;
+      width:1.75rem; height:1.75rem; border-radius:8px; font-weight:800; font-size:.85rem;
+    }
+    .grade.A { background:rgba(53,215,161,.2); color:var(--ok); }
+    .grade.B { background:rgba(55,163,255,.2); color:var(--accent-2); }
+    .grade.C { background:rgba(245,201,106,.18); color:var(--warn); }
+    .grade.D { background:rgba(255,113,132,.18); color:var(--danger); }
+    .growth-pos { color:var(--ok); }
+    .growth-neg { color:var(--danger); }
+    .tip {
+      font-size:.78rem; color:var(--muted); line-height:1.35;
+      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+    }
+    .portfolio {
+      border:1px solid var(--border); border-radius:14px; padding:.9rem 1rem;
+      margin-bottom:1rem; background:rgba(255,255,255,.03);
+    }
+    .portfolio li { margin:.35rem 0; font-size:.88rem; }
+    .toolbar { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1rem; align-items:center; }
+    .toolbar input[type=search] {
+      flex:1; min-width:180px; padding:.55rem .75rem; border-radius:10px;
+      border:1px solid var(--border); background:rgba(0,0,0,.25); color:var(--text);
+    }
+    /* Dropdown lọc — tránh trắng lóa (Windows native select) */
+    #sortRank, select.sort-rank {
+      appearance: none;
+      -webkit-appearance: none;
+      min-width: 220px;
+      padding: .55rem 2rem .55rem .75rem !important;
+      border-radius: 10px;
+      border: 1px solid rgba(125, 211, 252, 0.45) !important;
+      background-color: #12253d !important;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%237dd3fc' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right .7rem center;
+      color: #f0f7ff !important;
+      font-weight: 650;
+      font-size: .86rem;
+      box-shadow: 0 1px 0 rgba(255,255,255,.04) inset;
+      cursor: pointer;
+    }
+    #sortRank:hover, #sortRank:focus {
+      border-color: #7dd3fc !important;
+      background-color: #1a3558 !important;
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.18);
+    }
+    #sortRank option {
+      background: #0f1f33;
+      color: #f0f7ff;
+      font-weight: 600;
+    }
+    .empty { color:var(--muted); padding:1.5rem; text-align:center; }
+    .detail-panel {
+      position:fixed; right:0; top:0; bottom:0; width:min(480px,100vw);
+      background:var(--bg-elevated); border-left:1px solid var(--border);
+      z-index:50; padding:1rem; overflow:auto; transform:translateX(100%);
+      transition:transform .2s ease; box-shadow:var(--shadow);
+    }
+    .detail-panel.open { transform:none; }
+    .detail-backdrop {
+      position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:40;
+      display:none;
+    }
+    .detail-backdrop.open { display:block; }
+    /* Nút trên nền tối — tương phản cao, không còn trắng lóa */
+    .page-row .btn-ghost, .acc-head .btn-ghost, .toolbar .btn-ghost,
+    .detail-panel .btn-ghost, .topbar-actions .btn-ghost {
+      background: rgba(30, 48, 78, 0.95);
+      border: 1px solid rgba(125, 211, 252, 0.42);
+      color: #f0f7ff;
+      font-weight: 650;
+    }
+    .page-row .btn-ghost:hover, .acc-head .btn-ghost:hover,
+    .detail-panel .btn-ghost:hover, .topbar-actions .btn-ghost:hover {
+      background: rgba(56, 100, 168, 0.95);
+      border-color: #7dd3fc;
+      color: #fff;
+    }
+    .insight-grid {
+      display:grid; grid-template-columns:1fr 1fr; gap:.45rem; margin:.55rem 0;
+    }
+    .insight-card {
+      border:1px solid var(--border); border-radius:10px; padding:.55rem .65rem;
+      background:rgba(0,0,0,.22);
+    }
+    .insight-card b {
+      display:block; font-size:1.05rem; font-variant-numeric:tabular-nums;
+      color:#e8f2ff;
+    }
+    .insight-card span { font-size:.72rem; color:var(--muted); }
+    .metric-row {
+      display:flex; justify-content:space-between; gap:.5rem;
+      padding:.28rem 0; border-bottom:1px solid rgba(255,255,255,.06);
+      font-size:.8rem;
+    }
+    .metric-row:last-child { border-bottom:0; }
+    .metric-row .k { color:var(--muted); }
+    .metric-row .v { font-variant-numeric:tabular-nums; font-weight:650; }
+  </style>
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="detail-backdrop" id="detailBackdrop"></div>
+  <div class="detail-panel" id="detailPanel"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <h1>Quản lý Fanpage</h1>
+            <div class="sub">Tài khoản FB · Page · Insights · Chất lượng · Đề xuất</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <a class="btn-ghost btn-sm" href="/index.html">OAuth kết nối</a>
+          <button type="button" class="btn-warn btn-sm" id="btnEnrich">Làm mới insights</button>
+          <button type="button" class="btn-primary btn-sm" id="btnReload">Tải lại</button>
+        </div>
+      </header>
+      <main class="content">
+        <div class="stats" id="stats"></div>
+        <div class="portfolio" id="portfolio"></div>
+        <div class="toolbar">
+          <input type="search" id="q" placeholder="Tìm page / page_id…" />
+          <select id="sortRank" class="sort-rank" aria-label="Lọc / xếp hạng fanpage">
+            <option value="">Cây theo tài khoản</option>
+            <option value="quality">Xếp hạng: chất lượng</option>
+            <option value="followers">Xếp hạng: followers</option>
+            <option value="growth">Xếp hạng: growth 7d</option>
+          </select>
+        </div>
+        <div id="tree"><div class="empty">Đang tải workspace…</div></div>
+      </main>
+    </div>
+  </div>
+  <script src="/js/shell.js"></script>
+  <script>
+    const $ = (s, r = document) => r.querySelector(s);
+    let workspace = null;
+
+    async function j(url, opts) {
+      const r = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        ...opts,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      return d;
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])
+      );
+    }
+    function fmtN(n) {
+      if (n == null || !Number.isFinite(Number(n))) return "—";
+      return Number(n).toLocaleString("vi-VN");
+    }
+    function growthHtml(g) {
+      if (!g || g.absolute == null) return '<span style="color:var(--faint)">—</span>';
+      const cls = g.absolute > 0 ? "growth-pos" : g.absolute < 0 ? "growth-neg" : "";
+      const sign = g.absolute > 0 ? "+" : "";
+      return `<span class="${cls}">${sign}${fmtN(g.absolute)}${g.percent != null ? ` (${sign}${g.percent}%)` : ""}</span>`;
+    }
+
+    function renderStats(t) {
+      const x = t.totals || {};
+      $("#stats").innerHTML = [
+        ["Tài khoản OAuth", x.oauth_accounts],
+        ["Tổng Page", x.pages],
+        ["Followers (cộng)", fmtN(x.followers_sum)],
+        ["Login cookie", x.login_accounts],
+        ["Sessions", x.sessions],
+      ]
+        .map(
+          ([l, v]) =>
+            `<div class="stat"><b>${v ?? "—"}</b><span>${l}</span></div>`
+        )
+        .join("");
+    }
+
+    function renderPortfolio(p) {
+      const tips = p?.tips || [];
+      if (!tips.length) {
+        $("#portfolio").innerHTML =
+          "<b>Đề xuất portfolio</b><div class='empty' style='padding:.5rem 0'>Chưa đủ dữ liệu — bấm Làm mới insights.</div>";
+        return;
+      }
+      $("#portfolio").innerHTML =
+        "<b>Đề xuất tổng</b><ul style='margin:.4rem 0 0;padding-left:1.1rem'>" +
+        tips
+          .map((t) => {
+            const c =
+              t.level === "danger"
+                ? "var(--danger)"
+                : t.level === "ok"
+                  ? "var(--ok)"
+                  : t.level === "warn"
+                    ? "var(--warn)"
+                    : "var(--muted)";
+            return `<li style="color:${c}">${esc(t.text)}</li>`;
+          })
+          .join("") +
+        "</ul>";
+    }
+
+    function pageRowHtml(p, accName) {
+      const q = p.quality || {};
+      const tip = q.top_action?.text || "—";
+      const g = q.grade || "D";
+      return `<div class="page-row" data-page-id="${p.id}">
+        <img src="${esc(p.picture_url || "")}" alt="" onerror="this.style.opacity=.25" />
+        <div>
+          <b>${esc(p.name || p.page_id)}</b>
+          <div style="color:var(--muted);font-size:.75rem">
+            Page ID <code>${esc(p.page_id)}</code>
+            · Nick: <b>${esc(accName || p.account_name || "—")}</b>
+          </div>
+        </div>
+        <div><span class="grade ${g}">${g}</span> <b>${q.score ?? "—"}</b>
+          <div style="font-size:.72rem;color:var(--muted)">${esc(q.grade_label || "")}</div>
+        </div>
+        <div>${fmtN(p.followers_count)}</div>
+        <div>${growthHtml(q.growth_7d || p.insights?.growth_7d)}</div>
+        <div class="tip" title="${esc(tip)}">${esc(tip)}</div>
+        <div style="display:flex;gap:.3rem;flex-wrap:wrap">
+          <button type="button" class="btn-ghost btn-sm" data-act="detail">Chi tiết</button>
+          <button type="button" class="btn-primary btn-sm" data-act="enrich">Insights</button>
+          <a class="btn-ghost btn-sm" href="/posting.html">Cấu hình</a>
+        </div>
+      </div>`;
+    }
+
+    function renderTree(data) {
+      const q = ($("#q").value || "").trim().toLowerCase();
+      const branches = data.oauth_accounts || [];
+      if (!branches.length) {
+        $("#tree").innerHTML =
+          '<div class="empty">Chưa có tài khoản OAuth. Vào <a href="/index.html">Kết nối Meta</a> để login & sync Page.<br/>Session cookie: <a href="/login.html">Auto Login</a>.</div>';
+        return;
+      }
+      let html = "";
+      for (const b of branches) {
+        let pages = b.pages || [];
+        if (q) {
+          pages = pages.filter(
+            (p) =>
+              String(p.name || "").toLowerCase().includes(q) ||
+              String(p.page_id || "").includes(q)
+          );
+        }
+        const acc = b.account;
+        const sum = b.summary || {};
+        html += `<div class="acc-block">
+          <div class="acc-head">
+            <img src="${esc(acc.picture_url || "")}" alt="" onerror="this.style.opacity=.3" />
+            <div style="flex:1">
+              <div><b>${esc(acc.name || "FB User")}</b>
+                <span style="color:var(--muted);font-size:.8rem"> · ${esc(acc.meta_app_name || "")}</span>
+              </div>
+              <div class="meta">
+                UID <code>${esc(acc.fb_user_id)}</code>
+                ${acc.email ? " · " + esc(acc.email) : ""}
+                · <b>${sum.page_count ?? pages.length}</b> page
+                · Followers ∑ ${fmtN(sum.followers_sum)}
+                · Quality TB ${sum.avg_quality ?? "—"}
+                · Grade A${sum.grades?.A || 0}/B${sum.grades?.B || 0}/C${sum.grades?.C || 0}/D${sum.grades?.D || 0}
+              </div>
+            </div>
+            <button type="button" class="btn-ghost btn-sm" data-enrich-acc="${acc.id}">Làm mới account</button>
+          </div>
+          <div class="page-row" style="font-size:.72rem;color:var(--muted);background:rgba(0,0,0,.15)">
+            <div></div><div>Page · thuộc nick</div><div>Chất lượng</div><div>Followers</div><div>Growth 7d</div><div>Đề xuất</div><div></div>
+          </div>
+          ${
+            pages.length
+              ? pages.map((p) => pageRowHtml(p, acc.name)).join("")
+              : '<div class="empty">Không có page (hoặc bị lọc tìm kiếm)</div>'
+          }
+        </div>`;
+      }
+
+      html += `<div class="acc-block" style="margin-top:1rem">
+        <div class="acc-head"><div>
+          <b>Tool an toàn — chỉ OAuth + Graph API</b>
+          <div class="meta">Cookie / id|pass|2fa nằm ở tool riêng <b>FB Session Ops</b>
+            (F:\\FB-Page-Studio\\projects\\fb-session-ops) — không gộp login rủi ro vào bản này.</div>
+        </div></div>
+      </div>`;
+
+      $("#tree").innerHTML = html;
+      bindTreeEvents();
+    }
+
+    async function renderRank(sort) {
+      const data = await j(`/api/workspace/rank?sort=${encodeURIComponent(sort)}&limit=80`);
+      const pages = data.pages || [];
+      $("#tree").innerHTML =
+        `<div class="acc-block"><div class="acc-head"><b>Xếp hạng · ${esc(sort)}</b></div>
+        <div class="page-row" style="font-size:.72rem;color:var(--muted)">
+          <div></div><div>Page</div><div>Chất lượng</div><div>Followers</div><div>Growth</div><div>Đề xuất</div><div></div>
+        </div>
+        ${pages.map((p) => pageRowHtml(p, p.account_name)).join("") || '<div class="empty">Trống</div>'}
+        </div>`;
+      bindTreeEvents();
+    }
+
+    function bindTreeEvents() {
+      $("#tree").querySelectorAll("[data-enrich-acc]").forEach((btn) => {
+        btn.onclick = async () => {
+          btn.disabled = true;
+          try {
+            await j(`/api/accounts/${btn.dataset.enrichAcc}/enrich`, {
+              method: "POST",
+              body: JSON.stringify({ force: true }),
+            });
+            await load();
+          } catch (e) {
+            alert(e.message);
+          }
+          btn.disabled = false;
+        };
+      });
+      $("#tree").querySelectorAll(".page-row[data-page-id]").forEach((row) => {
+        const id = row.dataset.pageId;
+        row.querySelectorAll("[data-act]").forEach((btn) => {
+          btn.onclick = async () => {
+            if (btn.dataset.act === "enrich") {
+              btn.disabled = true;
+              try {
+                await j(`/api/pages/${id}/enrich`, {
+                  method: "POST",
+                  body: JSON.stringify({ force: true }),
+                });
+                await load();
+              } catch (e) {
+                alert(e.message);
+              }
+              btn.disabled = false;
+            } else if (btn.dataset.act === "detail") {
+              openDetail(id);
+            }
+          };
+        });
+      });
+    }
+
+    function insightCardsHtml(sum, growth) {
+      const cards = [
+        ["Followers +7d", growth?.absolute != null ? (growth.absolute > 0 ? "+" : "") + fmtN(growth.absolute) : "—"],
+        ["Reach 7d", fmtN(sum.reach_7d)],
+        ["Impressions 7d", fmtN(sum.impressions_7d)],
+        ["Engagements 7d", fmtN(sum.engagements_7d)],
+        ["Post reach 7d", fmtN(sum.post_reach_7d)],
+        ["Reactions 7d", fmtN(sum.reactions_7d)],
+        ["Page views 7d", fmtN(sum.page_views_7d)],
+        ["Video views 7d", fmtN(sum.video_views_7d)],
+        ["Fan + / − 7d", `${fmtN(sum.fan_adds_7d)} / ${fmtN(sum.fan_removes_7d)}`],
+        ["Reach 28d", fmtN(sum.reach_28d)],
+        ["Engagements 28d", fmtN(sum.engagements_28d)],
+        ["Post reach 28d", fmtN(sum.post_reach_28d)],
+      ];
+      return (
+        `<div class="insight-grid">` +
+        cards
+          .map(
+            ([label, val]) =>
+              `<div class="insight-card"><b>${val}</b><span>${esc(label)}</span></div>`
+          )
+          .join("") +
+        `</div>`
+      );
+    }
+
+    function metricsListHtml(metrics) {
+      const entries = Object.entries(metrics || {}).filter(
+        ([k]) => !String(k).endsWith("__28d")
+      );
+      if (!entries.length) {
+        return `<div class="empty" style="padding:.5rem 0">Chưa có metric — bấm <b>Insights</b> (cần quyền <code>read_insights</code>).</div>`;
+      }
+      const labelOf = {
+        page_follows: "Followers (series)",
+        page_daily_follows: "Follow mới / ngày",
+        page_impressions: "Impressions",
+        page_impressions_unique: "Reach (unique)",
+        page_posts_impressions: "Post impressions",
+        page_posts_impressions_unique: "Post reach",
+        page_post_engagements: "Post engagements",
+        page_engaged_users: "Engaged users",
+        page_views_total: "Page views",
+        page_video_views: "Video views",
+        page_fan_adds: "Fan adds",
+        page_fan_removes: "Fan removes",
+        page_actions_post_reactions_total: "Reactions",
+        page_consumptions: "Consumptions (click)",
+      };
+      return entries
+        .map(([k, v]) => {
+          const title = labelOf[k] || v.title || k;
+          const main =
+            typeof v.sum === "number"
+              ? `∑ ${fmtN(v.sum)}`
+              : typeof v.latest === "number"
+                ? fmtN(v.latest)
+                : "—";
+          const sub =
+            typeof v.latest === "number" && typeof v.sum === "number"
+              ? ` · cuối ${fmtN(v.latest)}`
+              : "";
+          return `<div class="metric-row"><span class="k">${esc(title)}</span><span class="v">${main}${sub}</span></div>`;
+        })
+        .join("");
+    }
+
+    async function openDetail(id) {
+      const d = await j(`/api/pages/${id}`);
+      const p = d.page || {};
+      const q = d.quality || p.quality || {};
+      const ops = d.ops || {};
+      const rec = (q.recommendations || [])
+        .map(
+          (r) =>
+            `<li style="margin:.35rem 0"><b style="color:var(--${
+              r.level === "danger" ? "danger" : r.level === "ok" ? "ok" : r.level === "warn" ? "warn" : "muted"
+            })">[${esc(r.level)}]</b> ${esc(r.text)}</li>`
+        )
+        .join("");
+      const insights = p.insights || {};
+      const sum = insights.summary || {};
+      const growth = q.growth_7d || insights.growth_7d || null;
+      const m = insights.metrics || {};
+      const errNote =
+        insights.ok === false
+          ? `<div style="color:var(--warn);font-size:.8rem;margin:.4rem 0">Insights lỗi: ${esc(insights.error || "—")}</div>`
+          : insights.tried_errors?.length
+            ? `<div style="color:var(--muted);font-size:.72rem;margin:.35rem 0">Ghi chú API: ${esc(insights.tried_errors.slice(0, 3).join(" · "))}</div>`
+            : "";
+      $("#detailPanel").innerHTML = `
+        <button type="button" class="btn-ghost btn-sm" id="closeDetail">Đóng</button>
+        <div style="display:flex;gap:.75rem;margin-top:.75rem;align-items:center">
+          <img src="${esc(p.picture_url || "")}" style="width:56px;height:56px;border-radius:12px;object-fit:cover" onerror="this.style.opacity=.3" />
+          <div>
+            <h2 style="margin:0;font-size:1.1rem">${esc(p.name)}</h2>
+            <div style="color:var(--muted);font-size:.8rem">Thuộc nick: <b>${esc(p.account_name)}</b>
+              · UID ${esc(p.account_fb_user_id)}</div>
+            <div style="font-size:.8rem"><code>${esc(p.page_id)}</code></div>
+          </div>
+        </div>
+        <div style="margin:1rem 0;display:flex;gap:.5rem;align-items:center">
+          <span class="grade ${q.grade || "D"}">${q.grade || "D"}</span>
+          <b style="font-size:1.4rem">${q.score ?? "—"}</b>
+          <span style="color:var(--muted)">${esc(q.grade_label || "")}</span>
+        </div>
+        <p style="font-size:.88rem;color:var(--muted)">${esc(p.about || "Chưa có about")}</p>
+        <div style="font-size:.85rem;line-height:1.7">
+          Followers: <b>${fmtN(p.followers_count)}</b>
+          ${p.fan_count != null ? ` · Fans: <b>${fmtN(p.fan_count)}</b>` : ""}<br/>
+          Growth 7d: ${growthHtml(growth)}
+          ${insights.label ? ` · <span style="color:var(--muted)">${esc(insights.label)}</span>` : ""}<br/>
+          Category: ${esc(p.category || "—")}<br/>
+          Verification: ${esc(p.verification_status || "—")}<br/>
+          Enriched: ${esc(p.enriched_at || "—")}<br/>
+          Posting tool: ${ops.posting_enabled ? "ON" : "OFF"} · story ${ops.story_enabled ? "ON" : "OFF"}
+          · today ${ops.posts_today ?? 0}/${ops.max_posts_per_day ?? "—"}
+        </div>
+        <h3 style="margin:1rem 0 .35rem">Insights (Graph API)</h3>
+        ${errNote}
+        ${insightCardsHtml(sum, growth)}
+        <div style="margin-top:.35rem">${metricsListHtml(m)}</div>
+        <h3 style="margin:1rem 0 .35rem">Đề xuất</h3>
+        <ul style="padding-left:1.1rem;font-size:.88rem">${rec || "<li>Không có</li>"}</ul>
+        <details style="margin-top:.75rem">
+          <summary style="cursor:pointer;color:var(--muted);font-size:.8rem">JSON thô (debug)</summary>
+          <pre style="font-size:.68rem;overflow:auto;max-height:180px;background:rgba(0,0,0,.3);padding:.6rem;border-radius:10px">${esc(
+            JSON.stringify(
+              {
+                growth_7d: growth,
+                summary: sum,
+                label: insights.label,
+                metrics_keys: Object.keys(m),
+              },
+              null,
+              2
+            )
+          )}</pre>
+        </details>
+        <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:1rem">
+          <button type="button" class="btn-primary btn-sm" id="btnDetailEnrich">Làm mới insights page này</button>
+          <a class="btn-primary btn-sm" href="/posting.html">Cấu hình đăng</a>
+          <a class="btn-ghost btn-sm" href="${esc(p.link || "https://facebook.com/" + p.page_id)}" target="_blank" rel="noopener">Mở Page</a>
+        </div>`;
+      $("#detailPanel").classList.add("open");
+      $("#detailBackdrop").classList.add("open");
+      $("#closeDetail").onclick = closeDetail;
+      const be = $("#btnDetailEnrich");
+      if (be) {
+        be.onclick = async () => {
+          be.disabled = true;
+          be.textContent = "Đang tải…";
+          try {
+            await j(`/api/pages/${id}/enrich`, {
+              method: "POST",
+              body: JSON.stringify({ force: true }),
+            });
+            await openDetail(id);
+            await load();
+          } catch (e) {
+            alert(e.message);
+            be.disabled = false;
+            be.textContent = "Làm mới insights page này";
+          }
+        };
+      }
+    }
+    function closeDetail() {
+      $("#detailPanel").classList.remove("open");
+      $("#detailBackdrop").classList.remove("open");
+    }
+    $("#detailBackdrop").onclick = closeDetail;
+
+    async function load() {
+      const sort = $("#sortRank").value;
+      if (sort) {
+        workspace = await j("/api/workspace");
+        renderStats(workspace);
+        renderPortfolio(workspace.portfolio);
+        await renderRank(sort);
+        return;
+      }
+      workspace = await j(
+        "/api/workspace" + ($("#q").value ? `?q=${encodeURIComponent($("#q").value)}` : "")
+      );
+      renderStats(workspace);
+      renderPortfolio(workspace.portfolio);
+      renderTree(workspace);
+    }
+
+    $("#btnReload").onclick = () => load();
+    $("#btnEnrich").onclick = async () => {
+      if (!confirm("Làm mới insights tất cả page? Có thể mất vài phút (rate limit Meta).")) return;
+      try {
+        await j("/api/pages/enrich-all", {
+          method: "POST",
+          body: JSON.stringify({ force: true }),
+        });
+        await load();
+        alert("Đã enrich xong");
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+    let t;
+    $("#q").oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(load, 280);
+    };
+    $("#sortRank").onchange = () => load();
+
+    load().catch((e) => {
+      $("#tree").innerHTML = `<div class="empty">Lỗi: ${esc(e.message)}</div>`;
+    });
+  </script>
+</body>
+</html>

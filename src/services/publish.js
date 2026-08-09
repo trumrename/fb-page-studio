@@ -321,18 +321,37 @@ export async function getFacebookPostStatus(postId, pageToken) {
     return await graphGetJson(
       `/${postId}`,
       pageToken,
-      "id,created_time,permalink_url,is_published,scheduled_publish_time,status_type"
+      "id,created_time,permalink_url,is_published,scheduled_publish_time,status_type,reactions.summary(true).limit(0),likes.summary(true).limit(0)"
     );
   } catch (e) {
-    if (Number(e.code) !== 100) throw e;
-    const basic = await graphGetJson(
-      `/${postId}`,
-      pageToken,
-      "id,created_time,link"
-    );
-    if (!basic.permalink_url && basic.link) basic.permalink_url = basic.link;
-    return basic;
+    // Fallback without engagement fields (permission / API variance)
+    try {
+      return await graphGetJson(
+        `/${postId}`,
+        pageToken,
+        "id,created_time,permalink_url,is_published,scheduled_publish_time,status_type"
+      );
+    } catch (e2) {
+      if (Number(e2.code) !== 100 && Number(e.code) !== 100) throw e2;
+      const basic = await graphGetJson(
+        `/${postId}`,
+        pageToken,
+        "id,created_time,link"
+      );
+      if (!basic.permalink_url && basic.link) basic.permalink_url = basic.link;
+      return basic;
+    }
   }
+}
+
+/** Best-effort like/reaction count from a post status payload. */
+export function extractPostLikeCount(fb) {
+  if (!fb || typeof fb !== "object") return 0;
+  const reactions = Number(fb.reactions?.summary?.total_count);
+  if (Number.isFinite(reactions) && reactions >= 0) return reactions;
+  const likes = Number(fb.likes?.summary?.total_count);
+  if (Number.isFinite(likes) && likes >= 0) return likes;
+  return 0;
 }
 
 /** Comment as Page on a post */

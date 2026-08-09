@@ -483,6 +483,41 @@ export function deleteAccount(id) {
   return getDb().prepare(`DELETE FROM fb_accounts WHERE id = ?`).run(id);
 }
 
+/**
+ * Xóa nhiều tài khoản OAuth (+ page tokens CASCADE).
+ * @param {number[]} ids
+ * @returns {{ deleted: number[], missing: number[], deleted_count: number }}
+ */
+export function deleteAccounts(ids) {
+  const list = [
+    ...new Set(
+      (Array.isArray(ids) ? ids : [])
+        .map((n) => Number(n))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    ),
+  ];
+  if (!list.length) {
+    return { deleted: [], missing: [], deleted_count: 0 };
+  }
+  const db = getDb();
+  const del = db.prepare(`DELETE FROM fb_accounts WHERE id = ?`);
+  const exists = db.prepare(`SELECT id FROM fb_accounts WHERE id = ?`);
+  const deleted = [];
+  const missing = [];
+  const tx = db.transaction((rows) => {
+    for (const id of rows) {
+      if (!exists.get(id)) {
+        missing.push(id);
+        continue;
+      }
+      del.run(id);
+      deleted.push(id);
+    }
+  });
+  tx(list);
+  return { deleted, missing, deleted_count: deleted.length };
+}
+
 /** Internal: decrypt page token for future publish module */
 export function getPageToken(pageRowId) {
   const row = getDb()

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Auto Login FB — Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    .grid2 { display:grid; grid-template-columns: 1.1fr .9fr; gap:1rem; }
+    @media(max-width:960px){ .grid2{ grid-template-columns:1fr; } }
+    textarea.batch {
+      width:100%; min-height:140px; font-family:ui-monospace,Consolas,monospace;
+      font-size:.82rem; padding:.75rem; border-radius:12px;
+      border:1px solid var(--border); background:rgba(0,0,0,.25); color:var(--text);
+    }
+    .acc-card {
+      border:1px solid var(--border); border-radius:14px; padding:.85rem;
+      background:rgba(255,255,255,.03); margin-bottom:.65rem;
+    }
+    .acc-card.wait { border-color: rgba(245,201,106,.45); background: var(--warn-soft); }
+    .acc-card.alive { border-color: rgba(53,215,161,.35); }
+    .acc-card.error { border-color: rgba(255,113,132,.4); }
+    .badge {
+      display:inline-block; font-size:.72rem; font-weight:700; padding:.15rem .5rem;
+      border-radius:99px; border:1px solid var(--border); color:var(--muted);
+    }
+    .badge.alive { color:var(--ok); border-color:rgba(53,215,161,.4); }
+    .badge.wait { color:var(--warn); border-color:rgba(245,201,106,.45); }
+    .badge.error { color:var(--danger); border-color:rgba(255,113,132,.4); }
+    .code-box {
+      display:flex; gap:.5rem; margin-top:.5rem; flex-wrap:wrap; align-items:center;
+    }
+    .code-box input {
+      flex:1; min-width:120px; padding:.55rem .7rem; border-radius:10px;
+      border:1px solid var(--border); background:rgba(0,0,0,.25); color:var(--text);
+      font-size:1.1rem; letter-spacing:.15em; font-weight:700;
+    }
+    .err-detail { font-size:.8rem; color:var(--muted); margin-top:.35rem; line-height:1.4; }
+    .err-action { font-size:.8rem; color:var(--accent-2); margin-top:.2rem; }
+    .hint { font-size:.8rem; color:var(--muted); margin:.35rem 0 .75rem; }
+  </style>
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <h1>Auto Login Facebook</h1>
+            <div class="sub">id|pass|2fa · cookie vault · checkpoint 282</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" class="btn-ghost btn-sm" id="btnRefresh">Làm mới</button>
+          <a class="btn-primary btn-sm" href="/pages-hub.html">Quản lý Page →</a>
+        </div>
+      </header>
+      <main class="content">
+        <div class="grid2">
+          <section class="panel">
+            <h2 style="margin-top:0">Import tài khoản</h2>
+            <p class="hint">
+              Mỗi dòng: <code>id|pass|2fa</code> · 2fa = <b>secret</b> Authenticator (không phải mã 6 số).<br />
+              Tool ưu tiên cookie còn sống; chỉ login khi cookie chết. Browser mặc định <b>có cửa sổ</b> (ổn định hơn headless).
+            </p>
+            <textarea class="batch" id="batchText" placeholder="0901234567|MatKhau|JBSWY3DPEHPK3PXP&#10;user@gmail.com|PassKhac|SECRETBASE32"></textarea>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.75rem">
+              <button type="button" class="btn-primary" id="btnImport">Import batch</button>
+              <button type="button" class="btn-ok" id="btnEnsureAll">Ensure tất cả (cookie → login)</button>
+            </div>
+            <div id="importMsg" class="hint" style="margin-top:.75rem"></div>
+
+            <h3 style="margin-top:1.5rem">Cài Playwright (1 lần trên máy)</h3>
+            <pre style="font-size:.78rem;background:rgba(0,0,0,.3);padding:.75rem;border-radius:10px;overflow:auto">npm i playwright
+npx playwright install chromium</pre>
+            <p class="hint">Thiếu Playwright → lỗi <code>BROWSER_NOT_AVAILABLE</code>.</p>
+          </section>
+
+          <section class="panel">
+            <h2 style="margin-top:0">Danh sách nick</h2>
+            <div id="accList"><div class="hint">Đang tải…</div></div>
+          </section>
+        </div>
+
+        <section class="panel" style="margin-top:1rem">
+          <h2 style="margin-top:0">Catalog lỗi</h2>
+          <div id="errCatalog" class="hint">…</div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="/js/shell.js"></script>
+  <script>
+    const $ = (s) => document.querySelector(s);
+    async function j(url, opts) {
+      const r = await fetch(url, {
+        headers: { "Content-Type": "application/json", ...(opts?.headers || {}) },
+        ...opts,
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok && !data.code) throw new Error(data.error || data.message_vi || r.statusText);
+      return data;
+    }
+
+    function badge(status) {
+      const s = String(status || "idle");
+      let cls = "";
+      if (s === "alive") cls = "alive";
+      else if (s.includes("wait") || s.includes("282")) cls = "wait";
+      else if (s === "error" || s === "logging_in") cls = s === "error" ? "error" : "wait";
+      return `<span class="badge ${cls}">${s}</span>`;
+    }
+
+    function renderAcc(a) {
+      const need282 = a.status === "wait_282_code" || a.pending_challenge === "282_email";
+      const err = a.error_info;
+      return `<div class="acc-card ${a.status === "alive" ? "alive" : need282 ? "wait" : a.status === "error" ? "error" : ""}" data-id="${a.id}">
+        <div style="display:flex;justify-content:space-between;gap:.5rem;flex-wrap:wrap">
+          <div>
+            <b>${esc(a.label || a.login_id)}</b>
+            ${badge(a.status)}
+            ${a.has_2fa ? '<span class="badge">2FA</span>' : '<span class="badge">no 2FA</span>'}
+            ${a.session_id ? `<span class="badge">session #${a.session_id}</span>` : ""}
+          </div>
+          <div style="display:flex;gap:.35rem;flex-wrap:wrap">
+            <button type="button" class="btn-ghost btn-sm" data-act="ensure">Ensure</button>
+            <button type="button" class="btn-ghost btn-sm" data-act="login">Login</button>
+            <button type="button" class="btn-ghost btn-sm" data-act="totp">TOTP</button>
+          </div>
+        </div>
+        <div class="err-detail">ID: <code>${esc(a.login_id)}</code>
+          ${a.last_error_code ? ` · <b>${esc(a.last_error_code)}</b>` : ""}
+        </div>
+        ${err ? `<div class="err-detail">${esc(err.message_vi || "")}</div>
+          <div class="err-action">→ ${esc(err.action || "")}</div>` : ""}
+        ${need282 ? `<div class="code-box">
+          <input type="text" inputmode="numeric" maxlength="8" placeholder="Mã email 282" data-code />
+          <button type="button" class="btn-primary btn-sm" data-act="282">Gửi mã 282</button>
+        </div>` : ""}
+      </div>`;
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+      );
+    }
+
+    async function loadList() {
+      const data = await j("/api/http-ops/login/accounts");
+      const list = data.accounts || [];
+      $("#accList").innerHTML = list.length
+        ? list.map(renderAcc).join("")
+        : '<div class="hint">Chưa có nick — import batch bên trái.</div>';
+      $("#accList").querySelectorAll(".acc-card").forEach((card) => {
+        const id = card.dataset.id;
+        card.querySelectorAll("[data-act]").forEach((btn) => {
+          btn.addEventListener("click", () => onAct(id, btn.dataset.act, card));
+        });
+      });
+    }
+
+    async function onAct(id, act, card) {
+      try {
+        if (act === "ensure") {
+          const r = await j(`/api/http-ops/login/accounts/${id}/ensure`, {
+            method: "POST",
+            body: JSON.stringify({ poll_email: true, headless: false }),
+          });
+          alert(`${r.code}: ${r.message_vi || ""}\n${r.action || ""}`);
+        } else if (act === "login") {
+          const r = await j(`/api/http-ops/login/accounts/${id}/login`, {
+            method: "POST",
+            body: JSON.stringify({ poll_email: true, headless: false }),
+          });
+          alert(`${r.code}: ${r.message_vi || ""}\n${r.action || ""}`);
+        } else if (act === "totp") {
+          const r = await j(`/api/http-ops/login/accounts/${id}/totp-preview`);
+          alert(r.ok ? `Mã 2FA hiện tại: ${r.code}` : r.error);
+          return;
+        } else if (act === "282") {
+          const code = card.querySelector("[data-code]")?.value?.trim();
+          if (!code) return alert("Nhập mã email");
+          const r = await j(`/api/http-ops/login/accounts/${id}/submit-282-code`, {
+            method: "POST",
+            body: JSON.stringify({ code, headless: false }),
+          });
+          alert(`${r.code}: ${r.message_vi || ""}`);
+        }
+        await loadList();
+      } catch (e) {
+        alert(e.message);
+        await loadList();
+      }
+    }
+
+    $("#btnImport").onclick = async () => {
+      try {
+        const r = await j("/api/http-ops/login/accounts", {
+          method: "POST",
+          body: JSON.stringify({ batch_text: $("#batchText").value }),
+        });
+        $("#importMsg").textContent = `Import ${r.count} nick · lỗi parse: ${(r.errors || []).length}`;
+        if (r.errors?.length) {
+          $("#importMsg").textContent += "\n" + r.errors.map((e) => `L${e.line}: ${e.code}`).join(", ");
+        }
+        await loadList();
+      } catch (e) {
+        $("#importMsg").textContent = e.message;
+      }
+    };
+
+    $("#btnEnsureAll").onclick = async () => {
+      const data = await j("/api/http-ops/login/accounts");
+      for (const a of data.accounts || []) {
+        try {
+          await j(`/api/http-ops/login/accounts/${a.id}/ensure`, {
+            method: "POST",
+            body: JSON.stringify({ poll_email: true, headless: false }),
+          });
+        } catch (_) {}
+      }
+      await loadList();
+      alert("Đã chạy Ensure cho tất cả nick");
+    };
+
+    $("#btnRefresh").onclick = () => loadList();
+
+    async function loadCatalog() {
+      const r = await j("/api/http-ops/login/error-catalog");
+      $("#errCatalog").innerHTML = (r.errors || [])
+        .map(
+          (e) =>
+            `<div style="margin:.35rem 0"><code>${esc(e.code)}</code> — ${esc(e.message_vi)} <span style="color:var(--faint)">→ ${esc(e.action)}</span></div>`
+        )
+        .join("");
+    }
+
+    loadList();
+    loadCatalog();
+  </script>
+</body>
+</html>

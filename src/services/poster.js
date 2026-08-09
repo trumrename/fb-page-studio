@@ -20,6 +20,7 @@ import {
   moveToPosted,
   pickCaption,
   buildComment,
+  assignCommentForPost,
   ensureDir,
   listMediaFiles,
   captionPoolStats,
@@ -612,12 +613,12 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
 
     let commentText = null;
     let commentId = null;
+    let commentLinkLists = cfg.link_lists;
     if (cfg.comment_enabled && result?.post_id) {
-      commentText = buildComment(
-        cfg.comment_templates,
-        cfg.link_lists,
-        "random"
-      );
+      // 1 bài = 1 gán (random hoặc lần lượt theo page)
+      const assigned = assignCommentForPost(cfg);
+      commentText = assigned.text;
+      commentLinkLists = assigned.link_lists || cfg.link_lists;
       if (commentText) {
         try {
           const c = await publishComment(
@@ -646,6 +647,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
           });
           savePagePostConfig(pageRowId, {
             ...cfg,
+            link_lists: commentLinkLists,
             next_slot_index: slot + 1,
             caption_slot_index: caption ? selectedCaptionSlot + 1 : captionSlot,
             last_post_at: new Date().toISOString().replace("T", " ").slice(0, 19),
@@ -685,6 +687,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
 
     savePagePostConfig(pageRowId, {
       ...cfg,
+      link_lists: commentLinkLists,
       next_slot_index: slot + 1,
       caption_slot_index: caption ? selectedCaptionSlot + 1 : captionSlot,
       last_post_at: new Date().toISOString().replace("T", " ").slice(0, 19),

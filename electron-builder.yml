@@ -55,7 +55,9 @@ nsis:
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
+  # NEVER wipe %APPDATA%\fb-page-studio (accounts, pages, tokens, schedules)
   deleteAppDataOnUninstall: false
+  # Keep AppData across upgrade; only replace install files under Program Files
   include: build/installer.nsh
 extraMetadata:
   main: electron/main.cjs

@@ -8,11 +8,14 @@ import {
   publishText,
   publishPhoto,
   publishVideo,
+  publishComment,
   listScheduledPosts,
   getFacebookPostStatus,
+  extractPostLikeCount,
   validateScheduleUnix,
 } from "./publish.js";
-import { pickCaption } from "./mediaLibrary.js";
+import path from "path";
+import { pickCaption, buildComment, assignCommentForPost } from "./mediaLibrary.js";
 import { getCaptionStats, getPagePostConfig, savePagePostConfig } from "./poster.js";
 import {
   getActiveTimesForPageRow,
@@ -29,6 +32,7 @@ import {
   enforceBulkLimits,
   ensureAntiSpamTables,
   getAntiSpamSettings,
+  countUnusedMedia,
 } from "./antiSpam.js";
 import {
   resolvePagePostingPolicy,
@@ -70,6 +74,142 @@ function randBetweenSeeded(rng, min, max) {
   if (!Number.isFinite(a)) return 0;
   if (!Number.isFinite(b) || b <= a) return a;
   return a + rng() * (b - a);
+}
+
+/**
+ * Ước lượng loại bài theo sequence page + force post_type bulk.
+ * @returns {"photo"|"video"|"text"}
+ */
+function resolvePlannedPostType(cfg, slotIndex, forceType) {
+  const forced = String(forceType || "").toLowerCase().trim();
+  if (forced && forced !== "auto") {
+    if (forced === "image") return "photo";
+    if (forced === "photo" || forced === "video" || forced === "text") return forced;
+  }
+  const sequence =
+    Array.isArray(cfg?.sequence) && cfg.sequence.length
+      ? cfg.sequence
+      : ["photo", "video", "text"];
+  const t = String(sequence[slotIndex % sequence.length] || "photo").toLowerCase();
+  if (t === "image") return "photo";
+  if (t === "video" || t === "text") return t;
+  return "photo";
+}
+
+/**
+ * Kiểm tra đủ media (ảnh/video chưa dùng) cho toàn bộ slot kế hoạch.
+ * Nhiều page dùng chung 1 folder → cộng dồn required theo folder|kind.
+ */
+function assessMediaForPlan(finalPlan, { postType, bodyPostType } = {}) {
+  const force = postType || (bodyPostType && bodyPostType !== "auto" ? bodyPostType : null);
+  const mediaNeeds = new Map(); // key folder|kind
+  const pageNotes = [];
+  let totalSlots = 0;
+  let mediaSlots = 0;
+
+  for (const p of finalPlan || []) {
+    if (p.error || !p.slots?.length) continue;
+    const cfg = getPagePostConfig(p.page_row_id);
+    const folder = String(cfg?.media_folder || "").trim();
+    const startSlot = Number(cfg?.next_slot_index) || 0;
+    let pagePhoto = 0;
+    let pageVideo = 0;
+    let pageText = 0;
+
+    for (let i = 0; i < p.slots.length; i++) {
+      totalSlots += 1;
+      const type = resolvePlannedPostType(cfg, startSlot + i, force);
+      if (type === "text") {
+        pageText += 1;
+        continue;
+      }
+      mediaSlots += 1;
+      const kind = type === "video" ? "video" : "photo";
+      if (kind === "video") pageVideo += 1;
+      else pagePhoto += 1;
+      const folderKey = folder
+        ? path.resolve(folder).toLowerCase()
+        : `__empty__:${p.page_row_id}`;
+      const key = `${folderKey}|${kind}`;
+      if (!mediaNeeds.has(key)) {
+        mediaNeeds.set(key, {
+          folder: folder || null,
+          kind,
+          required: 0,
+          available: 0,
+          page_names: [],
+        });
+      }
+      const need = mediaNeeds.get(key);
+      need.required += 1;
+      if (!need.page_names.includes(p.page_name)) {
+        need.page_names.push(p.page_name);
+      }
+    }
+    pageNotes.push({
+      page_row_id: p.page_row_id,
+      page_name: p.page_name,
+      slots: p.slots.length,
+      need_photo: pagePhoto,
+      need_video: pageVideo,
+      need_text: pageText,
+      media_folder: folder || null,
+    });
+  }
+
+  const pools = [];
+  const shortfalls = [];
+  const messages = [];
+
+  for (const need of mediaNeeds.values()) {
+    let available = 0;
+    if (!need.folder) {
+      available = 0;
+    } else {
+      try {
+        available = countUnusedMedia(need.folder, need.kind);
+      } catch {
+        available = 0;
+      }
+    }
+    need.available = available;
+    need.ok = available >= need.required;
+    need.short = Math.max(0, need.required - available);
+    pools.push({ ...need });
+    if (!need.ok) {
+      shortfalls.push({ ...need });
+      const kindLabel = need.kind === "video" ? "video" : "ảnh";
+      if (!need.folder) {
+        messages.push(
+          `Thiếu folder media cho ${need.page_names.slice(0, 4).join(", ")}` +
+            `${need.page_names.length > 4 ? "…" : ""} — cần ${need.required} ${kindLabel}`
+        );
+      } else {
+        messages.push(
+          `Thiếu ${kindLabel}: cần ${need.required}, còn ${available} trong ${need.folder}` +
+            (need.page_names.length
+              ? ` (page: ${need.page_names.slice(0, 5).join(", ")}${need.page_names.length > 5 ? "…" : ""})`
+              : "")
+        );
+      }
+    }
+  }
+
+  const ok = shortfalls.length === 0;
+  return {
+    ok,
+    total_slots: totalSlots,
+    media_slots: mediaSlots,
+    pools,
+    shortfalls,
+    messages,
+    pages: pageNotes,
+    summary: ok
+      ? totalSlots
+        ? `Đủ media cho ${mediaSlots} slot cần ảnh/video (${totalSlots} slot tổng).`
+        : "Không có slot để kiểm tra media."
+      : `THIẾU media — ${shortfalls.length} kho không đủ. ${messages[0] || ""}`,
+  };
 }
 
 function logScheduled(row) {
@@ -279,10 +419,49 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       });
     }
 
+    // Auto comment: mỗi bài full = 1 link (random hoặc lần lượt trong list của page).
+    // - comment_when=immediate (MẶC ĐỊNH): Graph comment NGAY sau khi hẹn API
+    // - comment_when=after_publish: chỉ gửi khi bài publish (+ delay/like; cần tool mở)
+    let pendingComment = null;
+    let commentIdNow = null;
+    let commentWhen = "immediate";
+    let commentImmediateError = null;
+    let commentLinkLists = cfg.link_lists;
+    if (cfg.comment_enabled) {
+      const assigned = assignCommentForPost(cfg);
+      pendingComment = assigned.text;
+      commentLinkLists = assigned.link_lists || cfg.link_lists;
+      // Default IMMEDIATE — thiếu field trên page cũ = comment ngay (đúng “sau khi đăng API”)
+      const whenRaw = String(
+        commentLinkLists?.comment_when || cfg.link_lists?.comment_when || "immediate"
+      )
+        .trim()
+        .toLowerCase();
+      commentWhen =
+        whenRaw === "after_publish" ||
+        whenRaw === "publish" ||
+        whenRaw === "sau_publish" ||
+        whenRaw === "when_published"
+          ? "after_publish"
+          : "immediate";
+
+      if (pendingComment && commentWhen === "immediate" && result?.post_id) {
+        try {
+          const c = await publishComment(result.post_id, pageToken, pendingComment);
+          commentIdNow = c.comment_id || null;
+        } catch (ce) {
+          // FB thường chặn comment bài unpublished → giữ pending, gửi ngay khi publish (reconcile)
+          commentImmediateError = ce.message || String(ce);
+          commentIdNow = null;
+        }
+      }
+    }
+
     // Do NOT write future scheduled time into last_post_at (would block Direct Local forever).
     // Quota/interval for Direct Local read post_logs (scheduled + direct) via schedulePolicy.
     savePagePostConfig(pageRowId, {
       ...cfg,
+      link_lists: commentLinkLists,
       next_slot_index: slot + 1,
       caption_slot_index: usedPoolCaption && caption ? selectedCaptionSlot + 1 : captionSlot,
     });
@@ -299,9 +478,12 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       fb_post_url: result.post_url,
       day_index: null,
       status: "scheduled",
-      error: null,
-      comment_text: null,
-      comment_id: null,
+      error: commentImmediateError
+        ? `Comment ngay fail (sẽ thử lại sau publish): ${commentImmediateError}`
+        : null,
+      // Nếu comment ngay OK → đã có comment_id; không thì pending đến lúc publish
+      comment_text: pendingComment || null,
+      comment_id: commentIdNow,
       scheduled_publish_time: scheduledIso,
     });
 
@@ -315,6 +497,14 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       log,
       media_moved_to: movedPath,
       media_hash: fin.hash,
+      comment_pending: Boolean(pendingComment) && !commentIdNow,
+      comment_immediate: Boolean(commentIdNow),
+      comment_when: commentWhen,
+      comment_id: commentIdNow,
+      comment_error: commentImmediateError,
+      comment_text_preview: pendingComment
+        ? String(pendingComment).slice(0, 120)
+        : null,
       page: { id: page.id, page_id: page.page_id, name: page.name },
     };
   } catch (e) {
@@ -812,6 +1002,12 @@ export async function scheduleBulk(body = {}) {
         ? "windows"
         : "active_times");
 
+  /** Tính đủ/thiếu media (ảnh/video) theo sequence + slot — gom theo folder chung */
+  const mediaCheck = assessMediaForPlan(finalPlan, {
+    postType,
+    bodyPostType: body.post_type,
+  });
+
   if (dryRun) {
     return {
       dry_run: true,
@@ -826,6 +1022,8 @@ export async function scheduleBulk(body = {}) {
       page_gap_minutes_max: pageGapMax,
       page_staggers: pageStaggers,
       days_ahead: daysAhead,
+      media_check: mediaCheck,
+      media_ok: mediaCheck.ok,
       policy_note:
         "Giờ / gap / max bài/ngày lấy từ cấu hình Page + anti-spam (khớp đăng trực tiếp). " +
         "Hôm nay trừ slot đã đăng + đã hẹn FB. Bật ignore_page_quota để bỏ cap page (không khuyến nghị). " +
@@ -839,6 +1037,17 @@ export async function scheduleBulk(body = {}) {
         })),
       })),
     };
+  }
+
+  // Chặn đăng khi thiếu media (trừ khi ignore_media_check)
+  if (!mediaCheck.ok && !body.ignore_media_check) {
+    const err = new Error(
+      mediaCheck.messages?.[0] ||
+        `Thiếu media: cần thêm tài nguyên trước khi hẹn/đăng (${mediaCheck.shortfalls?.length || 0} kho thiếu)`
+    );
+    err.code = "MEDIA_SHORT";
+    err.media_check = mediaCheck;
+    throw err;
   }
 
   const results = [];
@@ -869,6 +1078,13 @@ export async function scheduleBulk(body = {}) {
         post_id: r.post?.post_id || null,
         error: r.error || null,
         caption: r.log?.caption || null,
+        // Every successful schedule should get its own link/comment (not only first)
+        comment_pending: !!r.comment_pending,
+        comment_immediate: !!r.comment_immediate,
+        comment_when: r.comment_when || null,
+        comment_id: r.comment_id || null,
+        comment_error: r.comment_error || null,
+        comment_preview: r.comment_text_preview || r.log?.comment_text || null,
       });
       // Gentle on Graph; slightly longer when anti ON
       await sleep(antiOn ? 450 : 300);
@@ -896,6 +1112,8 @@ export async function scheduleBulk(body = {}) {
     page_gap_minutes_min: pageGapMin,
     page_gap_minutes_max: pageGapMax,
     days_ahead: daysAhead,
+    media_check: mediaCheck,
+    media_ok: mediaCheck.ok,
     results,
     total_ok: results.reduce((n, r) => n + (r.scheduled_ok || 0), 0),
     total_fail: results.reduce((n, r) => n + (r.scheduled_fail || 0), 0),
@@ -932,12 +1150,153 @@ export async function listFbScheduledForPage(pageRowId) {
   };
 }
 
+/** Read delay/min-likes from page link_lists (defaults 0 = off). */
+function getCommentWaitRules(cfg) {
+  const ll = cfg?.link_lists || {};
+  // Only apply delay/likes when mode is after_publish
+  const whenRaw = String(ll.comment_when || "immediate").trim().toLowerCase();
+  const afterPublish =
+    whenRaw === "after_publish" ||
+    whenRaw === "publish" ||
+    whenRaw === "sau_publish" ||
+    whenRaw === "when_published";
+  if (!afterPublish) {
+    // immediate mode (or missing): no artificial wait — comment ASAP after publish fallback
+    return { delayMin: 0, minLikes: 0, afterPublish: false };
+  }
+  const delayMin = Math.max(
+    0,
+    Math.min(7 * 24 * 60, Number(ll.comment_delay_minutes) || 0)
+  );
+  const minLikes = Math.max(0, Math.min(1_000_000, Number(ll.comment_min_likes) || 0));
+  return { delayMin, minLikes, afterPublish: true };
+}
+
+/**
+ * True when enough time passed after scheduled publish + optional like threshold.
+ * @returns {{ ready: boolean, reason?: string, likes?: number, delay_min?: number, min_likes?: number, ready_at?: string }}
+ */
+function evaluateCommentReady(row, cfg, fbStatus = null) {
+  const { delayMin, minLikes } = getCommentWaitRules(cfg);
+  const publishMs = Date.parse(row.scheduled_publish_time || "") || 0;
+  const readyAtMs = publishMs + delayMin * 60 * 1000;
+  if (delayMin > 0 && Date.now() < readyAtMs) {
+    return {
+      ready: false,
+      reason: "delay",
+      delay_min: delayMin,
+      min_likes: minLikes,
+      ready_at: new Date(readyAtMs).toISOString(),
+    };
+  }
+  if (minLikes > 0) {
+    const likes = extractPostLikeCount(fbStatus);
+    if (likes < minLikes) {
+      return {
+        ready: false,
+        reason: "likes",
+        likes,
+        delay_min: delayMin,
+        min_likes: minLikes,
+      };
+    }
+    return { ready: true, likes, delay_min: delayMin, min_likes: minLikes };
+  }
+  return { ready: true, delay_min: delayMin, min_likes: minLikes };
+}
+
+/**
+ * After a scheduled post is live on FB: post pending auto-comment (if any).
+ * Supports: delay minutes after publish + min likes before comment.
+ * Returns { commented, comment_id, comment_text, error?, waiting? }.
+ */
+async function applyPendingCommentForLog(row, token, fbStatus = null) {
+  const db = getDb();
+  // Already commented
+  if (row.comment_id) {
+    return { commented: true, comment_id: row.comment_id, comment_text: row.comment_text, skipped: true };
+  }
+  // Failed marker — don't loop forever
+  if (row.comment_text && String(row.comment_text).startsWith("[comment failed]")) {
+    return { commented: false, skipped: true, error: "previous comment fail" };
+  }
+
+  const cfg = getPagePostConfig(row.page_row_id);
+  if (!cfg.comment_enabled && !(row.comment_text && String(row.comment_text).trim())) {
+    return { commented: false, skipped: true, reason: "comment_disabled" };
+  }
+
+  // Need fresh engagement when min_likes > 0
+  const { minLikes } = getCommentWaitRules(cfg);
+  let fb = fbStatus;
+  if (minLikes > 0 && row.fb_post_id) {
+    try {
+      fb = await getFacebookPostStatus(row.fb_post_id, token);
+    } catch {
+      /* use existing */
+    }
+  }
+
+  const gate = evaluateCommentReady(row, cfg, fb);
+  if (!gate.ready) {
+    return {
+      commented: false,
+      waiting: true,
+      reason: gate.reason,
+      likes: gate.likes,
+      delay_min: gate.delay_min,
+      min_likes: gate.min_likes,
+      ready_at: gate.ready_at || null,
+    };
+  }
+
+  let message = row.comment_text && String(row.comment_text).trim() ? String(row.comment_text).trim() : null;
+  if (!message) {
+    // No pre-assigned text (old rows / enabled later): assign now (advances sequential cursor)
+    if (!cfg.comment_enabled) {
+      return { commented: false, skipped: true, reason: "comment_disabled" };
+    }
+    const assigned = assignCommentForPost(cfg);
+    message = assigned.text;
+    if (assigned.link_lists) {
+      savePagePostConfig(row.page_row_id, { ...cfg, link_lists: assigned.link_lists });
+    }
+  }
+  if (!message || !row.fb_post_id) {
+    return { commented: false, skipped: true, reason: "no_message_or_post" };
+  }
+
+  try {
+    const c = await publishComment(row.fb_post_id, token, message);
+    db.prepare(
+      `UPDATE post_logs SET comment_text = ?, comment_id = ? WHERE id = ?`
+    ).run(message, c.comment_id || null, row.id);
+    return {
+      commented: true,
+      comment_id: c.comment_id || null,
+      comment_text: message,
+      likes: gate.likes,
+      delay_min: gate.delay_min,
+    };
+  } catch (e) {
+    const failText = `[comment failed] ${message}`;
+    db.prepare(
+      `UPDATE post_logs SET comment_text = ?, comment_id = NULL, error = COALESCE(error, ?) WHERE id = ?`
+    ).run(failText, `Auto comment: ${e.message || e}`, row.id);
+    return {
+      commented: false,
+      error: e.message || String(e),
+      comment_text: failText,
+    };
+  }
+}
+
 /** Reconcile overdue local scheduled logs against the Facebook object. */
 export async function reconcileScheduledLogs({ limit = 50 } = {}) {
   const db = getDb();
   const rows = db.prepare(`
     SELECT l.id, l.page_row_id, l.page_id, l.page_name, l.fb_post_id, l.fb_post_url,
-           l.scheduled_publish_time, p.page_token_enc
+           l.scheduled_publish_time, l.comment_text, l.comment_id, p.page_token_enc
     FROM post_logs l
     JOIN fb_pages p ON p.id = l.page_row_id
     WHERE l.status IN ('scheduled', 'schedule_overdue')
@@ -950,6 +1309,8 @@ export async function reconcileScheduledLogs({ limit = 50 } = {}) {
 
   const results = [];
   const pendingByPage = new Map();
+  let commentsOk = 0;
+  let commentsFail = 0;
   for (const row of rows) {
     try {
       const token = decryptToken(row.page_token_enc);
@@ -984,17 +1345,113 @@ export async function reconcileScheduledLogs({ limit = 50 } = {}) {
           status === "schedule_overdue" ? "Đã qua giờ dự kiến nhưng Facebook vẫn báo chưa xuất bản" : null,
           row.id
         );
-      results.push({ id: row.id, page_name: row.page_name, status, post_url: url });
+
+      let commentResult = null;
+      if (status === "published") {
+        // Small delay so Graph is ready for comments right after publish
+        await sleep(400);
+        commentResult = await applyPendingCommentForLog(
+          { ...row, fb_post_url: url, scheduled_publish_time: row.scheduled_publish_time },
+          token,
+          fb
+        );
+        if (commentResult.commented && !commentResult.skipped) commentsOk++;
+        if (commentResult.error && !commentResult.skipped && !commentResult.waiting) commentsFail++;
+      }
+
+      results.push({
+        id: row.id,
+        page_name: row.page_name,
+        status,
+        post_url: url,
+        comment: commentResult
+          ? {
+              ok: !!commentResult.commented,
+              comment_id: commentResult.comment_id || null,
+              error: commentResult.error || null,
+              skipped: !!commentResult.skipped,
+              waiting: !!commentResult.waiting,
+              reason: commentResult.reason || null,
+              likes: commentResult.likes,
+              delay_min: commentResult.delay_min,
+              min_likes: commentResult.min_likes,
+              ready_at: commentResult.ready_at || null,
+            }
+          : null,
+      });
     } catch (e) {
       results.push({ id: row.id, page_name: row.page_name, status: "unknown", error: e.message });
     }
     await sleep(250);
   }
+
+  // Second pass: ALL published posts still missing comment (not only first / transition).
+  // Includes delay/likes wait — will retry every reconcile tick.
+  const needComment = db.prepare(`
+    SELECT l.id, l.page_row_id, l.page_id, l.page_name, l.fb_post_id, l.fb_post_url,
+           l.comment_text, l.comment_id, l.scheduled_publish_time, p.page_token_enc
+    FROM post_logs l
+    JOIN fb_pages p ON p.id = l.page_row_id
+    WHERE l.status = 'published'
+      AND l.fb_post_id IS NOT NULL
+      AND (l.comment_id IS NULL OR l.comment_id = '')
+      AND (
+        (l.comment_text IS NOT NULL AND l.comment_text != '' AND l.comment_text NOT LIKE '[comment failed]%')
+        OR EXISTS (
+          SELECT 1 FROM page_post_config c
+          WHERE c.page_row_id = l.page_row_id AND c.comment_enabled = 1
+        )
+      )
+    ORDER BY l.scheduled_publish_time ASC, l.id ASC
+    LIMIT ?
+  `).all(Math.min(80, Math.max(1, Number(limit) || 50)));
+
+  let commentsWaiting = 0;
+  for (const row of needComment) {
+    // Skip if already handled in first pass this tick
+    if (results.some((x) => x.id === row.id && x.comment)) continue;
+    try {
+      const token = decryptToken(row.page_token_enc);
+      const cr = await applyPendingCommentForLog(row, token, null);
+      if (cr.commented && !cr.skipped) commentsOk++;
+      if (cr.error && !cr.skipped && !cr.waiting) commentsFail++;
+      if (cr.waiting) commentsWaiting++;
+      results.push({
+        id: row.id,
+        page_name: row.page_name,
+        status: cr.waiting ? "published_awaiting_comment" : "published_comment_retry",
+        comment: {
+          ok: !!cr.commented,
+          comment_id: cr.comment_id || null,
+          error: cr.error || null,
+          skipped: !!cr.skipped,
+          waiting: !!cr.waiting,
+          reason: cr.reason || null,
+          likes: cr.likes,
+          delay_min: cr.delay_min,
+          min_likes: cr.min_likes,
+          ready_at: cr.ready_at || null,
+        },
+      });
+    } catch (e) {
+      results.push({
+        id: row.id,
+        page_name: row.page_name,
+        status: "published_comment_retry",
+        error: e.message,
+      });
+    }
+    await sleep(300);
+  }
+
   return {
     checked: rows.length,
     published: results.filter((r) => r.status === "published").length,
     overdue: results.filter((r) => r.status === "schedule_overdue").length,
     unknown: results.filter((r) => r.status === "unknown").length,
+    comments_ok: commentsOk,
+    comments_fail: commentsFail,
+    comments_waiting: commentsWaiting,
     results,
   };
 }

@@ -48,6 +48,122 @@
       content: " · đang chọn";
       font-weight:600; font-size:.75rem; color:#34d399;
     }
+
+    /* === Form hẹn giờ kiểu mẫu: ô giờ lớn + Ngày/Tháng/Năm === */
+    .sched-form {
+      border: 2px solid rgba(125, 211, 252, .55);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(56, 189, 248, .12), rgba(14, 165, 233, .05));
+      padding: .85rem 1rem 1rem;
+      margin-top: .55rem;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    .sched-form + .sched-form { margin-top: .65rem; }
+    .sched-form-label {
+      display: block;
+      font-weight: 700;
+      font-size: .92rem;
+      color: #e0f2fe;
+      margin: 0 0 .45rem;
+      line-height: 1.35;
+    }
+    .sched-form-label span.hint-inline {
+      font-weight: 500;
+      color: #7dd3fc;
+      font-size: .82rem;
+    }
+    textarea.sched-times {
+      width: 100%;
+      min-height: 9.5rem;
+      box-sizing: border-box;
+      resize: vertical;
+      font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+      font-size: 1.05rem;
+      line-height: 1.55;
+      letter-spacing: .02em;
+      padding: .75rem .9rem;
+      border-radius: 8px;
+      border: 1px solid rgba(125, 211, 252, .45);
+      background: #f8fcff;
+      color: #0c4a6e;
+      box-shadow: inset 0 1px 2px rgba(14, 116, 144, .08);
+    }
+    textarea.sched-times::placeholder { color: #64748b; opacity: .85; }
+    textarea.sched-times:focus {
+      outline: none;
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, .28);
+    }
+    .sched-date-box {
+      margin-top: .75rem;
+      padding: .65rem .75rem .75rem;
+      border-radius: 8px;
+      border: 1px solid rgba(125, 211, 252, .4);
+      background: rgba(255, 255, 255, .06);
+    }
+    .sched-date-title {
+      font-weight: 700;
+      font-size: .9rem;
+      color: #bae6fd;
+      margin: 0 0 .5rem;
+    }
+    .sched-date-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .55rem .75rem;
+      align-items: flex-end;
+    }
+    .sched-date-field {
+      display: flex;
+      flex-direction: column;
+      gap: .25rem;
+      min-width: 4.5rem;
+    }
+    .sched-date-field > span {
+      font-size: .78rem;
+      font-weight: 600;
+      color: #7dd3fc;
+    }
+    .sched-date-field input {
+      width: 5.2rem;
+      max-width: 100%;
+      text-align: center;
+      font-size: 1rem;
+      font-weight: 700;
+      padding: .4rem .35rem;
+      border-radius: 6px;
+      border: 1px solid rgba(125, 211, 252, .5);
+      background: #f0f9ff;
+      color: #0c4a6e;
+    }
+    .sched-date-field input.sched-year { width: 6rem; }
+    .sched-date-field input:focus {
+      outline: none;
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, .25);
+    }
+    .sched-date-field.grow { flex: 1; min-width: 7rem; }
+    .sched-date-field.grow input { width: 100%; max-width: 9rem; }
+    .sched-extra-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .55rem .75rem;
+      margin-top: .65rem;
+      align-items: flex-end;
+    }
+    .sched-extra-row .sched-date-field input {
+      width: 100%;
+      max-width: 8rem;
+      text-align: left;
+      padding-left: .5rem;
+    }
+    .bulk-opt-panel.is-active > .sched-form {
+      border-color: rgba(56, 189, 248, .85);
+      box-shadow: 0 0 0 1px rgba(56, 189, 248, .25), inset 0 1px 0 rgba(255,255,255,.06);
+    }
+    .bulk-opt-panel.is-dim > .sched-form {
+      filter: none;
+    }
   </style>
 </head>
 <body>
@@ -107,7 +223,7 @@
             <div class="hero-kicker">Graph schedule</div>
             <div class="hero-title">Feed ngay · Hẹn giờ hàng loạt · Giờ ưa thích từng page</div>
             <div class="hero-desc">
-              Caption random từ .txt/.csv · media inbox → posted · Meta đã gỡ page_fans_online — “giờ tích cực” = giờ ưa thích / preset VN.
+              Caption random từ .txt/.csv · media <b>CHUYỂN</b> (move) inbox → posted · Meta đã gỡ page_fans_online — “giờ tích cực” = giờ ưa thích / preset VN.
             </div>
           </div>
           <span class="badge live">Official API</span>
@@ -310,7 +426,7 @@
                     </div>
                   </div>
                   <div>
-                    <label>Kho đã đăng (posted)</label>
+                    <label>Kho đã đăng (posted) — chuyển, không copy</label>
                     <div style="display:flex;gap:.3rem">
                       <input type="text" id="bulkPostedFolder" placeholder="D:\\media\\posted" />
                       <button type="button" class="btn-ghost btn-sm" id="btnBulkPickPosted">Chọn</button>
@@ -331,109 +447,249 @@
               </div>
             </div>
 
-            <!-- ① List giờ — mặc định hiện -->
-            <div id="bulkFixedSubList" class="bulk-opt-panel is-active" style="margin-top:.65rem">
-              <div class="bulk-opt-hd">① Chỉ nhập giờ / list thời điểm</div>
-              <label style="display:block;margin-bottom:.35rem">Mỗi dòng 1 mốc (đủ dùng chỉ giờ)</label>
-              <textarea id="bulkTimes" rows="5" placeholder="09:00&#10;12:00&#10;19:00&#10;&#10;hoặc đủ ngày:&#10;2026-07-31 09:00&#10;31/07/2026 19:00"></textarea>
-              <p class="muted" style="margin:.4rem 0 0;font-size:.8rem;line-height:1.5">
-                <b>Ví dụ đơn giản:</b><br/>
-                <code>09:00</code><br/><code>19:00</code><br/>
-                → hôm nay 9h &amp; 19h (đã qua thì sang ngày mai).<br/>
-                <b>Nhiều ngày:</b> viết đủ ngày mỗi dòng, hoặc dùng chế độ ②.<br/>
-                Page đầu = đúng giờ · page sau = + gap A→B (ô bên dưới).
-              </p>
+            <!-- Auto comment: list link theo page · random hoặc lần lượt theo bài -->
+            <div class="panel section-gap" id="bulkCommentPanel" style="margin-top:.65rem;border-color:rgba(251,191,36,.35)">
+              <h2 class="panel-hd" style="font-size:.9rem">Auto comment · link theo page / theo bài</h2>
+              <div class="panel-body">
+                <p class="muted" style="margin:.15rem 0 .55rem;font-size:.8rem;line-height:1.45">
+                  Mỗi <b>page</b> có kho link/comment riêng (sau khi bấm Áp dụng).
+                  Mỗi <b>bài</b> hẹn/đăng của page đó lấy <b>1 link</b> (random hoặc lần lượt 1→2→3…).
+                  Hẹn giờ FB: gán link lúc hẹn → gửi comment khi bài <b>đã publish</b>.
+                </p>
+                <label class="checks" style="display:block;margin-bottom:.45rem">
+                  <input type="checkbox" id="bulkCommentEnabled" checked />
+                  <b>Bật auto comment</b> cho page đã tick
+                </label>
+                <label style="display:block;margin-bottom:.35rem"><b>Khi nào gửi comment API</b></label>
+                <div style="display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;margin-bottom:.55rem">
+                  <label class="checks" style="margin:0">
+                    <input type="radio" name="bulkCommentWhen" id="bulkCommentWhenImmediate" value="immediate" checked />
+                    <b>Ngay sau khi hẹn bài</b> — Graph comment API liền (thấy comment sớm; fail → thử lại sau publish)
+                  </label>
+                  <label class="checks" style="margin:0">
+                    <input type="radio" name="bulkCommentWhen" id="bulkCommentWhenPublish" value="after_publish" />
+                    <b>Sau khi bài publish</b> — + delay/like (cần tool mở)
+                  </label>
+                </div>
+                <label style="display:block;margin-bottom:.35rem"><b>Link / câu cho từng bài full</b></label>
+                <div style="display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;margin-bottom:.55rem">
+                  <label class="checks" style="margin:0">
+                    <input type="radio" name="bulkCommentPickMode" id="bulkCommentModeRnd" value="random" checked />
+                    <b>Random mỗi bài</b> — comment full + link random trong list
+                  </label>
+                  <label class="checks" style="margin:0">
+                    <input type="radio" name="bulkCommentPickMode" id="bulkCommentModeSeq" value="sequential" />
+                    <b>Theo thứ tự</b> — bài 1 = dòng 1, bài 2 = dòng 2…
+                  </label>
+                </div>
+                <label for="bulkCommentLinks"><b>Kho link full / comment</b> (mỗi dòng 1 URL — list dài được)</label>
+                <textarea
+                  id="bulkCommentLinks"
+                  rows="6"
+                  placeholder="https://…/link-1&#10;https://…/link-2&#10;https://…/link-3"
+                  style="width:100%;box-sizing:border-box;font-family:ui-monospace,Consolas,monospace;font-size:.9rem"
+                ></textarea>
+                <div class="actions" style="margin:.35rem 0 .25rem;flex-wrap:wrap;gap:.35rem">
+                  <button type="button" class="btn-ghost btn-sm" id="btnBulkLinksParse">Làm list link lẻ</button>
+                  <button type="button" class="btn-ghost btn-sm" id="btnBulkLinksCopyAll">Copy toàn bộ link</button>
+                  <span id="bulkLinksCount" class="muted" style="font-size:.78rem">0 link</span>
+                </div>
+                <div id="bulkLinksFreeList" style="max-height:11rem;overflow:auto;margin:0 0 .5rem;padding:.4rem .5rem;border:1px solid rgba(255,255,255,.1);border-radius:10px;background:rgba(0,0,0,.2);font-size:.78rem"></div>
+                <p class="muted" style="margin:.2rem 0 .5rem;font-size:.76rem">
+                  Mỗi bài → <b>1 comment</b>: random/lần lượt <b>1 câu kèm</b> + <b>1 link</b> từ kho.
+                  <b>Phải bấm «Áp dụng»</b> sau khi dán list.
+                </p>
+                <label for="bulkCommentTemplates"><b>Câu kèm</b> (mỗi dòng 1 câu — random mỗi comment · <b>không cần</b> ghi <code>{link}</code>)</label>
+                <textarea
+                  id="bulkCommentTemplates"
+                  rows="5"
+                  placeholder="see more :&#10;full album:&#10;xem full:"
+                  style="width:100%;box-sizing:border-box"
+                >see more : 
+full album: 
+</textarea>
+                <p class="muted" style="margin:.2rem 0 .45rem;font-size:.76rem;line-height:1.4">
+                  Ví dụ dán:<br/>
+                  <code>see more :</code><br/>
+                  <code>full album:</code><br/>
+                  Tool tự ghép link xuống dòng. <b>Để trống</b> ô câu kèm → comment <b>chỉ link</b>.
+                </p>
+                <div class="row2" style="margin-top:.5rem">
+                  <div>
+                    <label for="bulkCommentDelayMin"><b>Chờ bao nhiêu phút</b> sau giờ publish mới comment</label>
+                    <input type="number" id="bulkCommentDelayMin" min="0" max="10080" value="0" title="0 = comment ngay khi bài lên" />
+                    <p class="muted" style="margin:.2rem 0 0;font-size:.75rem">0 = ngay khi bài publish · ví dụ 15 = sau 15 phút</p>
+                  </div>
+                  <div>
+                    <label for="bulkCommentMinLikes"><b>Chỉ comment khi ≥ N like</b> (0 = không cần)</label>
+                    <input type="number" id="bulkCommentMinLikes" min="0" max="1000000" value="0" />
+                    <p class="muted" style="margin:.2rem 0 0;font-size:.75rem">Cần quyền Graph đọc reactions; tool poll mỗi ~5 phút</p>
+                  </div>
+                </div>
+                <div class="actions" style="margin-top:.55rem;flex-wrap:wrap">
+                  <button type="button" class="btn-ok btn-sm" id="btnBulkApplyComment">Áp dụng cho page đã tick</button>
+                  <button type="button" class="btn-ghost btn-sm" id="btnBulkCommentOff">Tắt comment page đã tick</button>
+                  <span id="bulkCommentStatus" class="muted" style="font-size:.8rem"></span>
+                </div>
+              </div>
             </div>
 
-            <!-- ② Start + ngày -->
-            <div id="bulkFixedSubStart" class="bulk-opt-panel is-dim" style="margin-top:.55rem">
-              <div class="bulk-opt-hd">② Hẹn theo ngày (Start at + số ngày)</div>
-              <div class="row2" style="margin-top:.25rem">
-                <div>
-                  <label>Bắt đầu ngày 1 (máy local)</label>
-                  <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap">
-                    <input type="datetime-local" id="bulkStart" step="60" style="min-width:13.5rem;flex:1" />
+            <!-- ① List giờ — form giống mẫu: ô giờ lớn + Ngày/Tháng/Năm -->
+            <div id="bulkFixedSubList" class="bulk-opt-panel is-active" style="margin-top:.65rem;padding:0;border:none;background:transparent">
+              <div class="bulk-opt-hd" style="padding:0 .15rem">① Chỉ nhập giờ / list thời điểm</div>
+              <div class="sched-form">
+                <label class="sched-form-label" for="bulkTimes">
+                  Hẹn giờ
+                  <span class="hint-inline">(ví dụ 09:00 hoặc 09:00-10:00 mỗi mốc giờ 1 dòng)</span>
+                </label>
+                <textarea
+                  id="bulkTimes"
+                  class="sched-times"
+                  rows="6"
+                  placeholder="06:00&#10;21:00&#10;&#10;hoặc khoảng:&#10;09:00-10:00&#10;19:00-20:30"
+                >06:00
+21:00</textarea>
+                <div class="sched-date-box">
+                  <div class="sched-date-title">Ngày bắt đầu hẹn giờ</div>
+                  <div class="sched-date-row">
+                    <label class="sched-date-field">
+                      <span>Ngày</span>
+                      <input type="number" id="bulkStartDay" min="1" max="31" inputmode="numeric" />
+                    </label>
+                    <label class="sched-date-field">
+                      <span>Tháng</span>
+                      <input type="number" id="bulkStartMonth" min="1" max="12" inputmode="numeric" />
+                    </label>
+                    <label class="sched-date-field">
+                      <span>Năm</span>
+                      <input type="number" id="bulkStartYear" class="sched-year" min="2024" max="2100" inputmode="numeric" />
+                    </label>
+                  </div>
+                  <p class="muted" style="margin:.45rem 0 0;font-size:.78rem;line-height:1.4;color:#bae6fd">
+                    Dòng chỉ có giờ (vd <code>06:00</code>) → áp vào <b>ngày bắt đầu</b> ở trên.
+                    Dòng đủ ngày (vd <code>31/07/2026 19:00</code>) → giữ nguyên.
+                    Khoảng <code>09:00-10:00</code> → random trong khung.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- ② Start + ngày — cùng layout Ngày/Tháng/Năm + giờ -->
+            <div id="bulkFixedSubStart" class="bulk-opt-panel is-dim" style="margin-top:.55rem;padding:0;border:none;background:transparent">
+              <div class="bulk-opt-hd" style="padding:0 .15rem">② Hẹn theo ngày (Start at + số ngày)</div>
+              <div class="sched-form">
+                <label class="sched-form-label">
+                  Giờ bắt đầu ngày 1
+                  <span class="hint-inline">(lặp theo số ngày × bài/ngày)</span>
+                </label>
+                <div class="sched-date-box" style="margin-top:0">
+                  <div class="sched-date-title">Ngày bắt đầu hẹn giờ</div>
+                  <div class="sched-date-row">
+                    <label class="sched-date-field">
+                      <span>Ngày</span>
+                      <input type="number" id="bulkStartDay2" min="1" max="31" inputmode="numeric" />
+                    </label>
+                    <label class="sched-date-field">
+                      <span>Tháng</span>
+                      <input type="number" id="bulkStartMonth2" min="1" max="12" inputmode="numeric" />
+                    </label>
+                    <label class="sched-date-field">
+                      <span>Năm</span>
+                      <input type="number" id="bulkStartYear2" class="sched-year" min="2024" max="2100" inputmode="numeric" />
+                    </label>
+                    <label class="sched-date-field grow">
+                      <span>Giờ : Phút</span>
+                      <input type="time" id="bulkStartTime" step="60" />
+                    </label>
+                  </div>
+                  <div class="actions" style="margin-top:.45rem">
                     <button type="button" class="btn-ok btn-sm" id="btnBulkStartApply">Áp dụng giờ</button>
                     <button type="button" class="btn-ghost btn-sm" id="btnBulkStartPlus2h">+2 giờ</button>
                   </div>
-                  <div id="bulkStartHint" class="muted" style="margin-top:.3rem;font-size:.78rem">
+                  <div id="bulkStartHint" class="muted" style="margin-top:.3rem;font-size:.78rem;color:#bae6fd">
                     Ngày 2, 3… lặp cùng giờ + khoảng cách bài.
                   </div>
                 </div>
-                <div class="row2">
-                  <div>
-                    <label><b>Số ngày hẹn</b></label>
+                <!-- keep datetime-local for API/workspace sync (hidden) -->
+                <input type="hidden" id="bulkStart" value="" />
+                <div class="sched-extra-row">
+                  <label class="sched-date-field">
+                    <span>Số ngày hẹn</span>
                     <input type="number" id="bulkFixedDays" min="1" max="30" value="3" title="Hẹn bao nhiêu ngày tới" />
-                  </div>
-                  <div>
-                    <label>Bài / page / ngày</label>
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Bài / page / ngày</span>
                     <input type="number" id="bulkCount" min="1" max="50" value="2" />
-                  </div>
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Cách bài min (phút)</span>
+                    <input type="number" id="bulkIntervalMin" min="10" value="120" />
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Cách bài max (phút)</span>
+                    <input type="number" id="bulkIntervalMax" min="10" value="120" />
+                  </label>
                 </div>
+                <input type="hidden" id="bulkInterval" value="120" />
+                <p class="muted" style="margin:.5rem 0 0;font-size:.78rem;color:#bae6fd">
+                  VD: 3 ngày × 2 bài/page = mỗi page 6 slot. Gap page A→B vẫn áp dụng.
+                </p>
               </div>
-              <div class="row2" style="margin-top:.45rem">
-                <div>
-                  <label>Cách 2 bài <b>cùng page</b> (phút) min</label>
-                  <input type="number" id="bulkIntervalMin" min="10" value="120" />
-                </div>
-                <div>
-                  <label>cùng page max (phút)</label>
-                  <input type="number" id="bulkIntervalMax" min="10" value="120" />
-                </div>
-              </div>
-              <input type="hidden" id="bulkInterval" value="120" />
-              <p class="muted" style="margin:.4rem 0 0;font-size:.78rem">
-                VD: 3 ngày × 2 bài/page = mỗi page 6 slot. Gap page A→B vẫn áp dụng.
-              </p>
             </div>
 
-            <!-- ③ Giờ tích cực -->
-            <div id="bulkActive" class="bulk-opt-panel is-dim" style="margin-top:.55rem">
-              <div class="bulk-opt-hd">③ Giờ tích cực / preferred từng page</div>
-              <div class="row3" style="margin-top:.25rem">
-                <div>
-                  <label><b>Số ngày tới</b></label>
-                  <input type="number" id="bulkDays" min="1" max="30" value="3" />
-                </div>
-                <div>
-                  <label>Bài / ngày (≤ max page)</label>
-                  <input type="number" id="bulkPerDay" min="1" max="10" value="2" />
-                </div>
-                <div>
-                  <label>Preset gán hàng loạt</label>
-                  <input type="text" id="bulkPrefHours" value="9,12,19,21" placeholder="9,12,19,21" />
-                </div>
-              </div>
-              <div class="actions" style="margin-top:.4rem">
-                <button type="button" class="btn-ghost" id="btnBulkPrefHours">Gán giờ ưa thích cho page đã tick</button>
-                <label class="checks" style="margin:0"><input type="checkbox" id="bulkForceActive" /> Force (bỏ cache)</label>
-              </div>
-              <p class="muted" style="margin:.35rem 0 0;font-size:.78rem">
-                Dùng giờ ưa thích đã lưu từng page (hoặc preset 9,12,19,21) × số ngày.
-              </p>
-              <div class="panel section-gap" id="metaScheduledPanel" style="margin-top:.75rem">
-                <h2 class="panel-hd">Meta Official Scheduled Settings</h2>
-                <div class="panel-body">
-                  <label class="checks">
-                    <input type="checkbox" id="allow30DaysMax" checked /> Allow scheduling up to 30 days (Meta max)
-                  </label>
-                  <div class="row2">
-                    <div>
-                      <label>Max bài hẹn / page / ngày</label>
-                      <input type="number" id="metaMaxScheduledPerDay" min="1" max="100" value="50" />
-                    </div>
-                    <div>
-                      <label>Publish window (ngày)</label>
-                      <input type="number" id="metaPublishWindowDays" min="1" max="30" value="30" />
-                    </div>
-                    <div>
-                      <label>Min interval (phút)</label>
-                      <input type="number" id="metaMinIntervalMinutes" min="5" value="120" />
-                    </div>
+            <!-- ③ Giờ tích cực — cùng khung form -->
+            <div id="bulkActive" class="bulk-opt-panel is-dim" style="margin-top:.55rem;padding:0;border:none;background:transparent">
+              <div class="bulk-opt-hd" style="padding:0 .15rem">③ Giờ tích cực / preferred từng page</div>
+              <div class="sched-form">
+                <label class="sched-form-label">
+                  Hẹn theo giờ ưa thích page
+                  <span class="hint-inline">(preset hoặc giờ đã lưu từng page)</span>
+                </label>
+                <div class="sched-date-box" style="margin-top:0">
+                  <div class="sched-date-title">Khung hẹn</div>
+                  <div class="sched-extra-row" style="margin-top:0">
+                    <label class="sched-date-field">
+                      <span>Số ngày tới</span>
+                      <input type="number" id="bulkDays" min="1" max="30" value="3" />
+                    </label>
+                    <label class="sched-date-field">
+                      <span>Bài / ngày</span>
+                      <input type="number" id="bulkPerDay" min="1" max="10" value="2" />
+                    </label>
+                    <label class="sched-date-field grow" style="min-width:10rem">
+                      <span>Preset giờ (vd 9,12,19,21)</span>
+                      <input type="text" id="bulkPrefHours" value="9,12,19,21" placeholder="9,12,19,21" style="max-width:14rem;text-align:left;padding-left:.5rem" />
+                    </label>
                   </div>
-                  <label class="checks" style="margin-top:.35rem">
-                    <input type="checkbox" id="metaIgnoreGraphLimit" /> Bỏ qua giới hạn 30 ngày (test)
-                  </label>
+                  <div class="actions" style="margin-top:.5rem">
+                    <button type="button" class="btn-ghost" id="btnBulkPrefHours">Gán giờ ưa thích cho page đã tick</button>
+                    <label class="checks" style="margin:0"><input type="checkbox" id="bulkForceActive" /> Force (bỏ cache)</label>
+                  </div>
+                </div>
+                <div class="panel section-gap" id="metaScheduledPanel" style="margin-top:.75rem">
+                  <h2 class="panel-hd">Meta Official Scheduled Settings</h2>
+                  <div class="panel-body">
+                    <label class="checks">
+                      <input type="checkbox" id="allow30DaysMax" checked /> Allow scheduling up to 30 days (Meta max)
+                    </label>
+                    <div class="row2">
+                      <div>
+                        <label>Max bài hẹn / page / ngày</label>
+                        <input type="number" id="metaMaxScheduledPerDay" min="1" max="100" value="50" />
+                      </div>
+                      <div>
+                        <label>Publish window (ngày)</label>
+                        <input type="number" id="metaPublishWindowDays" min="1" max="30" value="30" />
+                      </div>
+                      <div>
+                        <label>Min interval (phút)</label>
+                        <input type="number" id="metaMinIntervalMinutes" min="5" value="120" />
+                      </div>
+                    </div>
+                    <label class="checks" style="margin-top:.35rem">
+                      <input type="checkbox" id="metaIgnoreGraphLimit" /> Bỏ qua giới hạn 30 ngày (test)
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>
@@ -522,25 +778,32 @@
               </div>
             </div>
 
-            <div id="rotWindowsBox">
-              <label style="margin-top:.65rem;display:block">Khung giờ (mỗi dòng: tên | HH:mm | HH:mm | số bài)</label>
-              <textarea id="rotWindows" rows="3" placeholder="Sáng | 07:30 | 11:30 | 2&#10;Tối | 18:00 | 21:30 | 2"></textarea>
-              <p class="muted" id="rotWindowTotal" style="margin:.35rem 0 0;font-size:.85rem">Tổng bài/Page/ngày được tính trực tiếp từ các dòng khung giờ.</p>
+            <div id="rotWindowsBox" class="sched-form" style="margin-top:.65rem">
+              <label class="sched-form-label" for="rotWindows">
+                Hẹn giờ
+                <span class="hint-inline">(mỗi dòng: tên | HH:mm | HH:mm | số bài)</span>
+              </label>
+              <textarea id="rotWindows" class="sched-times" rows="4" placeholder="Sáng | 07:30 | 11:30 | 2&#10;Tối | 18:00 | 21:30 | 2">Sáng | 07:30 | 11:30 | 2
+Tối | 18:00 | 21:30 | 2</textarea>
+              <p class="muted" id="rotWindowTotal" style="margin:.4rem 0 0;font-size:.85rem;color:#bae6fd">Tổng bài/Page/ngày được tính trực tiếp từ các dòng khung giờ.</p>
             </div>
 
-            <div id="rotFixedBox" style="display:none">
-              <div class="row3" style="margin-top:.35rem">
-                <div>
-                  <label>Bài / page / ngày</label>
-                  <input type="number" id="rotPerDay" min="1" max="12" value="2" />
-                </div>
-                <div>
-                  <label>Giờ đầu (từ)</label>
-                  <input type="text" id="rotFirstStart" value="08:00" placeholder="08:00" />
-                </div>
-                <div>
-                  <label>Giờ đầu (đến · random)</label>
-                  <input type="text" id="rotFirstEnd" value="10:00" placeholder="10:00" />
+            <div id="rotFixedBox" class="sched-form" style="display:none;margin-top:.65rem">
+              <label class="sched-form-label">Giờ đầu (khoảng random)</label>
+              <div class="sched-date-box" style="margin-top:0">
+                <div class="sched-extra-row" style="margin-top:0">
+                  <label class="sched-date-field">
+                    <span>Bài / page / ngày</span>
+                    <input type="number" id="rotPerDay" min="1" max="12" value="2" />
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Giờ đầu (từ)</span>
+                    <input type="text" id="rotFirstStart" value="08:00" placeholder="08:00" />
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Giờ đầu (đến)</span>
+                    <input type="text" id="rotFirstEnd" value="10:00" placeholder="10:00" />
+                  </label>
                 </div>
               </div>
             </div>
@@ -800,7 +1063,7 @@
               <table>
                 <thead>
                   <tr>
-                    <th>Tool thực hiện lúc</th><th>Page</th><th>Loại</th><th>Trạng thái</th><th>Facebook sẽ đăng lúc</th><th>Post</th><th>Lỗi</th>
+                    <th>Tool thực hiện lúc</th><th>Page</th><th>Loại</th><th>Trạng thái</th><th>Facebook sẽ đăng lúc</th><th>Post</th><th>Comment / link</th><th>Lỗi</th>
                   </tr>
                 </thead>
                 <tbody id="logs"></tbody>
@@ -838,7 +1101,12 @@
         ...opts,
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || res.statusText);
+      if (!res.ok) {
+        const err = new Error(data.error || res.statusText);
+        err.data = data;
+        err.code = data.code || null;
+        throw err;
+      }
       return data;
     }
 
@@ -849,6 +1117,12 @@
       "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder",
       "metaMaxScheduledPerDay", "metaPublishWindowDays", "metaMinIntervalMinutes",
       "metaIgnoreGraphLimit", "allow30DaysMax", "bulkPrefHours",
+      "bulkStartDay", "bulkStartMonth", "bulkStartYear",
+      "bulkStartDay2", "bulkStartMonth2", "bulkStartYear2", "bulkStartTime",
+      "bulkCommentEnabled", "bulkCommentTemplates", "bulkCommentLinks",
+      "bulkCommentModeSeq", "bulkCommentModeRnd",
+      "bulkCommentWhenImmediate", "bulkCommentWhenPublish",
+      "bulkCommentDelayMin", "bulkCommentMinLikes",
     ];
     const rotationWorkspaceControlIds = [
       "rotMode", "rotDays", "rotPostType", "rotAppStrategy", "rotNowPerDay",
@@ -930,6 +1204,79 @@
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
+    function pad2(n) {
+      return String(n).padStart(2, "0");
+    }
+
+    /** Read Ngày/Tháng/Năm (+ optional time) from the form-style fields. */
+    function readSchedDateParts(prefix = "bulkStart") {
+      // list mode: bulkStartDay/Month/Year · mode ②: bulkStartDay2/Month2/Year2 + bulkStartTime
+      const dayEl = $(prefix === "bulkStart2" ? "bulkStartDay2" : "bulkStartDay");
+      const monEl = $(prefix === "bulkStart2" ? "bulkStartMonth2" : "bulkStartMonth");
+      const yrEl = $(prefix === "bulkStart2" ? "bulkStartYear2" : "bulkStartYear");
+      const now = new Date();
+      let day = Number(dayEl?.value);
+      let mon = Number(monEl?.value);
+      let yr = Number(yrEl?.value);
+      if (!Number.isFinite(day) || day < 1 || day > 31) day = now.getDate();
+      if (!Number.isFinite(mon) || mon < 1 || mon > 12) mon = now.getMonth() + 1;
+      if (!Number.isFinite(yr) || yr < 2020) yr = now.getFullYear();
+      let hh = 9;
+      let mm = 0;
+      if (prefix === "bulkStart2") {
+        const tm = String($("bulkStartTime")?.value || "09:00").match(/^(\d{1,2}):(\d{2})/);
+        if (tm) {
+          hh = Number(tm[1]);
+          mm = Number(tm[2]);
+        }
+      }
+      return { year: yr, month: mon, day, hour: hh, minute: mm };
+    }
+
+    function writeSchedDateParts(d, { list = true, start = true } = {}) {
+      const dt = d instanceof Date ? d : new Date(d);
+      if (Number.isNaN(dt.getTime())) return;
+      if (list) {
+        if ($("bulkStartDay")) $("bulkStartDay").value = String(dt.getDate());
+        if ($("bulkStartMonth")) $("bulkStartMonth").value = String(dt.getMonth() + 1);
+        if ($("bulkStartYear")) $("bulkStartYear").value = String(dt.getFullYear());
+      }
+      if (start) {
+        if ($("bulkStartDay2")) $("bulkStartDay2").value = String(dt.getDate());
+        if ($("bulkStartMonth2")) $("bulkStartMonth2").value = String(dt.getMonth() + 1);
+        if ($("bulkStartYear2")) $("bulkStartYear2").value = String(dt.getFullYear());
+        if ($("bulkStartTime")) {
+          $("bulkStartTime").value = `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+        }
+      }
+      if ($("bulkStart")) {
+        $("bulkStart").value =
+          `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+      }
+    }
+
+    /** Sync hidden bulkStart from mode-② Day/Month/Year + time. */
+    function syncBulkStartFromParts() {
+      const p = readSchedDateParts("bulkStart2");
+      const dt = new Date(p.year, p.month - 1, p.day, p.hour, p.minute, 0, 0);
+      if ($("bulkStart")) {
+        $("bulkStart").value =
+          `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+      }
+      // keep list-mode date aligned when user edits start mode date
+      if ($("bulkStartDay")) $("bulkStartDay").value = String(p.day);
+      if ($("bulkStartMonth")) $("bulkStartMonth").value = String(p.month);
+      if ($("bulkStartYear")) $("bulkStartYear").value = String(p.year);
+      return $("bulkStart")?.value || "";
+    }
+
+    function syncPartsFromBulkStart() {
+      const v = $("bulkStart")?.value;
+      if (!v) return;
+      const t = parseLocalDateTimeValue(v);
+      if (Number.isFinite(t)) writeSchedDateParts(new Date(t), { list: true, start: true });
+    }
+
     /** Parse datetime-local as local wall-clock (không phụ thuộc timezone string). */
     function parseLocalDateTimeValue(v) {
       const m = String(v || "").trim().match(
@@ -949,9 +1296,10 @@
 
     /**
      * Parse one bulk list line (local machine clock):
-     * HH:mm | YYYY-MM-DD HH:mm | DD/MM/YYYY HH:mm
+     * HH:mm | HH:mm-HH:mm | YYYY-MM-DD HH:mm | DD/MM/YYYY HH:mm
+     * Hour-only uses baseDateParts (Ngày bắt đầu hẹn giờ).
      */
-    function parseBulkTimeLineMs(line) {
+    function parseBulkTimeLineMs(line, baseDateParts = null) {
       const s = String(line || "").trim();
       if (!s) return NaN;
       // full ISO-like
@@ -972,17 +1320,33 @@
           0
         ).getTime();
       }
-      // HH:mm only → today local, or tomorrow if past
+      // range HH:mm-HH:mm → midpoint (stable for dry-run)
+      m = s.match(/^(\d{1,2}):(\d{2})\s*[-–~]\s*(\d{1,2}):(\d{2})$/);
+      if (m) {
+        const h1 = Number(m[1]);
+        const mi1 = Number(m[2]);
+        const h2 = Number(m[3]);
+        const mi2 = Number(m[4]);
+        if ([h1, mi1, h2, mi2].some((x) => !Number.isFinite(x))) return NaN;
+        const mins1 = h1 * 60 + mi1;
+        let mins2 = h2 * 60 + mi2;
+        if (mins2 < mins1) mins2 += 24 * 60;
+        const mid = Math.round((mins1 + mins2) / 2) % (24 * 60);
+        const hh = Math.floor(mid / 60);
+        const mm = mid % 60;
+        return parseBulkTimeLineMs(`${pad2(hh)}:${pad2(mm)}`, baseDateParts);
+      }
+      // HH:mm only → base date (Ngày bắt đầu) or today / tomorrow if past
       m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
       if (m) {
         const hh = Number(m[1]);
         const mm = Number(m[2]);
         if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return NaN;
-        const now = new Date();
+        const base = baseDateParts || readSchedDateParts("bulkStart");
         t = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate(),
+          base.year,
+          base.month - 1,
+          base.day,
           hh,
           mm,
           Number(m[3] || 0),
@@ -992,6 +1356,31 @@
         return t;
       }
       return NaN;
+    }
+
+    /** Expand list lines to full "YYYY-MM-DD HH:mm" for backend. */
+    function expandBulkTimeLines(rawLines) {
+      const base = readSchedDateParts("bulkStart");
+      const minMs = Date.now() + 10 * 60 * 1000;
+      const out = [];
+      let droppedPast = 0;
+      let droppedBad = 0;
+      for (const s of rawLines) {
+        const t = parseBulkTimeLineMs(s, base);
+        if (!Number.isFinite(t)) {
+          droppedBad++;
+          continue;
+        }
+        if (t < minMs) {
+          droppedPast++;
+          continue;
+        }
+        const d = new Date(t);
+        out.push(
+          `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+        );
+      }
+      return { lines: out, droppedPast, droppedBad };
     }
 
     function setPanelDim(el, dim) {
@@ -1192,12 +1581,16 @@
     function ensureBulkStartFuture({ silent = true } = {}) {
       const el = $("bulkStart");
       if (!el) return false;
+      // Prefer Day/Month/Year form (mode ②); fall back to hidden bulkStart
+      if ($("bulkStartDay2") || $("bulkStartTime")) {
+        syncBulkStartFromParts();
+      }
       const minMs = Date.now() + 10 * 60 * 1000;
-      el.min = defaultBulkStartValue(10 * 60 * 1000);
       const cur = parseLocalDateTimeValue(el.value);
       let fixed = false;
       if (!Number.isFinite(cur) || cur < minMs) {
-        el.value = defaultBulkStartValue();
+        const next = new Date(Date.now() + 2 * 60 * 60 * 1000);
+        writeSchedDateParts(next, { list: true, start: true });
         fixed = true;
         if (!silent) {
           flash(
@@ -1205,6 +1598,8 @@
             false
           );
         }
+      } else {
+        writeSchedDateParts(new Date(cur), { list: false, start: true });
       }
       updateBulkStartHint(
         fixed ? "đã auto-đẩy vì giờ quá khứ / trống" : "sẵn sàng hẹn",
@@ -1214,6 +1609,7 @@
     }
 
     function commitBulkStart({ silent = false } = {}) {
+      syncBulkStartFromParts();
       ensureBulkStartFuture({ silent });
       queueWorkspaceSave(50);
       const shown = ($("bulkStart")?.value || "").replace("T", " ");
@@ -1221,17 +1617,52 @@
       updateBulkStartHint("đã khóa vào form + workspace");
     }
 
+    function syncOneScheduleFromParts() {
+      const now = new Date();
+      let day = Number($("oneSchedDay")?.value);
+      let mon = Number($("oneSchedMonth")?.value);
+      let yr = Number($("oneSchedYear")?.value);
+      const tm = String($("oneSchedTime")?.value || "09:00").match(/^(\d{1,2}):(\d{2})/);
+      if (!Number.isFinite(day) || day < 1) day = now.getDate();
+      if (!Number.isFinite(mon) || mon < 1) mon = now.getMonth() + 1;
+      if (!Number.isFinite(yr) || yr < 2020) yr = now.getFullYear();
+      const hh = tm ? Number(tm[1]) : now.getHours();
+      const mm = tm ? Number(tm[2]) : now.getMinutes();
+      const dt = new Date(yr, mon - 1, day, hh, mm, 0, 0);
+      if ($("oneScheduleAt")) {
+        $("oneScheduleAt").value =
+          `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+      }
+      return $("oneScheduleAt")?.value || "";
+    }
+
+    function writeOneScheduleParts(d) {
+      const dt = d instanceof Date ? d : new Date(d);
+      if (Number.isNaN(dt.getTime())) return;
+      if ($("oneSchedDay")) $("oneSchedDay").value = String(dt.getDate());
+      if ($("oneSchedMonth")) $("oneSchedMonth").value = String(dt.getMonth() + 1);
+      if ($("oneSchedYear")) $("oneSchedYear").value = String(dt.getFullYear());
+      if ($("oneSchedTime")) {
+        $("oneSchedTime").value = `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+      }
+      if ($("oneScheduleAt")) {
+        $("oneScheduleAt").value =
+          `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+      }
+    }
+
     function ensureOneScheduleFuture({ silent = true } = {}) {
       const el = $("oneScheduleAt");
       if (!el) return;
+      if ($("oneSchedDay") || $("oneSchedTime")) syncOneScheduleFromParts();
       const minMs = Date.now() + 10 * 60 * 1000;
-      el.min = defaultBulkStartValue(10 * 60 * 1000);
       const cur = parseLocalDateTimeValue(el.value);
       if (!Number.isFinite(cur) || cur < minMs) {
-        el.value = defaultBulkStartValue();
+        writeOneScheduleParts(new Date(Date.now() + 2 * 60 * 60 * 1000));
         if (!silent) flash("Thời điểm hẹn 1 bài phải ≥ 10 phút sau hiện tại", false);
         updateOneScheduleHint("đã auto-đẩy", true);
       } else {
+        writeOneScheduleParts(new Date(cur));
         updateOneScheduleHint("sẵn sàng");
       }
     }
@@ -1252,6 +1683,9 @@
       } else {
         if ($("bulkModeList")) $("bulkModeList").checked = true;
       }
+      // Sync Ngày/Tháng/Năm form ↔ hidden bulkStart
+      if ($("bulkStart")?.value) syncPartsFromBulkStart();
+      else if ($("bulkStartDay2")?.value || $("bulkStartTime")?.value) syncBulkStartFromParts();
       applyBulkExclusiveUi();
       ensureBulkStartFuture({ silent: true });
       rotToggleMode();
@@ -2079,7 +2513,11 @@
       $("cfgBody").innerHTML = `
         <div class="checks">
           <label><input type="checkbox" id="enabled" ${c.enabled ? "checked" : ""}/> Auto scheduler (local · chỉ trong giờ ưa thích)</label>
-          <label><input type="checkbox" id="comment_enabled" ${c.comment_enabled ? "checked" : ""}/> Auto comment</label>
+          <label><input type="checkbox" id="comment_enabled" ${c.comment_enabled ? "checked" : ""}/> Auto comment dưới bài (theo page)</label>
+          <p class="muted" style="margin:.2rem 0 .45rem;font-size:.78rem;line-height:1.4">
+            Page này có kho link/câu riêng. Mỗi <b>bài</b> lấy 1 link (random hoặc lần lượt).<br/>
+            <b>Đăng ngay:</b> comment ngay · <b>Hẹn giờ FB:</b> gán lúc hẹn → gửi khi bài publish.
+          </p>
           <label title="Story ảnh/video qua Page Stories API. Link sticker không có trên API — tool dùng combo Story + Feed link hoặc in URL lên ảnh.">
             <input type="checkbox" id="story_enabled" ${c.story_enabled ? "checked" : ""} /> Story (media + link combo)
           </label>
@@ -2125,13 +2563,17 @@
           </div>
           <button type="button" class="btn-ghost btn-sm" id="btnPickMedia">📂 Chọn ổ/folder</button>
         </div>
-        <label>Folder sau khi đăng (posted)</label>
+        <label>Folder sau khi đăng (posted) — <b>CHUYỂN</b> file, không copy</label>
         <div class="row2" style="align-items:end;gap:.4rem">
           <div style="flex:1">
             <input type="text" id="posted_folder" value="${esc(c.posted_folder)}" placeholder="D:\\media\\posted" />
           </div>
           <button type="button" class="btn-ghost btn-sm" id="btnPickPosted">📂 Chọn folder</button>
         </div>
+        <p class="muted" style="margin:.25rem 0 .35rem;font-size:.8rem;line-height:1.4">
+          Đăng / hẹn FB OK → file <b>rời khỏi</b> kho Media, <b>chuyển vào</b> Posted
+          (cùng ổ = rename; khác ổ = copy rồi xóa nguồn). Không giữ file gốc trong Media.
+        </p>
         <p class="muted">Media: <b>${(data.media && data.media.photos) || 0}</b> ảnh · <b>${(data.media && data.media.videos) || 0}</b> video — ảnh+video chung 1 folder (lọc theo đuôi file).</p>
         <label>Kho tiêu đề / caption (.txt / .csv)</label>
         <div class="row2" style="align-items:end;gap:.4rem">
@@ -2147,37 +2589,109 @@
         </p>
         <label>Captions inline</label>
         <textarea id="captions">${esc(caps)}</textarea>
-        <label>Comment templates</label>
-        <textarea id="comment_templates">${esc(tpls)}</textarea>
-        <div class="row2">
+        <label><b>Kho link full / comment (page này)</b> — mỗi dòng 1 URL (list dài được)</label>
+        <textarea id="comment_links" rows="5" placeholder="https://full1&#10;https://full2&#10;https://full3">${esc(
+          (Array.isArray(c.link_lists?.comment_links) && c.link_lists.comment_links.length
+            ? c.link_lists.comment_links
+            : [
+                ...(c.link_lists?.full_album || []),
+                ...(c.link_lists?.see_more || []),
+              ]
+          ).join("\n")
+        )}</textarea>
+        <div style="margin:.4rem 0 .5rem">
+          <label style="display:block;margin-bottom:.3rem"><b>Khi nào gửi comment (hẹn giờ FB)</b></label>
+          <label class="checks" style="display:inline-block;margin-right:1rem">
+            <input type="radio" name="comment_when" id="comment_when_immediate" value="immediate" ${
+              (c.link_lists?.comment_when || "immediate") !== "after_publish" ? "checked" : ""
+            } />
+            Ngay sau khi hẹn bài (API liền)
+          </label>
+          <label class="checks" style="display:inline-block">
+            <input type="radio" name="comment_when" id="comment_when_publish" value="after_publish" ${
+              (c.link_lists?.comment_when || "") === "after_publish" ? "checked" : ""
+            } />
+            Sau khi bài publish (+ delay/like)
+          </label>
+        </div>
+        <div style="margin:.4rem 0 .5rem">
+          <label style="display:block;margin-bottom:.3rem"><b>Link từng bài full</b></label>
+          <label class="checks" style="display:inline-block;margin-right:1rem">
+            <input type="radio" name="comment_link_mode" id="comment_mode_rnd" value="random" ${
+              (c.link_lists?.comment_link_mode || "random") !== "sequential" ? "checked" : ""
+            } />
+            Random mỗi bài (comment full + link)
+          </label>
+          <label class="checks" style="display:inline-block;margin-left:1rem">
+            <input type="radio" name="comment_link_mode" id="comment_mode_seq" value="sequential" ${
+              (c.link_lists?.comment_link_mode || "") === "sequential" ? "checked" : ""
+            } />
+            Theo thứ tự (bài 1=dòng 1…)
+          </label>
+        </div>
+        <label><b>Câu kèm</b> (tuỳ chọn) — mỗi dòng 1 câu, random mỗi comment · <b>không cần</b> <code>{link}</code></label>
+        <textarea id="comment_templates" rows="4" placeholder="see more :&#10;full album:&#10;xem full:">${esc(tpls)}</textarea>
+        <p class="muted" style="margin:.2rem 0 .35rem;font-size:.76rem;line-height:1.4">
+          Dán kiểu <code>see more :</code> / <code>full album:</code> — tool tự thêm link xuống dòng.
+          <b>Trống</b> = comment chỉ link từ kho.
+        </p>
+        <div class="row2" style="margin-top:.45rem">
           <div>
-            <label>see_more links</label>
-            <textarea id="see_more">${esc(see)}</textarea>
+            <label>Chờ phút sau publish (chỉ mode «sau publish»)</label>
+            <input type="number" id="comment_delay_minutes" min="0" max="10080" value="${esc(c.link_lists?.comment_delay_minutes ?? 0)}" />
           </div>
           <div>
-            <label>full_album links</label>
-            <textarea id="full_album">${esc(alb)}</textarea>
+            <label>Chỉ comment khi ≥ N like (0=tắt)</label>
+            <input type="number" id="comment_min_likes" min="0" max="1000000" value="${esc(c.link_lists?.comment_min_likes ?? 0)}" />
           </div>
         </div>
+        <p class="muted" style="margin:.25rem 0 0;font-size:.76rem">
+          <b>Đăng ngay:</b> luôn comment API ngay. <b>Hẹn giờ:</b> chọn «ngay sau hẹn» hoặc «sau publish».
+          Mỗi bài full = 1 link (thứ tự hoặc random).
+        </p>
+        <!-- legacy fields kept for older workspace; hidden -->
+        <textarea id="see_more" style="display:none">${esc(see)}</textarea>
+        <textarea id="full_album" style="display:none">${esc(alb)}</textarea>
 
         <div class="divider"></div>
         <label style="margin-top:0"><b>Hẹn 1 bài trên FB</b></label>
-        <div class="row2">
-          <div>
-            <label>Thời điểm</label>
-            <div style="display:flex;gap:.35rem;align-items:center;flex-wrap:wrap">
-              <input type="datetime-local" id="oneScheduleAt" step="60" style="min-width:13.5rem;flex:1" />
+        <div class="sched-form" style="margin-top:.4rem">
+          <label class="sched-form-label">Thời điểm hẹn</label>
+          <div class="sched-date-box" style="margin-top:0">
+            <div class="sched-date-title">Ngày bắt đầu hẹn giờ</div>
+            <div class="sched-date-row">
+              <label class="sched-date-field">
+                <span>Ngày</span>
+                <input type="number" id="oneSchedDay" min="1" max="31" inputmode="numeric" />
+              </label>
+              <label class="sched-date-field">
+                <span>Tháng</span>
+                <input type="number" id="oneSchedMonth" min="1" max="12" inputmode="numeric" />
+              </label>
+              <label class="sched-date-field">
+                <span>Năm</span>
+                <input type="number" id="oneSchedYear" class="sched-year" min="2024" max="2100" inputmode="numeric" />
+              </label>
+              <label class="sched-date-field grow">
+                <span>Giờ : Phút</span>
+                <input type="time" id="oneSchedTime" step="60" />
+              </label>
+            </div>
+            <input type="hidden" id="oneScheduleAt" value="" />
+            <div class="actions" style="margin-top:.4rem">
               <button type="button" class="btn-ghost btn-sm" id="btnOneSchedulePlus2h">+2 giờ</button>
             </div>
-            <div id="oneScheduleHint" class="muted" style="margin-top:.25rem;font-size:.78rem"></div>
+            <div id="oneScheduleHint" class="muted" style="margin-top:.25rem;font-size:.78rem;color:#bae6fd"></div>
           </div>
-          <div>
-            <label>Loại</label>
-            <select id="oneScheduleType">
-              <option value="text">text</option>
-              <option value="photo">photo</option>
-              <option value="video">video</option>
-            </select>
+          <div class="sched-extra-row">
+            <label class="sched-date-field grow" style="min-width:8rem">
+              <span>Loại</span>
+              <select id="oneScheduleType" style="width:100%;max-width:10rem;padding:.4rem .5rem;border-radius:6px;border:1px solid rgba(125,211,252,.5);background:#f0f9ff;color:#0c4a6e;font-weight:700">
+                <option value="text">text</option>
+                <option value="photo">photo</option>
+                <option value="video">video</option>
+              </select>
+            </label>
           </div>
         </div>
         <div class="actions" style="margin-top:.65rem">
@@ -2223,14 +2737,28 @@
         pickFolderInto("posted_folder", "Chọn folder đã đăng (posted)");
       $("btnPickCaptions").onclick = () =>
         pickFolderInto("captions_folder", "Chọn kho tiêu đề / caption (.txt .csv)");
-      if ($("oneScheduleAt")) {
-        $("oneScheduleAt").value = defaultBulkStartValue();
+      if ($("oneScheduleAt") || $("oneSchedDay")) {
+        writeOneScheduleParts(new Date(Date.now() + 2 * 60 * 60 * 1000));
         ensureOneScheduleFuture({ silent: true });
       }
       setConfigSaveState("Đã lưu trong dữ liệu", "saved");
     }
 
     function collectConfig() {
+      const mode =
+        $("comment_mode_rnd")?.checked
+          ? "random"
+          : $("comment_mode_seq")?.checked
+            ? "sequential"
+            : "sequential";
+      const when =
+        $("comment_when_immediate")?.checked ? "immediate" : "after_publish";
+      const linksRaw = ($("comment_links")?.value || "").trim();
+      const linkLines = linksRaw
+        ? linksRaw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+        : [];
+      const delayMin = Math.max(0, Math.min(10080, Number($("comment_delay_minutes")?.value) || 0));
+      const minLikes = Math.max(0, Math.min(1_000_000, Number($("comment_min_likes")?.value) || 0));
       return {
         enabled: $("enabled").checked ? 1 : 0,
         comment_enabled: $("comment_enabled").checked ? 1 : 0,
@@ -2244,10 +2772,17 @@
         posted_folder: $("posted_folder").value.trim(),
         captions_folder: $("captions_folder").value.trim(),
         captions: $("captions").value,
-        comment_templates: $("comment_templates").value,
+        comment_templates: $("comment_templates")?.value || "",
         link_lists: {
-          see_more: $("see_more").value,
-          full_album: $("full_album").value,
+          comment_links: linkLines,
+          full_album: linkLines,
+          see_more: linkLines.length
+            ? linkLines
+            : ($("see_more")?.value || ""),
+          comment_link_mode: mode,
+          comment_when: when,
+          comment_delay_minutes: when === "immediate" ? 0 : delayMin,
+          comment_min_likes: when === "immediate" ? 0 : minLikes,
           story_link_mode: $("story_link_mode")?.value || "combo",
         },
       };
@@ -2420,34 +2955,23 @@
           .split(/\r?\n/)
           .map((s) => s.trim())
           .filter(Boolean);
-        const minMs = Date.now() + 10 * 60 * 1000;
-        const lines = [];
-        let droppedPast = 0;
-        let droppedBad = 0;
-        for (const s of rawLines) {
-          const t = parseBulkTimeLineMs(s);
-          if (!Number.isFinite(t)) {
-            droppedBad++;
-            continue;
-          }
-          if (t < minMs) {
-            droppedPast++;
-            continue;
-          }
-          lines.push(s);
-        }
+        const { lines, droppedPast, droppedBad } = expandBulkTimeLines(rawLines);
         if (droppedPast > 0) {
-          flash(`Đã bỏ ${droppedPast} mốc đã qua. «09:00» = hôm nay/mai.`, false);
+          flash(
+            `Đã bỏ ${droppedPast} mốc đã qua. Giờ thuần dùng «Ngày bắt đầu hẹn giờ».`,
+            false
+          );
         }
         if (droppedBad > 0) {
-          flash(`${droppedBad} dòng lỗi — dùng 09:00 hoặc 31/07/2026 09:00`, false);
+          flash(`${droppedBad} dòng lỗi — dùng 09:00, 09:00-10:00 hoặc 31/07/2026 09:00`, false);
         }
         if (!lines.length) {
-          flash("Chế độ ①: viết ít nhất 1 giờ, ví dụ 09:00", false);
+          flash("Chế độ ①: viết ít nhất 1 giờ, ví dụ 06:00", false);
         }
         body.times = lines;
         body.timing_source = "list_times";
       } else {
+        syncBulkStartFromParts();
         ensureBulkStartFuture({ silent: true });
         const startVal = $("bulkStart")?.value || "";
         body.start_at = startVal ? startVal.replace("T", " ") : null;
@@ -2501,10 +3025,40 @@
               : r.mode === "active_times"
                 ? "Giờ tích cực / preferred từng page"
                 : esc(r.mode || "?");
+        const mc = r.media_check || null;
+        const mediaLine = mc
+          ? `<div style="margin:0 0 .55rem;font-size:.84rem;padding:.55rem .7rem;border-radius:10px;` +
+            (mc.ok
+              ? `background:rgba(53,215,161,.12);border:1px solid rgba(53,215,161,.4);color:#9ef0c9`
+              : `background:rgba(255,113,132,.14);border:1px solid rgba(255,113,132,.5);color:#fecdd3`) +
+            `">` +
+            (mc.ok
+              ? `<b>✓ Đủ media</b> — ${esc(mc.summary || "")}`
+              : `<b>⚠ THIẾU media — chưa thể hẹn/đăng</b><br/>${esc(mc.summary || "")}` +
+                (mc.messages || [])
+                  .map((m) => `<div style="margin-top:.25rem">· ${esc(m)}</div>`)
+                  .join("") +
+                `<div class="muted" style="margin-top:.35rem;font-size:.76rem;color:inherit;opacity:.9">Bổ sung ảnh/video vào kho media của page rồi bấm «Xem kế hoạch» lại.</div>`) +
+            (mc.pools?.length
+              ? `<div style="margin-top:.4rem;font-size:.76rem;opacity:.95">` +
+                mc.pools
+                  .map(
+                    (p) =>
+                      `${p.kind === "video" ? "Video" : "Ảnh"}: cần <b>${p.required}</b> · còn <b>${p.available}</b>` +
+                      (p.ok ? " ✓" : " ✗") +
+                      (p.folder ? ` · <code style="font-size:.7rem">${esc(p.folder)}</code>` : " · <i>chưa folder</i>")
+                  )
+                  .join("<br/>") +
+                `</div>`
+              : "") +
+            `</div>`
+          : "";
         box.innerHTML =
           `<b>Dry-run · ${esc(r.mode)}</b> · ${(r.plan || []).length} page · ${totalSlots} slot` +
           (errN ? ` · <span class="fail">${errN} lỗi</span>` : "") +
+          (mc && !mc.ok ? ` · <span class="fail">thiếu media</span>` : mc?.ok ? ` · <span class="ok">đủ media</span>` : "") +
           antiLine +
+          mediaLine +
           `<div style="margin:0 0 .45rem;font-size:.82rem;padding:.4rem .55rem;border-radius:8px;background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.3)">` +
           `<b>Loại hẹn đang dùng:</b> ${srcHint}` +
           (r.timing_source ? ` · <code>${esc(r.timing_source)}</code>` : "") +
@@ -2626,8 +3180,8 @@
         flash("Tick ít nhất 1 page", false);
         return;
       }
-      if (!dry && !confirm(`Hẹn giờ ${body.page_row_ids.length} page trên Facebook?\nMode: ${body.mode}`)) return;
-      $("bulkResult").innerHTML = dry ? "Đang lập kế hoạch…" : "Đang tạo job hẹn giờ…";
+      if (!dry && !confirm(`Hẹn giờ ${body.page_row_ids.length} page trên Facebook?\nMode: ${body.mode}\n\nTool sẽ chặn nếu thiếu media (ảnh/video).`)) return;
+      $("bulkResult").innerHTML = dry ? "Đang lập kế hoạch + kiểm tra media…" : "Đang tạo job hẹn giờ…";
       try {
         const endpoint = dry ? "/api/posting/schedule/bulk" : "/api/jobs/bulk-schedule";
         const r = await api(endpoint, {
@@ -2636,15 +3190,33 @@
         });
         if (dry) {
           renderBulkResult(r);
-          flash("Đã kiểm tra kế hoạch hẹn giờ", true);
+          if (r.media_ok === false) {
+            flash(r.media_check?.messages?.[0] || "Thiếu media — chưa đủ tài nguyên để đăng", false);
+          } else {
+            flash("Đã kiểm tra kế hoạch · đủ media", true);
+          }
         } else {
-          $("bulkResult").innerHTML = `<span class="ok"><b>Job đã bắt đầu:</b> ${esc(r.job?.title || r.job?.id || "—")}</span><br/>Tiến trình chi tiết hiển thị ngay bên dưới.`;
+          $("bulkResult").innerHTML = `<span class="ok"><b>Job đã bắt đầu:</b> ${esc(r.job?.title || r.job?.id || "—")}</span><br/>Tiến trình chi tiết hiển thị ngay bên dưới.` +
+            (r.media_check?.summary
+              ? `<div class="muted" style="margin-top:.35rem;font-size:.8rem">${esc(r.media_check.summary)}</div>`
+              : "");
           flash("Job hẹn giờ đã bắt đầu", true);
           if (r.job?.id) watchLiveJob(r.job.id);
         }
       } catch (e) {
         flash(e.message, false);
-        $("bulkResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+        // API 400 MEDIA_SHORT may include plan + media_check
+        const data = e.data || e.payload || null;
+        if (data?.media_check || data?.plan) {
+          renderBulkResult({
+            ...(data.plan || data),
+            dry_run: true,
+            media_check: data.media_check || data.plan?.media_check,
+            media_ok: false,
+          });
+        } else {
+          $("bulkResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+        }
       }
     }
 
@@ -2652,7 +3224,7 @@
       const data = await api("/api/posting/logs?limit=40");
       const tb = $("logs");
       if (!data.logs?.length) {
-        tb.innerHTML = `<tr><td colspan="7" class="empty">Chưa có log</td></tr>`;
+        tb.innerHTML = `<tr><td colspan="8" class="empty">Chưa có log</td></tr>`;
         return;
       }
       tb.innerHTML = data.logs.map((l) => {
@@ -2661,6 +3233,12 @@
         const st =
           l.status === "ok" || l.status === "ok_comment_failed" || l.status === "published" ? "ok" :
           l.status === "scheduled" && waiting ? "sched" : "fail";
+        const ct = String(l.comment_text || "").trim();
+        const cLabel = !ct
+          ? "—"
+          : l.comment_id
+            ? `<span class="ok">✓</span> ${esc(ct.length > 40 ? ct.slice(0, 40) + "…" : ct)}`
+            : `<span style="color:#fbbf24">⏳</span> ${esc(ct.length > 40 ? ct.slice(0, 40) + "…" : ct)}`;
         return `<tr>
           <td>${esc(fmtVn(l.created_at))}</td>
           <td>${esc(l.page_name)}</td>
@@ -2668,6 +3246,7 @@
           <td class="${st}">${esc(l.status === "published" ? "Đã đăng · Facebook xác nhận" : l.status === "schedule_overdue" ? "Quá giờ nhưng Facebook chưa xuất bản" : l.status === "scheduled" ? (waiting ? "FB đã nhận lịch · chờ đăng" : "Đã tới giờ · chưa đối soát") : l.status)}</td>
           <td>${esc(fmtVn(l.scheduled_publish_time))}</td>
           <td>${safeHttpUrl(l.fb_post_url) ? `<a href="${esc(safeHttpUrl(l.fb_post_url))}" target="_blank" rel="noopener">link</a>` : esc(l.fb_post_id || "—")}</td>
+          <td title="${esc(ct)}">${cLabel}</td>
           <td class="fail">${esc(l.error || "")}</td>
         </tr>`;
       }).join("");
@@ -2716,12 +3295,24 @@
       else if ($("bulkModeList")) $("bulkModeList").checked = true;
       applyBulkExclusiveUi();
     };
-    ["bulkTimes", "bulkStart", "bulkFixedDays", "bulkCount", "bulkDays", "bulkPerDay"].forEach(
-      (id) => {
-        $(id)?.addEventListener("input", () => updateBulkTimingModeBadge());
-        $(id)?.addEventListener("change", () => updateBulkTimingModeBadge());
-      }
-    );
+    [
+      "bulkTimes",
+      "bulkStart",
+      "bulkFixedDays",
+      "bulkCount",
+      "bulkDays",
+      "bulkPerDay",
+      "bulkStartDay",
+      "bulkStartMonth",
+      "bulkStartYear",
+      "bulkStartDay2",
+      "bulkStartMonth2",
+      "bulkStartYear2",
+      "bulkStartTime",
+    ].forEach((id) => {
+      $(id)?.addEventListener("input", () => updateBulkTimingModeBadge());
+      $(id)?.addEventListener("change", () => updateBulkTimingModeBadge());
+    });
     $("rotMode")?.addEventListener("change", () => applyRotExclusiveUi());
     $("rotAutoMeta")?.addEventListener("change", () => applyRotExclusiveUi());
     document.querySelectorAll('input[name="rotNowTimeMode"]').forEach((r) => {
@@ -2729,9 +3320,30 @@
     });
     setTimeout(() => {
       try {
+        // Default date fields → hôm nay nếu vẫn là placeholder cũ
+        const now = new Date();
+        const initIfEmpty = () => {
+          if (!$("bulkStart")?.value) writeSchedDateParts(now, { list: true, start: true });
+          else syncPartsFromBulkStart();
+          // If still showing screenshot sample 31/7/2026 in the past relative to real now, nudge list date to today when empty bulkStart
+          const listY = Number($("bulkStartYear")?.value);
+          const listM = Number($("bulkStartMonth")?.value);
+          const listD = Number($("bulkStartDay")?.value);
+          const listDt = new Date(listY, listM - 1, listD);
+          if (
+            Number.isFinite(listDt.getTime()) &&
+            listDt.getTime() + 24 * 3600 * 1000 < Date.now() - 2 * 24 * 3600 * 1000
+          ) {
+            writeSchedDateParts(now, { list: true, start: false });
+          }
+        };
+        initIfEmpty();
+        // Always seed list + start date parts to "now" if empty
+        if (!$("bulkStartDay")?.value) writeSchedDateParts(new Date(), { list: true, start: true });
         applyBulkExclusiveUi();
         applyRotExclusiveUi();
         applyRotNowTimeExclusiveUi();
+        updateBulkTimingModeBadge();
       } catch {
         /* ignore */
       }
@@ -2739,31 +3351,52 @@
     $("btnDryRun").onclick = () => runBulk(true);
     $("btnBulkSchedule").onclick = () => runBulk(false);
 
-    // Start at: commit rõ ràng (Windows/Electron picker hay mất giá trị khi đóng)
+    // Start at: Day/Month/Year form (giống mẫu)
     $("btnBulkStartApply")?.addEventListener("click", () => commitBulkStart({ silent: false }));
     $("btnBulkStartPlus2h")?.addEventListener("click", () => {
-      if ($("bulkStart")) $("bulkStart").value = defaultBulkStartValue(2 * 60 * 60 * 1000);
+      writeSchedDateParts(new Date(Date.now() + 2 * 60 * 60 * 1000), { list: true, start: true });
       commitBulkStart({ silent: false });
     });
-    $("bulkStart")?.addEventListener("input", () => {
-      updateBulkStartHint("đang chỉnh — bấm «Áp dụng giờ» để khóa", false);
-    });
-    $("bulkStart")?.addEventListener("change", () => {
-      // Picker đóng với giá trị mới
-      ensureBulkStartFuture({ silent: false });
-      queueWorkspaceSave(100);
-      updateBulkStartHint("đã nhận từ picker", false);
-    });
-    $("bulkStart")?.addEventListener("blur", () => {
-      ensureBulkStartFuture({ silent: true });
+    [
+      "bulkStartDay2",
+      "bulkStartMonth2",
+      "bulkStartYear2",
+      "bulkStartTime",
+      "bulkStartDay",
+      "bulkStartMonth",
+      "bulkStartYear",
+    ].forEach((id) => {
+      const isStartMode = id.includes("2") || id === "bulkStartTime";
+      $(id)?.addEventListener("input", () => {
+        if (isStartMode) {
+          syncBulkStartFromParts();
+          updateBulkStartHint("đang chỉnh — bấm «Áp dụng giờ» để khóa", false);
+        }
+        queueWorkspaceSave(200);
+      });
+      $(id)?.addEventListener("change", () => {
+        if (isStartMode) {
+          syncBulkStartFromParts();
+          ensureBulkStartFuture({ silent: true });
+        }
+        queueWorkspaceSave(100);
+      });
     });
 
     $("btnOneSchedulePlus2h")?.addEventListener("click", () => {
-      if ($("oneScheduleAt")) $("oneScheduleAt").value = defaultBulkStartValue(2 * 60 * 60 * 1000);
+      writeOneScheduleParts(new Date(Date.now() + 2 * 60 * 60 * 1000));
       ensureOneScheduleFuture({ silent: true });
     });
-    $("oneScheduleAt")?.addEventListener("change", () => ensureOneScheduleFuture({ silent: false }));
-    $("oneScheduleAt")?.addEventListener("input", () => updateOneScheduleHint("đang chỉnh…"));
+    ["oneSchedDay", "oneSchedMonth", "oneSchedYear", "oneSchedTime"].forEach((id) => {
+      $(id)?.addEventListener("change", () => {
+        syncOneScheduleFromParts();
+        ensureOneScheduleFuture({ silent: false });
+      });
+      $(id)?.addEventListener("input", () => {
+        syncOneScheduleFromParts();
+        updateOneScheduleHint("đang chỉnh…");
+      });
+    });
 
     // Meta scheduled: chỉ lưu workspace (không gọi renderBulkResult sai kiểu)
     for (const mid of [
@@ -3603,6 +4236,168 @@
           flash(e.message, false);
         }
       };
+
+    function getBulkCommentPickMode() {
+      if ($("bulkCommentModeSeq")?.checked) return "sequential";
+      if ($("bulkCommentModeRnd")?.checked) return "random";
+      return "random";
+    }
+
+    function getBulkCommentWhen() {
+      if ($("bulkCommentWhenImmediate")?.checked) return "immediate";
+      if ($("bulkCommentWhenPublish")?.checked) return "after_publish";
+      return "immediate";
+    }
+
+    function parseBulkCommentLinks() {
+      const raw = ($("bulkCommentLinks")?.value || "").trim();
+      if (!raw) return [];
+      // split by newline or whitespace; keep only http(s) URLs
+      const parts = raw
+        .split(/[\r\n\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const urls = [];
+      const seen = new Set();
+      for (const p of parts) {
+        let u = p.replace(/^[<\["']+|[>\]"',;]+$/g, "");
+        if (!/^https?:\/\//i.test(u)) {
+          if (/^[\w.-]+\.[a-z]{2,}\//i.test(u)) u = "https://" + u;
+          else continue;
+        }
+        const k = u.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        urls.push(u);
+      }
+      return urls;
+    }
+
+    function renderBulkLinksFreeList() {
+      const box = $("bulkLinksFreeList");
+      const countEl = $("bulkLinksCount");
+      if (!box) return;
+      const urls = parseBulkCommentLinks();
+      if (countEl) countEl.textContent = `${urls.length} link lẻ`;
+      if (!urls.length) {
+        box.innerHTML = `<span class="muted">Dán list free (mỗi dòng 1 URL) → bấm «Làm list link lẻ»</span>`;
+        return;
+      }
+      // normalize textarea to clean 1-per-line
+      if ($("bulkCommentLinks")) $("bulkCommentLinks").value = urls.join("\n");
+      box.innerHTML = urls
+        .map(
+          (u, i) =>
+            `<div style="display:flex;gap:.35rem;align-items:center;margin:.2rem 0;padding:.25rem .35rem;border-radius:6px;background:rgba(255,255,255,.04)">` +
+            `<span class="muted" style="min-width:1.5rem">${i + 1}.</span>` +
+            `<a href="${esc(u)}" target="_blank" rel="noopener" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7dd3fc">${esc(u)}</a>` +
+            `<button type="button" class="btn-ghost btn-sm bulk-copy-one" data-url="${esc(u)}" title="Copy link này">Copy</button>` +
+            `</div>`
+        )
+        .join("");
+      box.querySelectorAll(".bulk-copy-one").forEach((btn) => {
+        btn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.url || "");
+            flash("Đã copy 1 link", true);
+          } catch {
+            flash("Copy thất bại", false);
+          }
+        };
+      });
+    }
+
+    async function applyBulkCommentToSelected({ enabled }) {
+      const ids = selectedPageIds();
+      if (!ids.length) return flash("Tick ít nhất một Page (tab 1 hoặc summary)", false);
+      const templates = ($("bulkCommentTemplates")?.value || "").trim();
+      renderBulkLinksFreeList();
+      const linkLines = parseBulkCommentLinks();
+      if (enabled && !templates && !linkLines.length) {
+        return flash("Cần ít nhất: kho link (mỗi dòng 1 URL) hoặc câu comment", false);
+      }
+      const mode = getBulkCommentPickMode();
+      const when = getBulkCommentWhen();
+      const delayMin = Math.max(0, Math.min(10080, Number($("bulkCommentDelayMin")?.value) || 0));
+      const minLikes = Math.max(0, Math.min(1_000_000, Number($("bulkCommentMinLikes")?.value) || 0));
+      const config = {
+        comment_enabled: enabled ? 1 : 0,
+        comment_templates: templates,
+        link_lists: {
+          // Primary pool used by assignCommentForPost
+          comment_links: linkLines,
+          full_album: linkLines,
+          see_more: linkLines,
+          comment_link_mode: mode,
+          comment_when: when,
+          // Reset con trỏ «theo bài» khi áp list mới
+          comment_link_next: 0,
+          comment_tpl_next: 0,
+          // delay/likes chỉ có ý khi after_publish
+          comment_delay_minutes: when === "immediate" ? 0 : delayMin,
+          comment_min_likes: when === "immediate" ? 0 : minLikes,
+        },
+      };
+      try {
+        const r = await api("/api/posting/config-bulk", {
+          method: "PUT",
+          body: JSON.stringify({ page_row_ids: ids, config }),
+        });
+        const st = $("bulkCommentStatus");
+        if (st) {
+          st.innerHTML = enabled
+            ? `<span class="ok">Đã bật auto comment + template cho <b>${r.updated}</b> Page.</span>`
+            : `<span class="ok">Đã tắt auto comment trên <b>${r.updated}</b> Page.</span>`;
+        }
+        flash(
+          enabled
+            ? `Đã áp comment · ${r.updated} Page · ${when === "immediate" ? "comment NGAY sau hẹn" : "sau publish"} · ${mode === "sequential" ? "link theo thứ tự bài" : "random link"} · ${linkLines.length} URL`
+            : `Đã tắt auto comment trên ${r.updated} Page`,
+          true
+        );
+        queueWorkspaceSave(100);
+        // Refresh open page config panel if any selected page is open
+        if (selectedId && ids.includes(Number(selectedId))) {
+          try {
+            await loadConfig(selectedId);
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch (e) {
+        flash(e.message, false);
+      }
+    }
+
+    if ($("btnBulkApplyComment")) {
+      $("btnBulkApplyComment").onclick = () =>
+        applyBulkCommentToSelected({
+          enabled: !!$("bulkCommentEnabled")?.checked,
+        });
+    }
+    if ($("btnBulkCommentOff")) {
+      $("btnBulkCommentOff").onclick = () => {
+        if ($("bulkCommentEnabled")) $("bulkCommentEnabled").checked = false;
+        applyBulkCommentToSelected({ enabled: false });
+      };
+    }
+    $("btnBulkLinksParse")?.addEventListener("click", () => {
+      renderBulkLinksFreeList();
+      flash(`Đã tách ${parseBulkCommentLinks().length} link lẻ`, true);
+    });
+    $("btnBulkLinksCopyAll")?.addEventListener("click", async () => {
+      const urls = parseBulkCommentLinks();
+      if (!urls.length) return flash("Chưa có link", false);
+      try {
+        await navigator.clipboard.writeText(urls.join("\n"));
+        flash(`Đã copy ${urls.length} link`, true);
+      } catch {
+        flash("Copy thất bại", false);
+      }
+    });
+    $("bulkCommentLinks")?.addEventListener("blur", () => renderBulkLinksFreeList());
+    // initial empty list UI
+    setTimeout(() => renderBulkLinksFreeList(), 0);
     $("btnRotNowRun").onclick = async () => {
       let settingsBody;
       try {
@@ -3710,7 +4505,15 @@
       btn.textContent = "Đang hỏi Facebook…";
       try {
         const r = await api("/api/posting/reconcile-scheduled", { method: "POST", body: JSON.stringify({ limit: 50 }) });
-        flash(`Đối soát: đã đăng ${r.published} · quá giờ ${r.overdue} · chưa xác minh ${r.unknown}`, !r.overdue && !r.unknown);
+        flash(
+          `Đối soát: đã đăng ${r.published} · quá giờ ${r.overdue} · chưa xác minh ${r.unknown}` +
+            (r.comments_ok || r.comments_fail || r.comments_waiting
+              ? ` · comment OK ${r.comments_ok || 0}` +
+                (r.comments_fail ? ` / fail ${r.comments_fail}` : "") +
+                (r.comments_waiting ? ` / chờ ${r.comments_waiting}` : "")
+              : ""),
+          !r.overdue && !r.unknown && !r.comments_fail
+        );
         await loadLogs();
       } catch (e) {
         flash(e.message, false);

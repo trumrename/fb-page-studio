@@ -287,16 +287,25 @@ button:disabled, .btn:disabled { opacity: 0.45; cursor: not-allowed; }
   filter: brightness(1.07);
   text-decoration: none;
 }
-.btn-ghost {
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid var(--border);
-  color: var(--text);
+.btn-ghost, .btn.ghost {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  color: #e8eef8;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 }
-.btn-ghost:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: var(--border-strong);
+.btn-ghost:hover:not(:disabled), .btn.ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(125, 211, 252, 0.55);
+  color: #fff;
   text-decoration: none;
 }
+/* legacy alias used on pages-hub / some anchors */
+.btn.primary, .btn-primary.btn {
+  background: linear-gradient(135deg, #5a94ff, #437cf0 58%, #6f67ed);
+  color: #fff;
+  box-shadow: 0 9px 24px rgba(55, 105, 210, 0.26);
+}
+.btn.sm, button.sm { padding: 0.35rem 0.65rem; font-size: 0.78rem; border-radius: 8px; }
 .btn-ok {
   background: linear-gradient(135deg, rgba(72,213,151,.18), rgba(45,168,127,.1));
   color: #75e5b4;
@@ -499,6 +508,23 @@ input:focus, select:focus, textarea:focus {
   border-color: rgba(79, 140, 255, 0.65);
   box-shadow: 0 0 0 4px rgba(79, 140, 255, 0.12);
   background: rgba(9, 16, 29, .92);
+}
+/* Select dropdown: text + option luôn đọc được trên nền tối (Windows) */
+select {
+  color: var(--text);
+  background-color: rgba(7, 12, 22, 0.92);
+}
+select option,
+select optgroup {
+  background-color: #0f1f33;
+  color: #f0f7ff;
+}
+/* Bare button.btn without variant — still readable (not washed white) */
+button.btn:not(.btn-primary):not(.btn-ghost):not(.btn-ok):not(.btn-warn):not(.btn-danger):not(.btn-sm),
+a.btn:not(.btn-primary):not(.btn-ghost):not(.btn-ok):not(.btn-warn):not(.btn-danger) {
+  background: rgba(30, 48, 78, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  color: #eef5ff;
 }
 input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
 textarea { min-height: 84px; resize: vertical; }

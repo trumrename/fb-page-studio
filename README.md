@@ -25,14 +25,24 @@ Chi tiết: **[DOWNLOAD.md](./DOWNLOAD.md)**
 
 Chi tiết: `pack-customer/README-KHACH.txt` · `HUONG-DAN-MAY-MOI.md`
 
+## Tài liệu (đầy đủ)
+
+| File | Nội dung |
+|------|----------|
+| **[DOC-INDEX.md](./DOC-INDEX.md)** | Mục lục mọi docs |
+| **[TONG-QUAN.md](./TONG-QUAN.md)** | Tổng quan tool · kiến trúc · giới hạn Meta |
+| **[CHECK-BUG.md](./CHECK-BUG.md)** | Checklist test / ship |
+| **[TRANG-THAI-HIEN-TAI.md](./TRANG-THAI-HIEN-TAI.md)** | Version & path Setup hiện tại |
+| **[DOWNLOAD.md](./DOWNLOAD.md)** | Link tải + Chrome Portable |
+
 ## Dev / build
 
 ```powershell
 npm install
 npm test
-npm run build:desktop
-npm run pack:all          # pack-customer + pack-dev + ZIP
-npm run release:verify
+npm run test:delete-live   # LIVE Graph (cần token AppData) khi đụng xóa
+npm run build:desktop:setup
+npm run pack:dev
 ```
 
 - Admin cấp key: `Admin-Quan-Ly/MENU-ADMIN.bat`  

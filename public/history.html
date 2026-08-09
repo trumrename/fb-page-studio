@@ -18,7 +18,11 @@
     .hist-table th{position:sticky;top:0;background:#12151c;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;opacity:.8}
     .tile{padding:.7rem .9rem;border-radius:10px;border:1px solid rgba(255,255,255,.09);min-width:9rem}
     .tile b{font-size:1.35rem;display:block}
-    .caption-cell{max-width:22rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .caption-cell{max-width:18rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .comment-cell{max-width:16rem;font-size:.78rem;word-break:break-all}
+    .comment-cell a{color:#7dd3fc}
+    .comment-ok{color:#6ee7b7}
+    .comment-pending{color:#fbbf24}
   </style>
 </head>
 <body>
@@ -89,9 +93,9 @@
             <table class="hist-table">
               <thead><tr>
                 <th>Giờ (VN)</th><th>Page</th><th>Loại giao</th><th>Kiểu bài</th>
-                <th>Trạng thái</th><th>Link</th><th>Caption</th><th>Lỗi</th>
+                <th>Trạng thái</th><th>Bài FB</th><th>Comment / link</th><th>Caption</th><th>Lỗi</th>
               </tr></thead>
-              <tbody id="histBody"><tr><td colspan="8" class="muted">Đang tải…</td></tr></tbody>
+              <tbody id="histBody"><tr><td colspan="9" class="muted">Đang tải…</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -172,13 +176,13 @@
     }
 
     async function loadHistory() {
-      $("histBody").innerHTML = `<tr><td colspan="8" class="muted">Đang tải…</td></tr>`;
+      $("histBody").innerHTML = `<tr><td colspan="9" class="muted">Đang tải…</td></tr>`;
       try {
         const r = await api(`/api/posting/history?day=${selectedDay}&limit=2000`);
         $("tableTitle").textContent = `Lịch sử · ${selectedDay === todayVn() ? "Hôm nay" : selectedDay}`;
         $("rowCount").textContent = `${r.count} bài`;
         if (!r.rows.length) {
-          $("histBody").innerHTML = `<tr><td colspan="8" class="muted">Không có bài nào trong ngày này</td></tr>`;
+          $("histBody").innerHTML = `<tr><td colspan="9" class="muted">Không có bài nào trong ngày này</td></tr>`;
           return;
         }
         $("histBody").innerHTML = r.rows.map((row) => {
@@ -187,6 +191,24 @@
           const mode = row.delivery_mode || "direct";
           const okCls = OK_STATUS.has(row.status) ? "st-ok" : "st-fail";
           const link = row.fb_post_url ? `<a href="${esc(row.fb_post_url)}" target="_blank" rel="noopener">mở</a>` : "—";
+          const ct = String(row.comment_text || "").trim();
+          const cid = row.comment_id ? String(row.comment_id) : "";
+          let commentHtml = "—";
+          if (ct) {
+            const urlMatch = ct.match(/https?:\/\/[^\s]+/i);
+            const url = urlMatch ? urlMatch[0] : "";
+            const statusLbl = cid
+              ? `<span class="comment-ok">đã gửi</span>`
+              : `<span class="comment-pending">chờ gửi</span>`;
+            commentHtml =
+              `<div class="comment-cell" title="${esc(ct)}">` +
+              `${statusLbl}<br/>` +
+              (url
+                ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url.length > 48 ? url.slice(0, 48) + "…" : url)}</a>`
+                : esc(ct.length > 80 ? ct.slice(0, 80) + "…" : ct)) +
+              (cid ? `<br/><span class="muted" style="font-size:.7rem">id ${esc(cid.slice(0, 24))}…</span>` : "") +
+              `</div>`;
+          }
           return `<tr>
             <td>${esc(timeVn)}</td>
             <td>${esc(row.page_name || "?")}</td>
@@ -194,6 +216,7 @@
             <td>${esc(row.post_type || "—")}</td>
             <td class="${okCls}">${esc(row.status || "—")}</td>
             <td>${link}</td>
+            <td>${commentHtml}</td>
             <td class="caption-cell" title="${esc(row.caption || "")}">${esc(row.caption || "—")}</td>
             <td class="st-fail">${esc(row.error || "")}</td>
           </tr>`;

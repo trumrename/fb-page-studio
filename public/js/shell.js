@@ -12,6 +12,7 @@
     path === "/posting.html" && hash === "#rotationWorkspace" ? "rotation" :
     path === "/posting.html" ? "configuration" :
     path === "/index.html" ? "connections" :
+    path === "/pages-hub.html" ? "pages_hub" :
     path === "/delete-posts.html" ? "delete_posts" :
     path === "/delete-group-posts.html" ? "delete_groups" :
     path === "/antispam.html" ? "safety" :
@@ -20,7 +21,8 @@
 
   const items = [
     ["/app.html", "⌂", "Tổng quan", "Theo dõi hệ thống và tiến trình"],
-    ["/index.html", "1", "Kết nối Meta", "App, Profile và Page"],
+    ["/index.html", "1", "Kết nối Meta", "OAuth App & sync Page (an toàn)"],
+    ["/pages-hub.html", "▣", "Quản lý Fanpage", "Tài khoản → Page · insights · đề xuất"],
     ["/posting.html#configWorkspace", "2", "Cấu hình Page", "Media, caption và giới hạn"],
     ["/posting.html#rotationWorkspace", "3", "Lập lịch & chạy", "Chạy ngay hoặc hẹn giờ"],
     ["/delete-posts.html", "⌫", "Xóa bài Page", "Xóa feed Fanpage siêu nhanh"],
@@ -57,6 +59,7 @@
   const viewInfo = {
     overview: ["TỔNG QUAN", "Theo dõi sức khỏe toàn hệ thống", "blue"],
     connections: ["KẾT NỐI", "Quản lý Meta App, Profile và Page", "violet"],
+    pages_hub: ["FANPAGE", "Tài khoản OAuth · Page · Insights · Chất lượng · Đề xuất", "cyan"],
     configuration: ["CẤU HÌNH PAGE", "Thiết lập nội dung và giới hạn từng Page", "cyan"],
     rotation: ["LẬP LỊCH & CHẠY", "Xếp vòng đăng, thời gian và bắt đầu job", "green"],
     delete_posts: ["XÓA BÀI", "Xóa bài Fanpage hàng loạt bằng Graph API", "red"],
@@ -76,7 +79,8 @@
     const sub = titleBox.querySelector(".sub");
     if (sub) sub.textContent = info[1];
     const titles = {
-      overview: "Tổng quan hệ thống", connections: "Kết nối Meta & Page",
+      overview: "Tổng quan hệ thống", connections: "Kết nối Meta & Page (OAuth)",
+      pages_hub: "Quản lý Fanpage (Graph API)",
       configuration: "Cấu hình nội dung Page", rotation: "Lập lịch và bắt đầu chạy",
       delete_posts: "Xóa bài Fanpage siêu nhanh",
       delete_groups: "Xóa bài Group (Admin/Mod)",

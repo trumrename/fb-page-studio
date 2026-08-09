@@ -1,184 +1,199 @@
 # CHECK-BUG — Checklist kiểm thử FB Page Studio
 
-> Trước mỗi ship / release. Đánh `[x]` khi OK.  
-> **Phiên bản code hiện tại:** 1.2.21
-> **Gốc DEV:** `D:\fb-page-poster\`  
-> **Gói KHÁCH:** `D:\fb-page-poster\pack-customer\`
+> **Trước mỗi ship / giao khách.** Đánh `[x]` khi OK.  
+> **Phiên bản target:** **v1.2.72+**  
+> **Source DEV:** `C:\Users\NCpc\fb-page-poster\`  
+> **Data Setup:** `%APPDATA%\fb-page-studio\`  
+> **Tải latest:** https://github.com/trumrename/fb-page-studio/releases/latest/download/FB-Page-Studio-Setup.exe  
 
-## Trạng thái baseline v1.2.20 (lịch sử)
-
-- [x] `npm test`: **189/189 PASS**
-- [x] Clean runtime: **20 endpoint PASS**
-- [x] Build + pack:all + `release:verify`: **PASS**
-- [x] ZIP khách `FB-Page-Studio-v1.2.20-Windows.zip` + SHA: **PASS**
-- [x] pack-customer không secret (.env/data/src/private key)
-- [x] pack-dev đồng bộ EXE + README
-- [x] UI Direct/Hẹn Facebook tách riêng; retry lỗi job: **PASS (code+API)**
-- [x] Runtime App: v1.2.20 packaged, license commercial
-- [x] Bản cũ gom `Luu-Tru-Ban-Cu\`
-- [ ] Hai App thật so le: **chờ cấu hình App 2**
-- [ ] Update từ GitHub v1.2.20: **sau release**
-
-Xem `TRANG-THAI-HIEN-TAI.md`.
+Xem thêm: `TONG-QUAN.md` · `TRANG-THAI-HIEN-TAI.md` · `DOC-INDEX.md`
 
 ---
 
-## 0. Phân biệt 2 gói
+## 0. Baseline ship (điền khi release)
 
-- [ ] Fix/build làm trên **DEV gốc**, không sửa tay lung tung chỉ trong pack-customer  
-- [ ] Sau build đã chạy `node scripts/sync-customer-pack.mjs`  
-- [ ] `pack-customer` **không** chứa: `license-private.pem`, `.env` secret, `data/app.db` token, folder `src/`  
-- [ ] `pack-dev/README-DEV.md` và `pack-customer/README-KHACH.txt` còn đúng  
+| Hạng mục | Giá trị |
+|----------|---------|
+| Version `package.json` | |
+| Tag GitHub | `v` |
+| Setup path local | `F:\FB-Page-Studio\dist-desktop-oauth\FB-Page-Studio-Setup-v….exe` |
+| SHA-256 Setup | |
+| `npm test` | PASS / FAIL |
+| `npm run test:delete-live` (nếu ship delete) | PASS / SKIP / FAIL |
+| Cài đè giữ env | PASS / FAIL |
 
 ---
 
-## 1. Tự động
+## 1. Phân biệt gói & an toàn
+
+- [ ] Fix/build trên **source DEV**, không chỉ sửa pack rời  
+- [ ] `pack-customer` **không** chứa: `license-private.pem`, App Secret, `data/app.db` token, folder `src/`  
+- [ ] `.env` khách = public-safe (relay, không secret bắt buộc trên máy khách nếu relay exchange)  
+- [ ] Setup `deleteAppDataOnUninstall: false` (không xóa AppData khi uninstall)  
+- [ ] Cài đè: version UI đổi, **token/page list còn**  
+
+---
+
+## 2. Tự động (DEV)
 
 ```powershell
-cd D:\fb-page-poster
+cd C:\Users\NCpc\fb-page-poster
 npm test
 ```
 
-- [ ] ALL CHECKS PASSED  
+- [ ] `test-requirements` ALL CHECKS PASSED  
+- [ ] Caption pool PASS  
+- [ ] Clean runtime PASS  
+- [ ] Delete date-filter unit PASS  
+
+**Ship có thay xóa / Graph bulk:**
+
+```powershell
+$env:FB_USER_DIR = "$env:APPDATA\fb-page-studio"
+npm run test:delete-live
+```
+
+- [ ] LIVE list posts OK  
+- [ ] LIVE delete `shared_story` OK (nếu page có share)  
+- [ ] Report: `Tổng Hợp Tool\pack-dev\RELEASE-GATE-DELETE.json`  
 
 ---
 
-## 2. Khởi động (DEV)
+## 3. Cài đặt & khởi động
 
-- [ ] `npm start` / Desktop exe không black screen  
-- [ ] `/api/meta` có `version` + `license`  
-- [ ] Log `[license]` / `[update]` không lỗi lạ  
-
----
-
-## 3. License
-
-- [ ] `/license.html` hiện trial hoặc key  
-- [ ] Key vĩnh viễn / còn hạn → active  
-- [ ] Key hết hạn → chặn đăng  
-- [ ] **Giả lập update:** key trong `data/license.json` vẫn còn sau restart  
-- [ ] Machine ID hiển thị  
+- [ ] Setup cài / cài đè không lỗi  
+- [ ] Mở app không black screen  
+- [ ] Title cửa sổ có **version đúng** (vd `v1.2.72`)  
+- [ ] `%APPDATA%\fb-page-studio\.env` tồn tại  
+- [ ] Log: `desktop-startup.log` — `USER_DIR` = AppData, `isPackaged true`  
+- [ ] `/api/health` hoặc app load `app.html` OK  
+- [ ] License hiển thị (trial / commercial)  
 
 ---
 
-## 4. Multi Meta App / OAuth
+## 4. OAuth / Connect
 
-- [ ] Connect App 1 → badge App 1  
-- [ ] App 2 (nếu có env) Connect đúng  
-- [ ] App 2 chưa config → lỗi, không login nhầm App 1  
-- [ ] 2FA external browser OK  
-- [ ] Lưu domain HTTPS trong màn Connect cập nhật đúng APP_BASE_URL + Redirect URI App 1/App 2
-- [ ] Lệnh Ngrok hiển thị đúng domain/cổng, không lộ App Secret
-- [ ] Chọn Chrome Profile đã login → Connect mở tab OAuth với đúng session Facebook
-
----
-
-## 5. Publish / Schedule / Rotation
-
-- [ ] Tick Page → sang Chạy/Lịch → quay lại vẫn còn đúng Page đã chọn
-- [ ] Reload/đóng mở app giữ Page, Page đang cấu hình, tab, bulk và rotation lần cuối
-- [ ] Sửa config rồi chuyển Page ngay: Page cũ đã tự lưu, không ghi nhầm sang Page mới
-- [ ] Bấm dòng Page vừa mở cấu hình vừa thêm đúng Page đó vào danh sách chạy
-- [ ] Rotation/bulk chỉ nhận Page đã chọn, không rơi về tất cả Page khi checkbox DOM được dựng lại
-- [ ] Caption random · media hash 1 lần  
-- [ ] Rotation preview so-le App1↔App2  
-- [ ] Gap cùng page đúng khung  
-- [ ] Hẹn giờ 1–2 page thật (tuỳ)  
-- [ ] Chạy ngay hiển thị đúng App · Admin · Page · bài số · chế độ đăng · giờ Việt Nam
-- [ ] Không tạo lịch mới ở quá khứ; bài hẹn cũ chỉ đổi trạng thái sau khi Facebook xác nhận
-- [ ] Job hiển thị % và thông báo rõ thành công/lỗi
-- [ ] Media/caption lấy đúng folder từng Page và cập nhật số lượng khi job chạy
-- [ ] Media random và không chọn file nằm sát các lần chọn gần nhất khi kho đủ lớn
-- [ ] Caption vòng đầu đúng thứ tự; hết kho thì trộn đủ caption và chạy vòng tiếp
-- [ ] Bài lỗi không làm media bị ghi nhận là đã chọn thành công
-- [ ] Con trỏ caption độc lập với sequence photo/video/text và giữ đúng sau update
-- [ ] Số media khả dụng không tính file có hash đã dùng
-- [ ] Direct Local: task đầu đăng ngay; task sau tool chờ local rồi đăng trực tiếp, không có `scheduled_publish_time`
-- [ ] Direct Local không đổi khi sửa khung giờ Hẹn Facebook; loại bài/số bài/gap lấy đúng khối Direct
-- [ ] Tổng bài Hẹn Facebook bằng tổng các dòng khung; dòng 0/sai định dạng bị chặn
-- [ ] Nhiều Page dùng cùng Caption folder không nhận trùng cùng vị trí; caption thành công làm số “chưa dùng” giảm live
-- [ ] Popup tối đa 3, có nút ×, tự tắt, nhiều cập nhật được gom và mở lại job không phát lại popup cũ
-
-## 5.1. Báo cáo / follower
-
-- [ ] Báo cáo Page ghi đủ App · Admin/Profile · Page và follower
-- [ ] CSV Page tạo theo ngày; Excel Page theo App có một sheet mỗi ngày
-- [ ] CSV lịch sử tạo theo ngày; Excel lịch sử có một sheet mỗi ngày
-- [ ] Tự xuất cuối ngày lúc 23:59 giờ Việt Nam
-- [ ] Tăng/giảm follower 1 · 3 · 7 · 30 ngày đúng snapshot; thiếu dữ liệu ghi rõ
-- [ ] Page thiếu quyền Facebook hiển thị cảnh báo quyền, không ghi follower giả
+- [ ] Connect App 1 mở browser  
+- [ ] **Chrome Portable:** `FB_BROWSER_PATH=...\ChromePortable.exe`  
+- [ ] Mở OAuth = **cùng** Portable đã login (không profile trống)  
+- [ ] **Không** set `FB_CHROME_USER_DATA_DIR` / `FB_CHROME_PROFILE` (gây logout)  
+- [ ] Callback `modelswiki.top` / relay OK  
+- [ ] Page list sync sau Connect  
+- [ ] 2FA / captcha: user hoàn tất 1 lần, session **không** bị out ngay sau Connect  
 
 ---
 
-## 6. Auto-update
+## 5. Chrome Portable (máy khách) — logout / captcha / extension
 
-- [ ] Banner khi GitHub có version **mới hơn** + có file `.exe`  
-- [ ] Bấm Cập nhật → chỉ thay exe · **license còn**  
-- [ ] Release không có exe → báo thiếu asset, không crash  
-- [ ] Update hiển thị tiến trình %/dung lượng trong app, không mở/spam CMD
-- [ ] Sau download Electron thoát rồi thay đúng EXE tại chỗ và mở lại app
-- [ ] Release thiếu/sai file `.sha256.txt` → updater hủy, xóa `.new`, không thay EXE
-- [ ] Domain Ngrok gọi `/api/health` hoặc dashboard → 403; callback Facebook vẫn vào được
+- [ ] Connect **không** spawn `chrome.exe --user-data-dir=...` (log: `portable-launcher` / URL-only)  
+- [ ] Sau Connect: FB vẫn login trên Portable  
+- [ ] Extension vẫn trên profile Portable (không “mất hết”)  
+- [ ] Sau **đăng bài** bulk vừa: session browser vẫn (hoặc chỉ captcha Meta nếu spam quá)  
+- [ ] Sau **xóa bulk**: tool **không** tự thoát; tray vẫn sống nếu đóng cửa sổ  
 
----
-
-## 7. Gói khách (pack-customer)
-
-- [ ] Có `VERSION.txt` đúng version  
-- [ ] Có `README-KHACH.txt`, `.env.example`  
-- [ ] Có `.exe` sau khi build+sync (hoặc ghi rõ “chưa build”)  
-- [ ] Zip thử: giải nén máy sạch / folder mới chạy được (trial)  
+**Nếu vẫn captcha sau bulk lớn:** chia nhỏ job (Meta security, không phải cookie wipe).
 
 ---
 
-## 8. GitHub (chỉ khi user đồng ý)
+## 6. Đăng bài / Direct / Hẹn FB
 
-- [ ] User đã **OK** push / release  
-- [ ] Không commit `.env`, private key, `data/`  
-- [ ] Tag version = package.json  
-- [ ] Release **có** `FB-Page-Studio-Desktop.exe`  
-
----
-
-## 9. Bug lịch sử (đã xử lý)
-
-| Bug | Xử lý |
-|-----|--------|
-| Black screen desktop | sqlite rebuild · env path |
-| OAuth 2FA | browser ngoài |
-| App2 fallback App1 | getMetaApp không fallback |
-| Slot 30 ngày sai ms | `*60*1000` đủ |
-| Update mất data? | Chỉ đổi exe · license trong data/ |
-| Đổi tab/reload mất Page đã chọn | Lưu `posting_workspace_v1` trong SQLite, không đọc checkbox tạm |
-| Sửa config rồi chuyển Page bị mất/ghi nhầm | Snapshot payload + flush đúng `pageId` trước khi chuyển |
-| Máy mới không chọn được Page, API 500 | Schema mới có đủ `active_hours_json`, `active_hours_at`, `preferred_hours_json` |
-| Thiết lập lần đầu ghi nhầm `.env` source | `FB_USER_DIR/FB_EXE_DIR` là đường dẫn bắt buộc |
-| Direct Local lại tạo Facebook scheduled post | Mọi slot Direct là `kind: post`; job chờ local theo `run_at` |
-| Page dùng chung Caption folder vẫn bắt đầu từ caption đầu | Thêm `caption_pool_state`, một con trỏ nguyên tử cho mỗi pool |
-| Số bài Direct mâu thuẫn tổng khung giờ | Tách hai nguồn: Direct dùng số bài riêng; Hẹn Facebook dùng tổng các dòng khung |
-| Popup OK/FAIL phủ kín màn hình | Tối đa 3, có nút đóng, tự hết hạn, gom batch và không replay job cũ |
-| ZIP khó kiểm tra đúng EXE | Gói khách có EXE versioned + SHA-256 sidecar và kiểm tra giải nén/hash |
-| VERSION.txt thư mục App còn v1.2.19 | Đã đồng bộ metadata sang v1.2.20 |
-| Nhiều EXE cũ dễ mở nhầm | Chuyển bản v1.2.16–v1.2.19 vào `_old-versions`, giữ lại để phục hồi |
-| Build lại nhưng release asset vẫn là file cũ cùng version | `release:verify` chặn hash lệch; bắt buộc chạy lại pack → release asset → ZIP → verify sau build cuối |
-| Lưu giờ ưa thích hàng loạt luôn báo Page not found | Đặt route `/preferred-hours/bulk` trước route động `/:pageRowId` |
-| Option 1 hẹn Facebook vẫn chạy App so le | `buildRotationPlan` đọc `app_rotation_mode`; per-App hoàn tất từng App trước |
-| Media/Caption live bị lặp khi chỉ một folder khác nhau | Tách dedupe `media_pools` và `caption_pools`, gắn rõ danh sách Page dùng chung |
-| Bài Facebook đã published biến mất khỏi quota anti-spam | Tính cả `published` và `schedule_overdue` trong cap/cooldown/caption |
-| Ngrok làm lộ dashboard/API quản trị | Public proxy chỉ cho phép OAuth callback; mọi UI/API khác trả 403 |
-| Updater có thể cài EXE tải lỗi/sai asset | Bắt buộc sidecar SHA-256 và xác minh trước khi tạo BAT thay file |
-| Ngrok gửi `--url=https://localhost` và báo ERR_NGROK_314 | Chặn localhost ở API/domain setup và Ngrok manager; trả trạng thái `needs_domain`, không spawn lệnh sai |
+- [ ] Chọn Page → config caption/media → lưu  
+- [ ] Direct Local: task đầu đăng ngay (tool mở)  
+- [ ] Hẹn Facebook: post scheduled trên page  
+- [ ] Fail list + retry task lỗi  
+- [ ] Anti-spam / quota không tạo task chắc vượt  
+- [ ] Reload app: page selection / config còn  
 
 ---
 
-## Báo bug
+## 7. Rotation
 
-Ghi: bước · màn · version topbar · license mode · DEV hay gói khách · log `desktop-startup.log`.
-# Cập nhật kiểm tra bug v1.2.21 — 2026-07-20
+- [ ] Plan so-le App/Page  
+- [ ] Run-now preview  
+- [ ] Gap cùng page  
+- [ ] Cửa sổ giờ VN  
 
-- Đã sửa preview Direct Local không trừ quota đã dùng trong ngày.
-- Đã sửa UTC/VN của `last_post_at`, interval và bộ đếm ngày Việt Nam.
-- Đã sửa Page tick chạy khác Page đang mở cấu hình.
-- Đã sửa retry schedule giữ giờ quá khứ và overdue không được kiểm tra lại.
-- Đã thêm refresh Media/Caption trong lúc job chờ và test hồi quy tương ứng.
-- Kết quả cuối: `npm test` 209/209, clean runtime PASS, release verify v1.2.21 PASS.
+---
+
+## 8. Xóa Fanpage (critical)
+
+### 8.1 UI & filter ngày
+- [ ] «Đến hết ngày» = 23:59:59 — bài **sau** ngày đó **không** xóa  
+- [ ] Log: `Lọc ngày: từ … → đến …`  
+- [ ] Log: `bỏ N object NGOÀI khoảng` khi có filter  
+- [ ] Full wipe: để trống ngày  
+
+### 8.2 List & xóa
+- [ ] List có edges (published / feed / videos / …)  
+- [ ] Progress OK/Fail/Còn lại không loạn nhảy  
+- [ ] Rate limit #4: GLOBAL pause 1 countdown, tự resume  
+- [ ] Batch // adaptive (log `//n/m adaptive` nếu có)  
+
+### 8.3 Share của page
+- [ ] Page có `shared_story` → xóa được (OK tăng)  
+- [ ] Không nhầm với visitor (thường fail #200)  
+
+### 8.4 Kết quả / fail Meta (chấp nhận được)
+- [ ] `#200 same app` photo → fail list, không crash  
+- [ ] `#200 not created by application` → fail list  
+- [ ] `Unsupported DELETE` → fail list  
+- [ ] CSV / TXT fail tải được  
+- [ ] Tool **không out** khi job done (v1.2.70+)  
+
+### 8.5 Branding
+- [ ] Checkbox avatar/cover **mặc định tắt**  
+- [ ] Full wipe + tick → thử xóa (có thể #200)  
+- [ ] Lọc ngày + không tick → **không** xóa avatar  
+
+---
+
+## 9. Group delete
+
+- [ ] Parse post ID / link  
+- [ ] List feed group (nếu Graph cho) hoặc báo lỗi rõ  
+- [ ] Không treo vô hạn  
+
+---
+
+## 10. Update / license
+
+- [ ] Check update thấy latest GitHub  
+- [ ] License còn sau cài đè Setup  
+- [ ] Machine ID ổn định  
+
+---
+
+## 11. Không được ship nếu
+
+- [ ] `npm test` fail (trừ flake đã ghi nhận + ship feature không liên quan)  
+- [ ] Delete gate fail khi thay code xóa  
+- [ ] Setup version ≠ tag  
+- [ ] pack-customer lộ secret  
+- [ ] Chrome Portable vẫn ép `--user-data-dir` (log)  
+
+---
+
+## 12. Smoke máy khách (5 phút)
+
+1. Cài Setup latest đè  
+2. Mở app → version đúng  
+3. Page list còn  
+4. Dry-run xóa 1 page (0 delete) hoặc preview  
+5. Connect (nếu cần) trên Portable — session giữ  
+6. Đóng cửa sổ → tray → mở lại  
+
+---
+
+## 13. Ghi chú lỗi hay gặp
+
+| Triệu chứng | Hướng xử lý |
+|-------------|-------------|
+| Out app sau xóa 7k bài | Đã fix 1.2.70 SSE slim — cài ≥1.2.70 |
+| FB logout + captcha Portable | ≥1.2.72 + `FB_BROWSER_PATH=ChromePortable.exe` only |
+| Mất extension | Profile trống — chọn đúng profile Portable |
+| #200 xóa | Meta ownership — không fix bằng list thêm |
+| #4 liên tục | list//1, chờ GLOBAL pause, ít page song song |
+
+---
+
+*Cập nhật: 2026-07-30 · checklist cho **v1.2.72+***

@@ -1337,11 +1337,15 @@ function startBackend() {
   serverProc.on("error", (e) => log("Server spawn error", e.message));
   serverProc.on("message", (msg) => {
     if (msg?.type !== "fbps-apply-update" || !msg.batPath) return;
-    const batPath = path.resolve(String(msg.batPath));
-    const cwd = path.resolve(String(msg.cwd || path.dirname(batPath) || USER_DIR));
-    // Allow _apply_update.bat only under user data / updates / beside outer EXE
-    const baseOk = path.basename(batPath).toLowerCase() === "_apply_update.bat";
-    const batDir = path.dirname(batPath).toLowerCase();
+    const scriptPath = path.resolve(String(msg.batPath));
+    const cwd = path.resolve(String(msg.cwd || path.dirname(scriptPath) || USER_DIR));
+    const base = path.basename(scriptPath).toLowerCase();
+    // Allow update scripts only under user data / updates / beside outer EXE
+    const baseOk =
+      base === "_apply_update.bat" ||
+      base === "_apply_update.ps1" ||
+      base === "_apply_update.cmd";
+    const scriptDir = path.dirname(scriptPath).toLowerCase();
     const allowedDirs = [
       USER_DIR && path.resolve(USER_DIR),
       USER_DIR && path.join(path.resolve(USER_DIR), "updates"),
@@ -1352,28 +1356,54 @@ function startBackend() {
     ]
       .filter(Boolean)
       .map((d) => path.resolve(d).toLowerCase());
-    const dirOk = allowedDirs.some((d) => batDir === d || batDir.startsWith(d + path.sep));
-    if (!baseOk || !dirOk || !fs.existsSync(batPath)) {
-      log("Ignored invalid update restart request", batPath, "cwd", cwd);
+    const dirOk = allowedDirs.some(
+      (d) => scriptDir === d || scriptDir.startsWith(d + path.sep)
+    );
+    if (!baseOk || !dirOk || !fs.existsSync(scriptPath)) {
+      log("Ignored invalid update restart request", scriptPath, "cwd", cwd);
       return;
     }
-    log("Update ready; Electron will quit before replacement", batPath);
+    log("Update ready; Electron will quit before replacement", scriptPath);
     if (applyingUpdate) return;
     applyingUpdate = true;
     // Prevent tray "close to tray" from keeping process alive
     app.isQuitting = true;
     setTimeout(() => {
       try {
-        // Detached cmd so BAT survives after we exit
-        spawn("cmd.exe", ["/c", batPath], {
-          detached: true,
-          stdio: "ignore",
-          cwd: path.dirname(batPath),
-          windowsHide: true,
-        }).unref();
-        log("Update BAT started", batPath);
+        // Prefer PowerShell (no cmd find.exe hang). Fallback: bat launcher.
+        const workDir = path.dirname(scriptPath);
+        const isPs1 = /\.ps1$/i.test(scriptPath);
+        if (isPs1) {
+          spawn(
+            "powershell.exe",
+            [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-WindowStyle",
+              "Hidden",
+              "-File",
+              scriptPath,
+            ],
+            {
+              detached: true,
+              stdio: "ignore",
+              cwd: workDir,
+              windowsHide: true,
+            }
+          ).unref();
+          log("Update PS1 started", scriptPath);
+        } else {
+          spawn("cmd.exe", ["/c", scriptPath], {
+            detached: true,
+            stdio: "ignore",
+            cwd: workDir,
+            windowsHide: true,
+          }).unref();
+          log("Update BAT started", scriptPath);
+        }
       } catch (e) {
-        log("Update BAT spawn error", e.message);
+        log("Update script spawn error", e.message);
         applyingUpdate = false;
         app.isQuitting = false;
         return;
@@ -1410,8 +1440,8 @@ function startBackend() {
         } catch {
           process.exit(0);
         }
-      }, 200);
-    }, 400);
+      }, 400);
+    }, 600);
   });
 
   return waitForServer(PORT);

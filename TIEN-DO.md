@@ -1,11 +1,19 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> Cập nhật: **2026-07-20** · Code: **1.2.22**
-> **Gốc DEV:** `D:\fb-page-poster\`  
-> **Gói KHÁCH:** `pack-customer\` + ZIP `FB-Page-Studio-v1.2.22-Windows.zip`
-> **Admin:** `Admin-Quan-Ly\` · **Lưu trữ cũ:** `Luu-Tru-Ban-Cu\`  
-> **GitHub:** `trumrename/fb-page-studio`  
-> **Trạng thái nhanh:** `TRANG-THAI-HIEN-TAI.md`
+> **Snapshot mới nhất:** `TRANG-THAI-HIEN-TAI.md` · **v1.2.72** · 2026-07-30  
+> **Source:** `C:\Users\NCpc\fb-page-poster\` · **Setup build:** `F:\FB-Page-Studio\dist-desktop-oauth\`  
+> **GitHub:** `trumrename/fb-page-studio` · **Docs:** `DOC-INDEX.md`  
+> Phần dưới giữ **lịch sử**; mốc R là bổ sung gần nhất.
+
+---
+
+## R. 2026-07-27 → 07-30 — Xóa Fanpage + Desktop (v1.2.60 → v1.2.72)
+
+- [x] Bulk delete Graph batch · adaptive · GLOBAL #4  
+- [x] Filter đến hết ngày · multi-edge list · shared_story LIVE DELETE  
+- [x] Gate `test:delete-live` · branding an toàn  
+- [x] v1.2.70 SSE/OOM + tray · v1.2.71 system Chrome · **v1.2.72 Portable launcher**  
+- [x] Docs: TONG-QUAN · CHECK-BUG · TRANG-THAI · DOC-INDEX · DOWNLOAD · HUONG-DAN-MAY-MOI  
 
 ---
 

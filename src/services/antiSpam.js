@@ -598,8 +598,8 @@ export function assertCanPublish({
 }
 
 /**
- * After successful publish: record caption + media hash, move media to posted.
- * Always moves media when media_once_forever (even if posted_folder empty → still try).
+ * After successful publish: record caption + media hash, MOVE (không copy) media → posted.
+ * File phải biến mất khỏi folder media để không bị pick đăng lại.
  */
 export function finalizeMediaAfterSuccess({
   mediaPath,
@@ -612,9 +612,11 @@ export function finalizeMediaAfterSuccess({
   const s = getAntiSpamSettings();
   let movedPath = null;
   let hash = null;
+  let moveError = null;
 
   if (mediaPath && fs.existsSync(mediaPath)) {
     const sourceFolder = path.dirname(mediaPath);
+    const originalName = path.basename(mediaPath);
     const mediaKind = /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(mediaPath) ? "video" : "photo";
     try {
       hash = fileSha256(mediaPath);
@@ -625,18 +627,33 @@ export function finalizeMediaAfterSuccess({
     try {
       ensureDir(destDir);
       movedPath = moveToPosted(mediaPath, destDir);
+      // Verify source is gone (true move)
+      if (fs.existsSync(mediaPath)) {
+        try {
+          fs.unlinkSync(mediaPath);
+        } catch {
+          /* */
+        }
+      }
+      if (fs.existsSync(mediaPath)) {
+        moveError = `File vẫn còn trong media sau khi chuyển: ${mediaPath}`;
+        logEvent("move_source_remain", moveError);
+      } else {
+        logEvent("media_moved", `${originalName} → ${movedPath}`);
+      }
     } catch (e) {
-      logEvent("move_fail", e.message);
-      // If move failed but we must not re-use: still record hash
-      movedPath = mediaPath;
+      moveError = e.message || String(e);
+      logEvent("move_fail", moveError);
+      // Keep hash recorded so same content is not re-used even if file stuck
+      movedPath = null;
     }
     if (hash) {
       recordMediaHash({
         hash,
         page_row_id,
         page_id,
-        original_name: path.basename(mediaPath),
-        posted_path: movedPath,
+        original_name: originalName,
+        posted_path: movedPath || mediaPath,
         fb_post_id,
         source_folder: path.resolve(sourceFolder).toLowerCase(),
         media_kind: mediaKind,
@@ -646,7 +663,7 @@ export function finalizeMediaAfterSuccess({
 
   if (caption) recordCaption(caption, page_row_id, page_id);
   noteGraphSuccess();
-  return { movedPath, hash };
+  return { movedPath, hash, moveError };
 }
 
 /**

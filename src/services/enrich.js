@@ -85,6 +85,7 @@ function mapInsights(insightsResult) {
       ok: false,
       error: insightsResult.error,
       metrics: {},
+      summary: {},
       growth_7d: null,
       label: "—",
     };
@@ -102,20 +103,54 @@ function mapInsights(insightsResult) {
       sum: agg.sum,
       end_time: values[values.length - 1]?.end_time || null,
       values_count: values.length,
+      /** raw daily points for detail charts (capped) */
+      series: (values || []).slice(-28).map((v) => ({
+        end_time: v.end_time || null,
+        value: typeof v.value === "number" ? v.value : null,
+      })),
     };
   }
   const growth_7d = computeGrowth7d(metrics);
+
+  /** Friendly summary cards for pages-hub detail */
+  const sumOf = (key) =>
+    typeof metrics[key]?.sum === "number" ? metrics[key].sum : null;
+  const latestOf = (key) =>
+    typeof metrics[key]?.latest === "number" ? metrics[key].latest : null;
+  const summary = {
+    impressions_7d: sumOf("page_impressions"),
+    reach_7d: sumOf("page_impressions_unique"),
+    post_impressions_7d: sumOf("page_posts_impressions"),
+    post_reach_7d: sumOf("page_posts_impressions_unique"),
+    engagements_7d: sumOf("page_post_engagements"),
+    engaged_users_7d: sumOf("page_engaged_users"),
+    page_views_7d: sumOf("page_views_total"),
+    video_views_7d: sumOf("page_video_views"),
+    fan_adds_7d: sumOf("page_fan_adds"),
+    fan_removes_7d: sumOf("page_fan_removes"),
+    reactions_7d: sumOf("page_actions_post_reactions_total"),
+    consumptions_7d: sumOf("page_consumptions"),
+    follows_latest: latestOf("page_follows"),
+    // 28d windows (tagged names from getPageInsights)
+    reach_28d: sumOf("page_impressions_unique__28d"),
+    engagements_28d: sumOf("page_post_engagements__28d"),
+    post_reach_28d: sumOf("page_posts_impressions_unique__28d"),
+  };
+
   let label = "—";
   if (growth_7d.absolute != null) {
     const sign = growth_7d.absolute > 0 ? "+" : "";
     label =
       `7d ${sign}${growth_7d.absolute}` +
       (growth_7d.percent != null ? ` (${sign}${growth_7d.percent}%)` : "");
+  } else if (summary.engagements_7d != null) {
+    label = `eng 7d ${summary.engagements_7d}`;
   }
   return {
     ok: true,
     error: null,
     metrics,
+    summary,
     growth_7d,
     label,
     tried_errors: insightsResult.errors || [],

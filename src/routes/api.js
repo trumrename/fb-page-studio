@@ -5,6 +5,7 @@ import {
   countPages,
   syncPagesForAccount,
   deleteAccount,
+  deleteAccounts,
   getAccountPublic,
   getUserToken,
   getPagePublic,
@@ -1376,9 +1377,11 @@ router.post("/update/apply", async (req, res) => {
       started.promise.then((result) => {
         if (!result?.ok) return;
         // Portable in-place OR NSIS Setup: both write _apply_update.bat then quit app
-        if (result.updated && restart && result.bat) {
-          const cwd = path.dirname(result.bat);
-          setTimeout(() => requestUpdateRestart(result.bat, cwd), 700);
+        if (result.updated && restart && (result.ps1 || result.bat)) {
+          // Prefer PowerShell (no cmd find.exe hang); bat is thin launcher fallback
+          const script = result.ps1 || result.bat;
+          const cwd = path.dirname(script);
+          setTimeout(() => requestUpdateRestart(script, cwd), 700);
         }
       });
     }
@@ -1453,6 +1456,23 @@ router.delete("/accounts/:id", (req, res) => {
   const id = Number(req.params.id);
   deleteAccount(id);
   res.json({ ok: true, deleted: id });
+});
+
+/**
+ * POST /api/accounts/bulk-delete
+ * Body: { ids: number[] } — tick từng account hoặc tất cả
+ */
+router.post("/accounts/bulk-delete", (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) {
+      return res.status(400).json({ ok: false, error: "Chọn ít nhất 1 tài khoản (ids)" });
+    }
+    const r = deleteAccounts(ids);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 /**

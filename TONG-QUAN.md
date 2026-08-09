@@ -1,180 +1,197 @@
 # FB Page Studio — Tổng quan tool
 
-**1 app desktop** quản lý nhiều tài khoản Facebook + nhiều fanpage, đăng bài / hẹn giờ qua **Graph API chính thức** (không cookie, không giả Chrome, không emulator).
+**1 app desktop Windows** quản lý nhiều tài khoản Facebook + nhiều Fanpage, đăng bài / hẹn giờ / xóa hàng loạt qua **Facebook Graph API chính thức**.
 
 | | |
 |--|--|
 | **Tên** | FB Page Studio |
-| **Phiên bản** | **1.2.21** |
-| **Máy DEV (gốc)** | `D:\fb-page-poster\` |
-| **Gói KHÁCH** | `D:\fb-page-poster\pack-customer\` (+ ZIP `FB-Page-Studio-v1.2.21-Windows.zip`) |
-| **Ghi chú DEV** | `D:\fb-page-poster\pack-dev\README-DEV.md` |
-| **Admin cấp key** | `D:\fb-page-poster\Admin-Quan-Ly\MENU-ADMIN.bat` |
-| **Server trung tâm (web)** | `DEPLOY_MODE=central` · `HUONG-DAN-SERVER-TRUNG-TAM.md` |
-| **EXE + bỏ Ngrok** | `OAUTH_RELAY=1` · `oauth-relay/` · `HUONG-DAN-OAUTH-RELAY.md` · `.env.customer-relay.example` |
-| **Lưu trữ bản cũ** | `D:\fb-page-poster\Luu-Tru-Ban-Cu\` |
+| **Phiên bản hiện tại** | **v1.2.72** (2026-07-29) |
+| **Loại** | SAFE — OAuth + Graph only (không cookie / id\|pass trong bản chính) |
+| **Máy DEV (source)** | `C:\Users\NCpc\fb-page-poster\` (có thể mirror `D:\` / `F:\`) |
+| **Data runtime (Setup)** | `%APPDATA%\fb-page-studio\` (`.env`, `data\app.db`, license, media) |
 | **GitHub** | https://github.com/trumrename/fb-page-studio |
-| **Docs** | `TRANG-THAI-HIEN-TAI.md` · `TIEN-DO.md` · `CHECK-BUG.md` · `BAO-CAO-TEST.md` |
+| **Tải Setup (latest)** | https://github.com/trumrename/fb-page-studio/releases/latest/download/FB-Page-Studio-Setup.exe |
+| **OAuth relay** | `https://modelswiki.top` · `OAUTH_RELAY=1` |
 
----
-
-## Logic đăng hiện tại v1.2.21
-
-- **Direct Local:** tool phải mở; task đầu đăng ngay, task sau chờ `run_at` trên máy rồi gọi đăng trực tiếp. Không gửi lịch hẹn cho Facebook.
-- **Hẹn Facebook:** Facebook giữ bài và tự đăng theo giờ; tổng bài/Page/ngày bằng đúng tổng số bài của các dòng khung giờ.
-- **Caption dùng chung:** các Page trỏ cùng Caption folder dùng một con trỏ chung; caption chỉ được note sau khi Facebook nhận đăng thành công và không được cấp lại trong cửa sổ anti-spam.
-- **Thông báo:** tối đa 3 popup có nút đóng; toàn bộ OK/FAIL vẫn lưu trong bảng tiến trình và lịch sử.
-- **Quota:** preview Direct Local trừ số bài đã đăng trong ngày VN; không tạo task chắc chắn vượt giới hạn Page.
-- **Thời gian:** toàn bộ bộ đếm ngày và interval dùng đúng UTC lưu trữ + giờ Việt Nam hiển thị.
-
-### Bản đang dùng để check bug
-
-- EXE mới: `FB-Page-Studio-App\FB-Page-Studio-Desktop-v1.2.21.exe`
-- ZIP khách: `pack-customer\FB-Page-Studio-v1.2.21-Windows.zip` (cũng có trong `release-assets\`)
-- Gói khách sạch: `npm run pack:all` · gate: `npm run release:verify`
-- Bản cũ: `Luu-Tru-Ban-Cu\` (không còn rải trong App folder)
-- Test: **210/210 PASS** · npm audit 0 · License commercial Owner-Dev
-
----
-
-## 0. Hai nơi lưu — đừng nhầm
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  MÁY BẠN (DEV) — file gốc                               │
-│  D:\fb-page-poster\                                     │
-│    src\ public\ electron\  … source                     │
-│    keys\license-private.pem  ← cấp key, KHÔNG gửi khách │
-│    .env  data\  … dev                                    │
-│    pack-dev\README-DEV.md                                │
-│    pack-customer\  ← sau build, zip gửi khách            │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│  MÁY KHÁCH — chỉ nhận gói pack-customer                 │
-│    FB-Page-Studio-Desktop.exe                           │
-│    .env (tự điền từ .env.example)                       │
-│    data\ (tự tạo: license.json, db, media)              │
-│  KHÔNG: source, private key, node_modules               │
-└─────────────────────────────────────────────────────────┘
-```
-
-| Việc | Làm ở đâu |
-|------|-----------|
-| Sửa bug / thêm tính năng | `D:\fb-page-poster\` (gốc) |
-| Build exe | `npm run build:desktop` trên gốc |
-| Đổ file cho khách | `npm run pack:all` → `pack-customer\` + ZIP Windows |
-| Cấp license key | Máy DEV · `scripts/gen-license.mjs` |
-| Push GitHub | **Chỉ khi bạn đồng ý** (xem `AGENTS.md`) |
+**Chỉ mục docs:** `DOC-INDEX.md`
 
 ---
 
 ## 1. Mục tiêu sản phẩm
 
-| Làm được | Không làm |
-|----------|-----------|
-| Multi-account OAuth official | Cookie / auto-login dev.facebook |
-| Multi Meta App (App1 + App2) | Spam song song đa luồng |
-| Publish + hẹn giờ Graph | Story API đầy đủ |
-| Rotation so-le app/page | Vượt limit Meta |
-| Anti-spam + CSV/Excel | |
-| License trial / NV / TM / lifetime | DRM 100% chống crack |
-| Auto-update từ GitHub Release | Xóa license khi update |
+| Làm được | Không làm / không hứa |
+|----------|------------------------|
+| Multi-account OAuth official | Cookie browser / auto-login dev.facebook (tool Session riêng) |
+| Multi Meta App (App1, App2, …) | Vượt rate limit Meta (#4) |
+| Publish feed text/ảnh/video · caption pool · anti-spam | Xóa 100% mọi object Graph cấm (#200) |
+| Direct Local (tool canh giờ) hoặc hẹn Facebook | Crack / giả extension Chrome |
+| Rotation so-le app/page | Story full (có module Story riêng theo version) |
+| **Xóa hàng loạt** Fanpage (batch 50) + filter ngày | Visitor post (cần quyền + App Review) |
+| Xóa **share của page** (`shared_story`) — đã live-test | Cover/avatar upload tay (same-app only) |
+| License key · update từ GitHub Releases | — |
 
 ---
 
-## 2. Kiến trúc
+## 2. Kiến trúc ngắn
 
 ```
-Desktop (Electron) → Express :3847 → Graph API
-  OAuth multi-app · Publish · Jobs sequential
-  Rotation · Anti-spam · License · Auto-update
+┌──────────────────────────────────────────────────────────┐
+│  Electron (main.cjs)                                     │
+│  - Cửa sổ UI · tray · mở browser OAuth (Portable-safe) │
+│  - Spawn server Node bằng chính binary Electron          │
+└───────────────────────┬──────────────────────────────────┘
+                        │ http://127.0.0.1:PORT
+┌───────────────────────▼──────────────────────────────────┐
+│  Express (src/server.js)                                 │
+│  /auth OAuth · /api pages/jobs · /api/delete-posts · …   │
+│  better-sqlite3 · encrypt tokens · license · updater     │
+└───────────────────────┬──────────────────────────────────┘
+                        │ Graph API v21+
+┌───────────────────────▼──────────────────────────────────┐
+│  Meta: OAuth relay modelswiki.top · Page access tokens   │
+└──────────────────────────────────────────────────────────┘
 ```
 
-- Đăng **tuần tự** (~350 ms/task)  
-- License: `data/license.json` — **giữ sau update** (vĩnh viễn hoặc còn hạn)  
-- Update: chỉ thay `.exe`
+| Thành phần | Path |
+|------------|------|
+| UI HTML | `public/` (`app.html`, `posting.html`, `delete-posts.html`, …) |
+| Graph helpers | `src/services/facebook.js` |
+| Xóa Fanpage | `src/services/deletePosts.js` · `src/routes/deletePosts.js` |
+| Rate limit | `src/services/rateLimit.js` (GLOBAL pause #4, adaptive batch) |
+| Desktop | `electron/main.cjs` |
+| OAuth relay (server) | `oauth-relay/` |
+| Session cookie (tách tool) | `ENABLE_HTTP_OPS=1` hoặc project **fb-session-ops** — **không** bật mặc định bản SAFE |
 
 ---
 
-## 3. Module chính
-
-### Accounts / Multi Meta App
-Connect `?app=app1|app2` · `meta_app_key` trên account · badge UI  
-
-### Publish & Schedule  
-text/photo/video · caption random · bulk hẹn giờ · **Rotation so-le**  
-
-Trạng thái màn đăng được lưu trong SQLite: Page đã chọn, Page đang cấu hình, tab và lịch dùng lần cuối vẫn giữ sau reload/đóng mở. Cấu hình Page tự lưu và được flush trước khi chuyển màn hình.
-
-### Anti-spam  
-Recommended: ~12/h · ~40/day · bulk ≤15 page · media 1 lần  
-
-### License  
-Trial 7 ngày · key Ed25519 · UI `/license.html` · private key chỉ DEV  
-
-### Auto-update  
-Banner + nút **Cập nhật ngay** · check mỗi 4h · cần Release có `.exe`  
-
-### Vận hành và theo dõi
-Giao diện tách rõ **Tổng quan → Kết nối → Cấu hình Page → Xoay vòng/Chạy → Tiến trình → Anti-spam → Báo cáo → License**. Job chạy tuần tự, có phần trăm, trạng thái từng tác vụ, thông báo thành công/lỗi và lưu trạng thái để tiếp tục theo dõi sau khi mở lại app.
-
-### Báo cáo ngày và follower
-- Thông tin Page tách theo App, ghi rõ App · Admin/Profile · Page; CSV theo ngày và Excel cộng dồn, mỗi ngày một sheet.
-- Lịch sử đăng xuất CSV theo ngày và Excel cộng dồn; tự động chốt lúc **23:59 giờ Việt Nam**.
-- Lưu follower từng Page theo ngày và hiển thị tăng/giảm **1 · 3 · 7 · 30 ngày**. Ngày đầu chưa đủ mốc sẽ ghi rõ chưa đủ dữ liệu.
-- File nằm tại `FB-Page-Studio-App\data\exports\daily` trên bản đang dùng.
-
-### Đồng bộ bài hẹn giờ Facebook
-Bài hẹn giờ được đối soát thủ công hoặc tự động mỗi 5 phút. Khi Facebook xác nhận đã đăng, lịch sử chuyển từ `scheduled` sang `published`; thời gian quá khứ không được coi là một lịch hẹn mới hợp lệ.
-
-### Setup domain OAuth nhiều máy
-Trong màn **Connect & chọn Page**, nhập một domain HTTPS để tool tự cập nhật `APP_BASE_URL` và Redirect URI cho App 1/App 2, đồng thời đưa đúng lệnh Ngrok. Nhiều máy có thể đăng song song; một domain chỉ được một máy dùng tại thời điểm Connect/Reconnect Facebook.
-
-### Chrome Profile OAuth
-Chọn Chrome Profile đã đăng nhập Facebook ngay trong app. Tool mở một tab OAuth mới trong đúng profile đó, nên dùng lại session Facebook thay vì profile Chrome mặc định/trống.
-
----
-
-## 4. Giao diện
-
-| Màn | URL |
-|-----|-----|
-| Tổng quan + tiến trình | `/app.html` |
-| Kết nối App/Profile/Page | `/index.html` |
-| Chọn Page + cấu hình + chạy + lịch + kết quả | `/posting.html` (4 workspace riêng) |
-| Anti-spam | `/antispam.html` |
-| License | `/license.html` |
-
----
-
-## 5. Flow DEV → KHÁCH
+## 3. Hai nơi lưu — đừng nhầm
 
 ```
-1. Code/fix trên D:\fb-page-poster
-2. node scripts/test-requirements.mjs + CHECK-BUG.md
-3. npm run build:desktop
-4. node scripts/sync-customer-pack.mjs
-5. Zip pack-customer → gửi khách + (tuỳ) cấp key
-6. Hỏi bạn: có push GH / upload Release không?
+┌─ MÁY DEV ─────────────────────────────────────────────┐
+│  C:\Users\NCpc\fb-page-poster\   (source)             │
+│  src\ public\ electron\ scripts\                      │
+│  keys\license-private.pem  ← KHÔNG ship khách         │
+│  Tổng Hợp Tool\pack-dev\ pack-customer\               │
+│  Build Setup: F:\FB-Page-Studio\dist-desktop-oauth\   │
+└───────────────────────────────────────────────────────┘
+
+┌─ MÁY KHÁCH (Setup NSIS) ──────────────────────────────┐
+│  Cài: Program Files\FB Page Studio\  (code)           │
+│  Data: %APPDATA%\fb-page-studio\                      │
+│        .env · data\app.db · license · media           │
+│  Cài đè Setup: GIỮ data/env (deleteAppData=false)     │
+└───────────────────────────────────────────────────────┘
+```
+
+| Việc | Làm ở đâu |
+|------|-----------|
+| Sửa code / bug | DEV source |
+| Build Setup | `npm run build:desktop:setup` |
+| Ship GitHub | tag `vX.Y.Z` + `gh release` (có Setup + SHA) |
+| Cấp license | `scripts/gen-license.mjs` / Admin menu |
+| Data user | **AppData**, không phải folder cài |
+
+---
+
+## 4. Tính năng chính theo module
+
+### 4.1 Connect / OAuth
+- Multi Meta App (`app1`, `app2`, …)
+- Redirect HTTPS qua **modelswiki.top** (relay)
+- Connect mở browser: **Chrome Portable** = `ChromePortable.exe` + URL only (v1.2.72)
+- Không ép `--user-data-dir` / Profile hệ thống (tránh logout FB + captcha)
+
+### 4.2 Đăng bài
+- **Direct Local:** tool mở, đợi `run_at` rồi `POST` Graph
+- **Hẹn Facebook:** `scheduled_publish_time` trên Graph
+- Caption pool dùng chung · anti-spam · quota Page/ngày
+- Media local · random spacing
+
+### 4.3 Rotation
+- So-le App / Page · cửa sổ giờ · gap cùng page
+- Matrix / plan / run-now
+
+### 4.4 Xóa Fanpage (`delete-posts.html`)
+- List multi-edge: `published_posts`, `feed`, `posts`, `videos`, `reels`, `photos`, `tagged`, `visitor_posts` (nếu quyền)
+- Graph **batch DELETE ×50** · adaptive parallel · GLOBAL pause code #4
+- Filter **từ ngày / đến hết ngày** (23:59:59) — không multi-pass xóa ngoài khoảng
+- **Share của page** (`status_type=shared_story`) — live DELETE OK
+- Avatar/cover: thử xóa (Meta thường #200 nếu không same-app)
+- Báo cáo fail + CSV / TXT link
+
+### 4.5 Group delete
+- Graph Groups API hạn chế mạnh; path parse post ID / upload list
+
+### 4.6 License · Update
+- Key trial / commercial · machine bind
+- Update check GitHub Releases · Setup in-place Program Files
+
+---
+
+## 5. Giới hạn Meta (quan trọng)
+
+| Lỗi / tình huống | Ý nghĩa |
+|------------------|---------|
+| `(#200) App can only delete photos created by the same app` | Ảnh không do app upload |
+| `(#200) This post wasn't created by the application` | Bài không do app này tạo |
+| `Unsupported request - method type: delete` | Object không support DELETE |
+| `visitor_posts` #200 | Thiếu quyền / App Review |
+| Code **#4** Application request limit | Rate limit app — tool GLOBAL pause |
+| Captcha / logout browser sau bulk | Meta security + (cũ) mở Chrome sai profile |
+
+**Không hứa xóa sạch 100%** page có lịch sử đăng tay / app khác.
+
+---
+
+## 6. Lệnh DEV thường dùng
+
+```powershell
+cd C:\Users\NCpc\fb-page-poster
+npm install
+npm test                          # unit + static gates
+npm run test:delete-live          # unit date + LIVE list/share delete (cần token AppData)
+npm run build:desktop:setup       # NSIS Setup
+npm run pack:dev                  # Tổng Hợp Tool\pack-dev
+```
+
+Ship (khi đã đồng ý):
+
+```powershell
+# build + prepare assets + tag + gh release
+# Setup latest luôn:
+# https://github.com/trumrename/fb-page-studio/releases/latest/download/FB-Page-Studio-Setup.exe
 ```
 
 ---
 
-## 6. Stack
-
-Electron · Node 18+ · Express · better-sqlite3 · Graph v21 · ExcelJS  
-
----
-
-## 7. Liên kết docs
+## 7. File docs liên quan
 
 | File | Nội dung |
 |------|----------|
-| `TRANG-THAI-HIEN-TAI.md` | Bản đang check, hash, phần đã đạt và phần chưa test live |
-| `TIEN-DO.md` | Đã làm / chưa làm |
-| `CHECK-BUG.md` | Checklist test |
-| `LICENSE-KEYS.md` | Cấp key |
-| `pack-dev/README-DEV.md` | Máy dev |
-| `pack-customer/README-KHACH.txt` | Máy khách |
-| `AGENTS.md` | Quy tắc AI: hỏi trước khi GH |
+| `DOC-INDEX.md` | Mục lục docs |
+| `CHECK-BUG.md` | Checklist test trước ship |
+| `TRANG-THAI-HIEN-TAI.md` | Snapshot version / path / gate |
+| `DOWNLOAD.md` | Link tải cố định |
+| `YEU-CAU-BAT-BUOC.md` | Rule bắt buộc (AGENTS) |
+| `HUONG-DAN-OAUTH-RELAY.md` | Relay domain |
+| `HUONG-DAN-MAY-MOI.md` | Máy khách mới |
+| `HAI-TOOL-TACH-ROI.md` | SAFE Graph vs Session Ops |
+| `LICENSE-KEYS.md` | License |
+| `GITHUB.md` | Release GitHub |
+
+---
+
+## 8. Changelog gần (tóm)
+
+| Ver | Điểm |
+|-----|------|
+| **1.2.72** | Chrome Portable: `ChromePortable.exe` + URL only |
+| **1.2.71** | Không ép system User Data/Profile → bớt logout FB |
+| **1.2.70** | Bulk delete không OOM/out app; tray giữ process |
+| **1.2.69** | Live share delete + `test:delete-live` gate |
+| **1.2.67–68** | Filter ngày end-of-day; branding checkbox an toàn |
+| **1.2.60+** | Adaptive batch · GLOBAL #4 · list wipe multi-edge |
+
+---
+
+*Cập nhật: 2026-07-30 · phiên bản code **1.2.72***

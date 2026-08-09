@@ -221,14 +221,57 @@ function normalizeConfigBody(input) {
   }
   if (body.link_lists && typeof body.link_lists === "object") {
     const out = {};
+    // Scalar keys (NOT URL lists) — must not be split into arrays
+    const scalarKeys = new Set([
+      "story_link_mode",
+      "comment_link_mode",
+      "comment_pick_mode",
+      "comment_when",
+      "comment_link_next",
+      "comment_tpl_next",
+      "comment_delay_minutes",
+      "comment_min_likes",
+    ]);
     for (const [k, v] of Object.entries(body.link_lists)) {
-      if (k === "story_link_mode") {
-        out[k] = String(v || body.story_link_mode || "combo");
+      if (scalarKeys.has(k)) {
+        if (
+          k === "comment_link_next" ||
+          k === "comment_tpl_next" ||
+          k === "comment_delay_minutes" ||
+          k === "comment_min_likes"
+        ) {
+          const n = Number(Array.isArray(v) ? v[0] : v);
+          out[k] = Number.isFinite(n) ? Math.max(0, n) : 0;
+        } else if (k === "comment_link_mode" || k === "comment_pick_mode") {
+          const raw = Array.isArray(v) ? v[0] : v;
+          const m = String(raw || "random").trim().toLowerCase();
+          out[k] =
+            m === "sequential" || m === "sequence" || m === "theo_bai"
+              ? "sequential"
+              : "random";
+        } else if (k === "comment_when") {
+          const raw = Array.isArray(v) ? v[0] : v;
+          const m = String(raw || "after_publish").trim().toLowerCase();
+          out[k] =
+            m === "immediate" || m === "now" || m === "ngay" || m === "right_after_schedule"
+              ? "immediate"
+              : "after_publish";
+        } else {
+          // story_link_mode
+          out[k] = String(v || body.story_link_mode || "combo");
+        }
         continue;
       }
-      out[k] = typeof v === "string"
-        ? v.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
-        : (Array.isArray(v) ? v : []);
+      // URL / line lists
+      out[k] =
+        typeof v === "string"
+          ? v
+              .split(/\r?\n/)
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : Array.isArray(v)
+            ? v.map((s) => String(s ?? "").trim()).filter(Boolean)
+            : [];
     }
     if (body.story_link_mode && !out.story_link_mode) {
       out.story_link_mode = String(body.story_link_mode);
@@ -467,6 +510,7 @@ router.get("/history", (req, res) => {
     .prepare(
       `SELECT id, page_row_id, page_name, post_type, status, error,
               fb_post_id, fb_post_url, caption, media_path,
+              comment_text, comment_id,
               created_at, scheduled_publish_time,
               ${DELIVERY_MODE_SQL} AS delivery_mode
        FROM post_logs

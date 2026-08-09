@@ -330,6 +330,22 @@ router.post("/bulk-schedule", async (req, res) => {
           : "Không có slot hợp lệ để hẹn (kiểm tra anti-spam / giờ / page)",
         reasons,
         plan: planned,
+        media_check: planned.media_check || null,
+      });
+    }
+
+    // Chặn hẹn khi thiếu media (trừ ignore_media_check)
+    if (planned.media_ok === false && !body.ignore_media_check) {
+      const mc = planned.media_check || {};
+      return res.status(400).json({
+        ok: false,
+        error:
+          mc.messages?.[0] ||
+          mc.summary ||
+          "Thiếu media (ảnh/video) — bổ sung kho rồi xem kế hoạch lại",
+        code: "MEDIA_SHORT",
+        media_check: mc,
+        plan: planned,
       });
     }
 
@@ -341,6 +357,8 @@ router.post("/bulk-schedule", async (req, res) => {
       ok: true,
       job,
       plan_preview: planned,
+      media_check: planned.media_check || null,
+      media_ok: planned.media_ok !== false,
       reports: getReportPaths(),
     });
   } catch (e) {

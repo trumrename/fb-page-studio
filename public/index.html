@@ -210,7 +210,18 @@
 
         <div class="grid-2">
           <section class="panel">
-            <h2 class="panel-hd">Accounts <span id="accCount" class="badge">0</span></h2>
+            <h2 class="panel-hd">
+              <span>Accounts <span id="accCount" class="badge">0</span></span>
+              <span class="hint" id="accSelHint" style="font-weight:500">Tick để xóa hàng loạt</span>
+            </h2>
+            <div class="toolbar" style="padding:.55rem .75rem;border-bottom:1px solid rgba(255,255,255,.06);flex-wrap:wrap;gap:.4rem">
+              <label class="checks" style="margin:0;gap:.35rem">
+                <input type="checkbox" id="accSelectAll" />
+                <span style="font-size:.82rem">Chọn tất cả</span>
+              </label>
+              <button type="button" class="btn-danger btn-sm" id="btnBulkDeleteAcc" disabled>Xóa đã tick</button>
+              <span id="accBulkStatus" class="muted" style="font-size:.78rem"></span>
+            </div>
             <div class="panel-body tight scroll" id="accountList">
               <div class="empty">Chưa có account.<br/>Bấm <b>+ App 1</b> hoặc <b>+ App 2</b>.</div>
             </div>
@@ -807,21 +818,51 @@
       }
     });
 
+    const selectedAccIds = new Set();
+
+    function syncAccBulkUi() {
+      const n = selectedAccIds.size;
+      const btn = $("btnBulkDeleteAcc");
+      if (btn) btn.disabled = n === 0;
+      const hint = $("accSelHint");
+      if (hint) hint.textContent = n ? `Đã tick ${n} tài khoản` : "Tick để xóa hàng loạt";
+      const st = $("accBulkStatus");
+      if (st && !st.dataset.sticky) st.textContent = n ? `${n} đã chọn` : "";
+      const allBox = $("accSelectAll");
+      if (allBox) {
+        const boxes = document.querySelectorAll("#accountList .acc-check");
+        const total = boxes.length;
+        allBox.checked = total > 0 && n === total;
+        allBox.indeterminate = n > 0 && n < total;
+      }
+    }
+
     async function loadAccounts() {
       const { accounts } = await api("/api/accounts");
       $("accCount").textContent = accounts.length;
       const el = $("accountList");
+      // Drop ticks for accounts no longer present
+      const live = new Set(accounts.map((a) => a.id));
+      for (const id of [...selectedAccIds]) {
+        if (!live.has(id)) selectedAccIds.delete(id);
+      }
       if (!accounts.length) {
         el.innerHTML = `<div class="empty">Chưa có account.<br/>Bấm <b>+ App 1</b> hoặc <b>+ App 2</b>.</div>`;
+        selectedAccIds.clear();
+        syncAccBulkUi();
         return;
       }
       el.innerHTML = accounts.map((a) => {
         const appLabel = a.meta_app_name || a.meta_app_key || "App 1";
         const appKey = a.meta_app_key || "app1";
+        const checked = selectedAccIds.has(a.id) ? "checked" : "";
         return `
         <div class="account ${selectedAccountId === a.id ? "active" : ""}" data-id="${a.id}">
+          <label class="acc-check-wrap" title="Tick xóa hàng loạt" style="display:flex;align-items:center;flex-shrink:0;margin:0;cursor:pointer" onclick="event.stopPropagation()">
+            <input type="checkbox" class="acc-check" data-id="${a.id}" ${checked} />
+          </label>
           <img src="${escapeHtml(safeHttpUrl(a.picture_url))}" alt="" onerror="this.style.opacity=.3" />
-          <div>
+          <div style="min-width:0;flex:1">
             <div class="name">${escapeHtml(a.name || a.fb_user_id)}</div>
             <div class="sub">
               <span class="badge live">${escapeHtml(appLabel)}</span>
@@ -832,8 +873,17 @@
           </div>
         </div>`;
       }).join("");
+      el.querySelectorAll(".acc-check").forEach((box) => {
+        box.addEventListener("change", () => {
+          const id = Number(box.dataset.id);
+          if (box.checked) selectedAccIds.add(id);
+          else selectedAccIds.delete(id);
+          syncAccBulkUi();
+        });
+      });
       el.querySelectorAll(".account").forEach((node) => {
-        node.addEventListener("click", () => {
+        node.addEventListener("click", (e) => {
+          if (e.target.closest(".acc-check-wrap") || e.target.closest(".acc-check")) return;
           selectedAccountId = Number(node.dataset.id);
           ["btnSync", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
             $(id).disabled = false;
@@ -842,7 +892,61 @@
           loadPages();
         });
       });
+      syncAccBulkUi();
     }
+
+    $("accSelectAll")?.addEventListener("change", () => {
+      const on = !!$("accSelectAll").checked;
+      document.querySelectorAll("#accountList .acc-check").forEach((box) => {
+        box.checked = on;
+        const id = Number(box.dataset.id);
+        if (on) selectedAccIds.add(id);
+        else selectedAccIds.delete(id);
+      });
+      syncAccBulkUi();
+    });
+
+    $("btnBulkDeleteAcc")?.addEventListener("click", async () => {
+      const ids = [...selectedAccIds];
+      if (!ids.length) return;
+      if (
+        !confirm(
+          `Xóa ${ids.length} tài khoản OAuth đã tick?\n` +
+            `Page tokens / cấu hình page thuộc account cũng bị xóa (CASCADE).\n` +
+            `Không thể hoàn tác.`
+        )
+      ) {
+        return;
+      }
+      const btn = $("btnBulkDeleteAcc");
+      btn.disabled = true;
+      try {
+        const r = await api("/api/accounts/bulk-delete", {
+          method: "POST",
+          body: JSON.stringify({ ids }),
+        });
+        if (selectedAccountId && ids.includes(selectedAccountId)) {
+          selectedAccountId = null;
+          ["btnSync", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
+            $(id).disabled = true;
+          });
+        }
+        selectedAccIds.clear();
+        const st = $("accBulkStatus");
+        if (st) {
+          st.dataset.sticky = "1";
+          st.innerHTML = `<span class="ok">Đã xóa ${r.deleted_count || 0} tài khoản</span>`;
+          setTimeout(() => {
+            delete st.dataset.sticky;
+            syncAccBulkUi();
+          }, 2500);
+        }
+        await refreshAll();
+      } catch (e) {
+        alert(e.message);
+        syncAccBulkUi();
+      }
+    });
 
     async function loadPages() {
       const q = $("search").value.trim();

@@ -345,29 +345,97 @@ export async function getPageAssignedUsers(pageId, pageToken) {
 }
 
 /**
- * Page insights — only growth 7d (page_follows). ~1 call/page.
- * Countries / fans_country removed: Meta often returns empty for NPE pages.
+ * Page insights — growth 7d + engagement / reach batch (read_insights).
+ * Soft-fail per batch: keep whatever Meta returns for the page.
+ * Countries / fans_country removed: often empty for NPE pages.
  */
 export async function getPageInsights(pageId, pageToken) {
   const rows = [];
   const errors = [];
+  const seen = new Set();
 
-  let r = await graphGetSoft(`/${pageId}/insights`, pageToken, {
-    metric: "page_follows",
-    period: "day",
-    date_preset: "last_7d",
-  });
-  if (r.ok && (r.data?.data || []).length) {
-    rows.push(...r.data.data);
-  } else {
-    if (!r.ok) errors.push(`page_follows: ${r.error}`);
-    r = await graphGetSoft(`/${pageId}/insights`, pageToken, {
-      metric: "page_daily_follows",
-      period: "day",
-      date_preset: "last_7d",
+  const pushRows = (data) => {
+    for (const row of data?.data || []) {
+      const key = `${row.name}|${row.period || ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(row);
+    }
+  };
+
+  /** Try one insights call; collect errors without throwing. */
+  async function tryMetrics(metric, period, date_preset, label) {
+    const r = await graphGetSoft(`/${pageId}/insights`, pageToken, {
+      metric,
+      period,
+      date_preset,
     });
-    if (r.ok && (r.data?.data || []).length) rows.push(...r.data.data);
-    else if (!r.ok) errors.push(`page_daily_follows: ${r.error}`);
+    if (r.ok && (r.data?.data || []).length) {
+      pushRows(r.data);
+      return true;
+    }
+    if (!r.ok) errors.push(`${label || metric}: ${r.error}`);
+    else errors.push(`${label || metric}: empty`);
+    return false;
+  }
+
+  // 1) Followers / growth (critical)
+  const okFollows = await tryMetrics(
+    "page_follows",
+    "day",
+    "last_7d",
+    "page_follows"
+  );
+  if (!okFollows) {
+    await tryMetrics(
+      "page_daily_follows",
+      "day",
+      "last_7d",
+      "page_daily_follows"
+    );
+  }
+
+  // 2) Core engagement + reach (one batch; Meta ignores unknown for some pages)
+  const coreBatch = [
+    "page_impressions",
+    "page_impressions_unique",
+    "page_posts_impressions",
+    "page_posts_impressions_unique",
+    "page_post_engagements",
+    "page_engaged_users",
+    "page_views_total",
+    "page_video_views",
+    "page_fan_adds",
+    "page_fan_removes",
+    "page_actions_post_reactions_total",
+    "page_consumptions",
+  ].join(",");
+  await tryMetrics(coreBatch, "day", "last_7d", "core_batch");
+
+  // 3) 28d reach/engagement for summary cards (period day + last_28d)
+  const longBatch = [
+    "page_impressions_unique",
+    "page_post_engagements",
+    "page_posts_impressions_unique",
+    "page_follows",
+  ].join(",");
+  const r28 = await graphGetSoft(`/${pageId}/insights`, pageToken, {
+    metric: longBatch,
+    period: "day",
+    date_preset: "last_28d",
+  });
+  if (r28.ok && (r28.data?.data || []).length) {
+    // Tag period window so mapInsights can keep both 7d/28d series
+    for (const row of r28.data.data || []) {
+      rows.push({
+        ...row,
+        name: `${row.name}__28d`,
+        title: `${row.title || row.name} (28d)`,
+        _window: "28d",
+      });
+    }
+  } else if (!r28.ok) {
+    errors.push(`28d_batch: ${r28.error}`);
   }
 
   if (!rows.length) {

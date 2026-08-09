@@ -42,20 +42,64 @@ export function pickMedia(folder, kind, pickMode = "sequential", slotIndex = 0) 
   return files[slotIndex % files.length];
 }
 
-/** Move file into postedDir (create if needed). Returns new path. */
+/**
+ * CHUYỂN file từ kho media → folder posted (MOVE, không copy).
+ * - Cùng ổ: rename (atomic)
+ * - Khác ổ (EXDEV trên Windows): copy rồi XÓA nguồn — vẫn là chuyển, không để file gốc
+ *   trong media (tránh đăng lại).
+ * Returns absolute path in postedDir.
+ */
 export function moveToPosted(filePath, postedDir) {
   if (!filePath || !fs.existsSync(filePath)) {
     throw new Error(`Cannot move missing file: ${filePath}`);
   }
   ensureDir(postedDir);
-  const base = path.basename(filePath);
+  const src = path.resolve(filePath);
+  const base = path.basename(src);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   let dest = path.join(postedDir, `${stamp}_${base}`);
   if (fs.existsSync(dest)) {
     dest = path.join(postedDir, `${stamp}_${Math.random().toString(36).slice(2)}_${base}`);
   }
-  fs.renameSync(filePath, dest);
-  return dest;
+  dest = path.resolve(dest);
+
+  try {
+    fs.renameSync(src, dest);
+    return dest;
+  } catch (e) {
+    // Cross-device / locked rename → copy then delete source (true move)
+    const code = e && (e.code || e.errno);
+    const cross =
+      code === "EXDEV" ||
+      code === "EPERM" ||
+      /cross-device|cannot move|EXDEV/i.test(String(e.message || e));
+    if (!cross && code !== "EACCES") {
+      // Unexpected: still try copy+unlink before giving up
+    }
+    try {
+      fs.copyFileSync(src, dest);
+    } catch (copyErr) {
+      throw new Error(
+        `Không chuyển được file sang posted:\n${src}\n→ ${dest}\n${copyErr.message || copyErr}`
+      );
+    }
+    try {
+      fs.unlinkSync(src);
+    } catch (delErr) {
+      // Destination exists but source still there = would re-post. Try harder.
+      try {
+        fs.rmSync(src, { force: true });
+      } catch {
+        /* last resort */
+      }
+      if (fs.existsSync(src)) {
+        throw new Error(
+          `Đã copy sang posted nhưng KHÔNG XÓA được file gốc (sẽ bị đăng lại):\n${src}\n${delErr.message || delErr}`
+        );
+      }
+    }
+    return dest;
+  }
 }
 
 /**
@@ -259,35 +303,173 @@ export function captionPoolStats(captionsFolder, inlineCaptions = []) {
   };
 }
 
+/** Normalize list of non-empty strings (1 line = 1 item). */
+export function normalizeLineList(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((s) => String(s || "").trim()).filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    return raw
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
 /**
- * Build comment from templates + link lists.
- * Placeholders: {see_more}, {full_album}, {link}, {link:key}
- * Missing lists → leave placeholder empty (no fake links).
+ * Kho link comment của 1 page (ưu tiên comment_links, rồi full_album + see_more).
+ * Mỗi page tự có list riêng → random / lần lượt theo bài của page đó.
+ */
+export function getCommentLinkPool(linkLists = {}) {
+  const ll = linkLists && typeof linkLists === "object" ? linkLists : {};
+  const primary = normalizeLineList(ll.comment_links);
+  if (primary.length) return primary;
+  const merged = [
+    ...normalizeLineList(ll.full_album),
+    ...normalizeLineList(ll.see_more),
+  ];
+  // unique preserve order
+  const seen = new Set();
+  const out = [];
+  for (const u of merged) {
+    const k = u.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(u);
+  }
+  return out;
+}
+
+/**
+ * random | sequential (theo từng bài của page — xoay vòng list)
+ */
+export function getCommentPickMode(linkLists = {}, fallback = "random") {
+  const m = String(linkLists?.comment_link_mode || linkLists?.comment_pick_mode || fallback)
+    .trim()
+    .toLowerCase();
+  return m === "sequential" || m === "sequence" || m === "theo_bai" ? "sequential" : "random";
+}
+
+function pickFromList(list, mode, nextIndex) {
+  if (!list.length) return { item: "", nextIndex: 0 };
+  if (mode === "sequential") {
+    const i = Math.abs(Number(nextIndex) || 0) % list.length;
+    return { item: list[i], nextIndex: i + 1 };
+  }
+  const i = Math.floor(Math.random() * list.length);
+  return { item: list[i], nextIndex: (Number(nextIndex) || 0) + 1 };
+}
+
+/**
+ * Build comment from templates + link lists (legacy API).
+ * Prefer assignCommentForPost() for per-page / per-post assignment.
  */
 export function buildComment(templates, linkLists = {}, pickMode = "random") {
-  const list = Array.isArray(templates) ? templates.filter((t) => String(t).trim()) : [];
-  if (!list.length) return null;
+  const r = assignCommentForPost({
+    comment_templates: templates,
+    link_lists: linkLists,
+    comment_pick_mode: pickMode,
+  });
+  return r.text;
+}
 
-  let tpl =
-    pickMode === "sequential"
-      ? list[0]
-      : list[Math.floor(Math.random() * list.length)];
+/**
+ * Gán comment cho **1 bài** của **1 page**.
+ *
+ * - Mỗi page có kho template (câu kèm) + kho link riêng.
+ * - mode random: mỗi bài random 1 câu + 1 link.
+ * - mode sequential (theo bài): bài 1 → dòng 1, bài 2 → dòng 2, … hết list thì xoay vòng.
+ * - Câu kèm trống + có link → comment = chỉ URL.
+ * - Template có {link}/{see_more}/{full_album} → thay (legacy).
+ * - Template không placeholder (vd "see more :") + có link → "câu\nlink".
+ *
+ * @returns {{ text: string|null, link: string|null, template: string|null, link_lists: object, used_link_index: number|null }}
+ */
+export function assignCommentForPost(cfg = {}) {
+  const ll0 = cfg.link_lists && typeof cfg.link_lists === "object" ? { ...cfg.link_lists } : {};
+  const mode = getCommentPickMode(ll0, cfg.comment_pick_mode || "random");
+  const templates = normalizeLineList(cfg.comment_templates);
+  const links = getCommentLinkPool(ll0);
 
-  const pickLink = (key) => {
-    const arr = linkLists?.[key];
-    if (!Array.isArray(arr) || !arr.length) return "";
+  if (!templates.length && !links.length) {
+    return {
+      text: null,
+      link: null,
+      template: null,
+      link_lists: ll0,
+      used_link_index: null,
+    };
+  }
+
+  let tpl = "";
+  let tplNext = Number(ll0.comment_tpl_next) || 0;
+  if (templates.length) {
+    const p = pickFromList(templates, mode, tplNext);
+    tpl = p.item;
+    tplNext = p.nextIndex;
+  }
+
+  let link = "";
+  let linkNext = Number(ll0.comment_link_next) || 0;
+  let usedLinkIndex = null;
+  if (links.length) {
+    const start = Math.abs(Number(ll0.comment_link_next) || 0) % links.length;
+    const p = pickFromList(links, mode, linkNext);
+    link = p.item;
+    linkNext = p.nextIndex;
+    usedLinkIndex = mode === "sequential" ? start : links.indexOf(link);
+  }
+
+  // Keyed lists still support {see_more} / {full_album} independently if set
+  const pickKey = (key) => {
+    const arr = normalizeLineList(ll0[key]);
+    if (!arr.length) return link || "";
+    if (mode === "sequential") {
+      const i = Math.abs(Number(ll0.comment_link_next) || 0) % arr.length;
+      return arr[i];
+    }
     return arr[Math.floor(Math.random() * arr.length)];
   };
 
-  // {link:see_more} or {see_more}
-  tpl = tpl.replace(/\{link:([a-zA-Z0-9_]+)\}/g, (_, key) => pickLink(key));
-  tpl = tpl.replace(/\{see_more\}/g, () => pickLink("see_more"));
-  tpl = tpl.replace(/\{full_album\}/g, () => pickLink("full_album"));
-  tpl = tpl.replace(/\{link\}/g, () => {
-    const all = Object.values(linkLists || {}).flat().filter(Boolean);
-    if (!all.length) return "";
-    return all[Math.floor(Math.random() * all.length)];
-  });
+  let text = "";
+  if (tpl) {
+    const hasPh =
+      /\{see_more\}|\{full_album\}|\{link\}|\{link:[a-zA-Z0-9_]+\}/.test(tpl);
+    text = tpl
+      .replace(/\{link:([a-zA-Z0-9_]+)\}/g, (_, key) => pickKey(key))
+      .replace(/\{see_more\}/g, () => pickKey("see_more") || link)
+      .replace(/\{full_album\}/g, () => pickKey("full_album") || link)
+      .replace(/\{link\}/g, () => link || pickKey("see_more") || pickKey("full_album"));
+    if (!hasPh && link && !text.includes(link)) {
+      text = `${text.trim()}\n${link}`.trim();
+    }
+  } else if (link) {
+    text = link;
+  }
 
-  return tpl.trim() || null;
+  text = String(text || "").trim() || null;
+
+  const link_lists = {
+    ...ll0,
+    comment_link_mode: mode,
+    comment_tpl_next: tplNext,
+    comment_link_next: linkNext,
+    // Keep primary pool for UI (if only full_album/see_more existed, leave them)
+    comment_links:
+      Array.isArray(ll0.comment_links) && ll0.comment_links.length
+        ? ll0.comment_links
+        : links.length
+          ? links
+          : ll0.comment_links || [],
+  };
+
+  return {
+    text,
+    link: link || null,
+    template: tpl || null,
+    link_lists,
+    used_link_index: usedLinkIndex,
+    mode,
+  };
 }

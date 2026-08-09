@@ -10,7 +10,12 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { PROJECT_ROOT as root, packCustomerDir, archiveVaultDir } from "./deliver-paths.mjs";
+import {
+  PROJECT_ROOT as root,
+  packCustomerDir,
+  archiveVaultDir,
+  findDistArtifact,
+} from "./deliver-paths.mjs";
 import { archiveOldInDir } from "./archive-old-builds.mjs";
 
 const out = packCustomerDir();
@@ -220,10 +225,11 @@ fs.writeFileSync(
 );
 
 const exeCandidates = [
+  findDistArtifact("FB-Page-Studio-Desktop.exe", customerAssetName),
   path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe"),
   path.join(root, "dist-desktop-oauth", customerAssetName),
   path.join(root, "FB-Page-Studio-App", customerAssetName),
-];
+].filter(Boolean);
 
 let copiedExe = null;
 for (const c of exeCandidates) {
@@ -265,9 +271,10 @@ if (!copiedExe) {
 // Bản cài NSIS (icon + Start Menu + ghim taskbar) — nếu đã build
 const setupName = `FB-Page-Studio-Setup-v${pkg.version}.exe`;
 const setupSrc = [
+  findDistArtifact(setupName, `FB Page Studio Setup ${pkg.version}.exe`),
   path.join(root, "dist-desktop-oauth", setupName),
   path.join(root, "dist-desktop-oauth", `FB Page Studio Setup ${pkg.version}.exe`),
-].find((p) => fs.existsSync(p));
+].find((p) => p && fs.existsSync(p));
 if (setupSrc) {
   for (const entry of fs.readdirSync(out)) {
     if (/^FB-Page-Studio-Setup-v\d+\.\d+\.\d+\.exe(?:\.sha256\.txt)?$/i.test(entry)) {
