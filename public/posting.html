@@ -3824,10 +3824,16 @@ Tối | 18:00 | 21:30 | 2</textarea>
     function renderRunNowResult(r, isRun) {
       const sum = r.summary || {};
       let html = `<b>${isRun ? "ĐÃ BẮT ĐẦU JOB DIRECT LOCAL" : "LỊCH ĐĂNG TRỰC TIẾP · GIỜ VIỆT NAM"}</b><br/>`;
-      html += `Admin ${sum.accounts || 0} · cấu hình <b>${sum.configured_posts_per_page || sum.posts_per_page_per_day || 0}</b> bài/Page/ngày · tổng task <b>${sum.total_final || 0}</b>`;
+      html += `Admin ${sum.accounts || 0} · cấu hình <b>${sum.configured_posts_per_page || sum.posts_per_page_per_day || 0}</b> bài/Page/ngày · tổng task <b class="${(sum.total_final || 0) < 1 ? "fail" : "ok"}">${sum.total_final || 0}</b>`;
       if (sum.plan_day) html += ` · ngày plan <b>${esc(sum.plan_day)}</b>`;
       if (sum.continuous || r.continuous) html += ` · <span class="ok">CHẠY LIÊN TỤC</span>`;
       html += `<br/>`;
+      if ((sum.total_final || 0) < 1) {
+        html += `<div class="fail" style="margin:.4rem 0;padding:.5rem .65rem;border-radius:8px;border:1px solid rgba(255,113,132,.4)">` +
+          `<b>Tổng task = 0 → không chạy được.</b> Đã chọn Page chưa đủ để tạo slot (hết quota hôm nay, max bài/ngày, hoặc nhóm rotation). ` +
+          `Xem cảnh báo bên dưới · sửa rồi bấm «Xem lịch» lại (không bấm Chạy khi task = 0).` +
+          `</div>`;
+      }
       if (sum.gap_same_page || sum.gap_other_page) {
         html += `<span class="muted">Gap cùng Page: ${esc(sum.gap_same_page || "—")} · Gap Page/Admin khác: ${esc(sum.gap_other_page || "—")}</span><br/>`;
       }

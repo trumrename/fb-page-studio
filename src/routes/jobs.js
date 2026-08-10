@@ -209,9 +209,26 @@ router.post("/rotation/run-now", (req, res) => {
     }
     const plan = saved.plan;
     if (!plan.summary?.can_run || plan.blockers?.length) {
-      return res.status(400).json({ ok: false, error: "Kế hoạch còn lỗi chặn; chưa thể chạy.", plan });
+      return res.status(400).json({
+        ok: false,
+        error:
+          plan.blockers?.[0] ||
+          "Kế hoạch còn lỗi chặn; chưa thể chạy. Bấm «Xem lịch» xem chi tiết.",
+        plan,
+      });
     }
-    if (!plan.slots.length) return res.status(400).json({ ok: false, error: "Không có Page để chạy", plan });
+    if (!plan.slots.length) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          plan.warnings?.length
+            ? `Không có task để chạy (tổng task 0). ${plan.warnings[0]} ` +
+              `Thường do: hết quota hôm nay, max bài/ngày = 0, hoặc nhóm rotation trống. ` +
+              `Bấm «Xem lịch đăng trực tiếp» lại sau khi tăng max / đợi ngày mới / tick lại Page.`
+            : "Không có task để chạy (tổng task 0) dù đã chọn Page. Bấm «Xem lịch» lại — kiểm tra quota max bài/ngày và page đã tick.",
+        plan,
+      });
+    }
     const continuous = !!(body.continuous ?? plan.settings?.run_now_continuous);
     const tasks = plan.slots.map((s) => ({
       kind: "post",

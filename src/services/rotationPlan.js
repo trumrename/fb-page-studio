@@ -382,8 +382,9 @@ export function loadAccountPageMatrix(settings) {
     accounts = accounts.filter((a) => set.has(a.id));
   }
 
+  // Number() — UI/JSON hay gửi string; Set.has("12") ≠ 12 → tick page mà matrix rỗng
   const pageFilter = settings.page_row_ids?.length
-    ? new Set(settings.page_row_ids)
+    ? new Set(settings.page_row_ids.map((x) => Number(x)).filter((n) => n > 0))
     : null;
 
   return accounts.map((a) => {
@@ -397,7 +398,7 @@ export function loadAccountPageMatrix(settings) {
       )
       .all(a.id);
 
-    if (pageFilter) pages = pages.filter((p) => pageFilter.has(p.id));
+    if (pageFilter) pages = pages.filter((p) => pageFilter.has(Number(p.id)));
     if (settings.only_enabled_pages) {
       pages = pages.filter((p) => p.enabled);
     }
@@ -466,9 +467,9 @@ export function resolveGroups(settings, matrix) {
     ];
   }
 
-  return groups.map((g) => {
-    const admins = g.account_ids
-      .map((id) => byId.get(id))
+  let resolved = groups.map((g) => {
+    const admins = (g.account_ids || [])
+      .map((id) => byId.get(Number(id)) || byId.get(id))
       .filter(Boolean)
       .map((a) => ({
         account_id: a.account_id,
@@ -485,6 +486,25 @@ export function resolveGroups(settings, matrix) {
       admin_count: admins.length,
     };
   });
+  // Nhóm rotation cũ / sai account_id → 0 admin → 0 task dù đã tick page
+  if (!resolved.some((g) => g.admin_count > 0 && g.max_pages > 0)) {
+    resolved = [
+      {
+        id: "all",
+        name: "Tất cả admin (fallback — nhóm rotation trống/sai)",
+        meta_app_key: "all",
+        admins: matrix.map((a) => ({
+          account_id: a.account_id,
+          account_name: a.account_name,
+          meta_app_key: a.meta_app_key,
+          pages: a.pages,
+        })),
+        max_pages: Math.max(0, ...matrix.map((a) => a.pages.length), 0),
+        admin_count: matrix.length,
+      },
+    ];
+  }
+  return resolved;
 }
 
 /**
@@ -1075,6 +1095,31 @@ export function buildRunNowPlan(inputSettings = {}) {
 
   slots.sort((a, b) => a.unix - b.unix || a.order - b.order);
   const finalSlots = slots.map((s, i) => ({ ...s, order: i + 1 }));
+
+  if (!finalSlots.length) {
+    const nPages = pageConfigs.size;
+    const nAdmins = groups.reduce((n, g) => n + (g.admin_count || 0), 0);
+    const nMaxPages = Math.max(0, ...groups.map((g) => g.max_pages || 0), 0);
+    if (!nPages) {
+      blockers.push(
+        "Không có Page trong kế hoạch — tick Page ở bước 1 (hoặc chọn «Tất cả page») rồi bấm «Xem lịch» lại."
+      );
+    } else if (!nAdmins || !nMaxPages) {
+      blockers.push(
+        "Có Page nhưng nhóm rotation không gắn admin — tool đã fallback; nếu vẫn lỗi hãy xóa nhóm rotation cũ / bật auto nhóm App."
+      );
+    } else if (planDayShifted) {
+      blockers.push(
+        `Đã chuyển plan sang ${planDay} vì hết quota hôm nay (${todayVn}) nhưng vẫn không tạo được task. ` +
+          `Kiểm tra max bài/ngày Page (cần ≥ 1), posting enabled, và bấm «Xem lịch» lại.`
+      );
+    } else {
+      blockers.push(
+        `Đã thấy ${nPages} Page / ${nAdmins} admin nhưng 0 task (hết quota / max=0 / giờ đã qua). ` +
+          `Tăng max_posts_per_day, đợi ngày mới, hoặc bật «bỏ giới hạn» nếu có.`
+      );
+    }
+  }
 
   const roundTimesMap = new Map();
   for (const s of finalSlots) {
