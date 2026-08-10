@@ -199,19 +199,26 @@ export function validateScheduleUnix(unixSec) {
 
 /**
  * @param {object} [schedule] { scheduled_publish_time: unixSec }
- *   When set → published=false + scheduled_publish_time + unpublished_content_type=SCHEDULED.
- *   Meta docs (Page photos/feed schedule): thiếu unpublished_content_type dễ tạo bài
- *   "admin-only / content isn't available" sau giờ hẹn.
+ * @param {{ kind?: 'photo'|'video'|'text' }} [opts]
+ *   photo/text: Meta yêu cầu unpublished_content_type=SCHEDULED khi hẹn.
+ *   video: chỉ published=false + scheduled_publish_time (+ secret/no_story explicit).
+ *   (Gắn SCHEDULED lên /videos đôi khi tạo object kiểu “unpublished” khó public.)
  */
-function scheduleFields(schedule) {
-  if (!schedule?.scheduled_publish_time) return { published: "true" };
+function scheduleFields(schedule, opts = {}) {
+  if (!schedule?.scheduled_publish_time) {
+    return { published: "true" };
+  }
   const t = validateScheduleUnix(schedule.scheduled_publish_time);
-  return {
+  const kind = String(opts.kind || "text").toLowerCase();
+  const base = {
     published: "false",
     scheduled_publish_time: String(t),
-    /** Bắt buộc với scheduled Page content — không set = hay kẹt chỉ admin thấy */
-    unpublished_content_type: "SCHEDULED",
   };
+  // Photo + feed: Meta docs require unpublished_content_type for scheduled
+  if (kind !== "video") {
+    base.unpublished_content_type = "SCHEDULED";
+  }
+  return base;
 }
 
 /**
@@ -290,7 +297,7 @@ export async function enrichPublishResult(objectId, pageToken, base = {}) {
 export async function publishText(pageId, pageToken, message, schedule = null) {
   const data = await graphPostJson(`/${pageId}/feed`, pageToken, {
     message: message || "",
-    ...scheduleFields(schedule),
+    ...scheduleFields(schedule, { kind: "text" }),
   });
   const postId = data.id || null;
   const base = {
@@ -321,7 +328,7 @@ export async function publishPhoto(
     pageToken,
     {
       caption: caption || "",
-      ...scheduleFields(schedule),
+      ...scheduleFields(schedule, { kind: "photo" }),
     },
     { name: "source", filePath }
   );
@@ -352,14 +359,20 @@ export async function publishVideo(
   if (!fs.existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`);
   }
+  // Video: explicit public flags — tránh secret/reference_only/no_story
+  // (Meta default secret=false; vẫn gửi rõ để không thành unlisted).
+  const fields = {
+    description: description || "",
+    title: description ? String(description).slice(0, 255) : undefined,
+    secret: "false",
+    no_story: "false",
+    embeddable: "true",
+    ...scheduleFields(schedule, { kind: "video" }),
+  };
   const data = await graphPostForm(
     `/${pageId}/videos`,
     pageToken,
-    {
-      description: description || "",
-      title: description ? String(description).slice(0, 255) : undefined,
-      ...scheduleFields(schedule),
-    },
+    fields,
     { name: "source", filePath }
   );
   const postId = data.id || data.post_id || null;
