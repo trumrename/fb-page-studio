@@ -932,100 +932,18 @@ function summarizeResult(result) {
 function successMessage(task, result) {
   const r = summarizeResult(result);
   const link = r?.post_url || r?.post_id || "—";
-  if (result?.local_video_schedule || task.opts?.local_video_schedule) {
-    return `Đã đăng VIDEO (hẹn local) · ${r?.post_type || "video"} · ${link}`;
-  }
   if (task.kind === "schedule" || result?.scheduled) {
     return `Đã hẹn ${r?.post_type || ""} · ${r?.scheduled_at || ""} · ${link}`;
   }
   return `Đã đăng ${r?.post_type || ""} · ${link}`;
 }
 
-/**
- * Peek post type for a page (bulk may pass auto / empty).
- * Mirrors scheduleOnePost sequence pick without consuming media.
- */
-function peekPostType(pageRowId, forceType) {
-  const forced = String(forceType || "").toLowerCase().trim();
-  if (forced && forced !== "auto") {
-    if (forced === "image") return "photo";
-    return forced;
-  }
-  try {
-    const cfg = getPagePostConfig(pageRowId);
-    const sequence =
-      Array.isArray(cfg.sequence) && cfg.sequence.length
-        ? cfg.sequence
-        : ["photo", "video", "text"];
-    const slot = Number(cfg.next_slot_index) || 0;
-    const t = String(sequence[slot % sequence.length] || "photo").toLowerCase();
-    if (t === "image") return "photo";
-    return t === "video" || t === "text" ? t : "photo";
-  } catch {
-    return "photo";
-  }
-}
-
-/**
- * Video hẹn giờ: KHÔNG dùng Graph published=false (hay kẹt chỉ admin thấy).
- * Chờ đúng unix → đăng published=true (public giống đăng ngay).
- * Cần tool mở đến giờ (job local).
- */
-async function executeVideoLocalSchedule(job, task) {
-  const unix = Number(
-    task.opts?.scheduled_publish_time || task.opts?.unix || 0
-  );
-  if (!Number.isFinite(unix) || unix <= 0) {
-    throw new Error("Hẹn video local thiếu scheduled_publish_time");
-  }
-  const iso = new Date(unix * 1000).toISOString();
-  task.run_at = iso;
-  task.opts = {
-    ...(task.opts || {}),
-    run_at: iso,
-    post_type: "video",
-    local_video_schedule: true,
-    ignore_interval: true,
-  };
-  task.label = `${task.label || "Hẹn video"} · local public`;
-  task.message =
-    "Video: chờ đến giờ rồi đăng public (không dùng Graph schedule — tránh chỉ admin thấy)";
-  recompute(job);
-  emit(job);
-
-  const due = await waitUntilTaskDue(job, task);
-  if (!due) {
-    return {
-      ok: false,
-      scheduled: false,
-      error: "Đã dừng trong lúc chờ giờ đăng video local",
-    };
-  }
-  task.percent = 50;
-  task.message = "Đã đến giờ · đang upload video published=true (public)…";
-  recompute(job);
-  emit(job);
-
-  const result = await runOnePost(task.page_row_id, {
-    force: true,
-    post_type: "video",
-    delivery_mode: "scheduled_direct",
-    ignore_quota: !!task.opts.ignore_quota,
-    ignore_interval: true,
-  });
-  if (result && typeof result === "object") {
-    result.local_video_schedule = true;
-    result.scheduled = false; // đã live, không còn “hẹn FB”
-  }
-  return result;
-}
-
 async function executeTask(task, job = null) {
   const kind = task.kind;
   task.percent = 40;
   if (kind === "post" || kind === "run") {
-    // Task có run_at (chờ đúng giờ rồi đăng) = hẹn giờ đăng trực tiếp; còn lại = đăng ngay.
-    // Video bulk có thể kind=post + run_at + local_video_schedule
+    // Task có run_at = hẹn giờ đăng trực tiếp (tool chờ → published=true).
+    // Ảnh / video / text đều dùng path này khi user chọn mode đó.
     const deliveryMode = task.opts && task.opts.run_at ? "scheduled_direct" : "direct";
     return runOnePost(task.page_row_id, {
       force: true,
@@ -1036,16 +954,7 @@ async function executeTask(task, job = null) {
     });
   }
   if (kind === "schedule") {
-    const resolved = peekPostType(task.page_row_id, task.opts?.post_type);
-    // VIDEO: local wait + publish public (Graph schedule video = admin-only bug Meta)
-    if (resolved === "video") {
-      if (!job) {
-        throw new Error(
-          "Hẹn video cần job runner (Hẹn giờ hàng loạt). Graph schedule video hay chỉ admin thấy."
-        );
-      }
-      return executeVideoLocalSchedule(job, task);
-    }
+    // Hẹn giờ Facebook (Graph scheduled_publish_time) — ảnh/video/text
     return scheduleOnePost(task.page_row_id, {
       scheduled_publish_time: task.opts.scheduled_publish_time,
       post_type: task.opts.post_type,
@@ -1207,52 +1116,22 @@ export function startBulkPostJob({
  * slots: [{ page_row_id, page_name, page_id, unix, post_type? }]
  */
 export function startBulkScheduleJob({ slots, title } = {}) {
-  const tasks = (slots || []).map((s, i) => {
-    const unix = Number(s.unix || s.scheduled_publish_time) || 0;
-    const pt = String(s.post_type || "").toLowerCase();
-    const labelBase = `Hẹn giờ #${i + 1} · ${s.local_label || s.unix || ""}`;
-    // Explicit video → local public publish at due time (không Graph schedule)
-    if (pt === "video") {
-      const iso = unix > 0 ? new Date(unix * 1000).toISOString() : null;
-      return {
-        kind: "post",
-        page_row_id: s.page_row_id,
-        page_name: s.page_name || `page#${s.page_row_id}`,
-        page_id: s.page_id || null,
-        label: `${labelBase} · VIDEO local public`,
-        run_at: iso,
-        opts: {
-          run_at: iso,
-          post_type: "video",
-          scheduled_publish_time: unix || undefined,
-          local_video_schedule: true,
-          ignore_quota: false,
-          ignore_interval: true,
-        },
-      };
-    }
-    // auto / photo / text → kind schedule; executeTask sẽ chuyển video (auto) sang local
-    return {
-      kind: "schedule",
-      page_row_id: s.page_row_id,
-      page_name: s.page_name || `page#${s.page_row_id}`,
-      page_id: s.page_id || null,
-      label: labelBase,
-      opts: {
-        scheduled_publish_time: unix || s.scheduled_publish_time,
-        post_type: s.post_type,
-      },
-    };
-  });
-  const videoN = tasks.filter(
-    (t) => t.opts?.local_video_schedule || t.opts?.post_type === "video"
-  ).length;
+  // kind=schedule → hẹn giờ Facebook (Graph). Ảnh/video/text đều qua path này.
+  // Mode «chờ giờ đăng trực tiếp» là kind=post + run_at (job khác / rotation), không gộp vào đây.
+  const tasks = (slots || []).map((s, i) => ({
+    kind: "schedule",
+    page_row_id: s.page_row_id,
+    page_name: s.page_name || `page#${s.page_row_id}`,
+    page_id: s.page_id || null,
+    label: `Hẹn giờ #${i + 1} · ${s.local_label || s.unix || ""}`,
+    opts: {
+      scheduled_publish_time: s.unix || s.scheduled_publish_time,
+      post_type: s.post_type,
+    },
+  }));
   return startJob({
     type: "bulk_schedule",
-    title:
-      title ||
-      `Hẹn giờ · ${tasks.length} slot` +
-        (videoN ? ` · ${videoN} video=local public` : " · FB Graph"),
+    title: title || `Hẹn giờ FB · ${tasks.length} slot`,
     tasks,
   });
 }

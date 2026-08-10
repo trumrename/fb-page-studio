@@ -3053,22 +3053,16 @@ Tối | 18:00 | 21:30 | 2</textarea>
               : "") +
             `</div>`
           : "";
-        const videoNote =
-          `<div style="margin:0 0 .55rem;font-size:.82rem;padding:.5rem .65rem;border-radius:10px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:#fde68a;line-height:1.45">` +
-          `<b>VIDEO hẹn nhiều page:</b> tool <b>chờ đến giờ → đăng public</b> (published=true). ` +
-          `Cần <b>tool mở</b> lúc tới giờ. Không dùng Graph schedule video (Facebook hay để chỉ admin thấy). ` +
-          `<b>Ảnh/text</b> vẫn hẹn Graph FB như cũ.` +
-          `</div>`;
         box.innerHTML =
           `<b>Dry-run · ${esc(r.mode)}</b> · ${(r.plan || []).length} page · ${totalSlots} slot` +
           (errN ? ` · <span class="fail">${errN} lỗi</span>` : "") +
           (mc && !mc.ok ? ` · <span class="fail">thiếu media</span>` : mc?.ok ? ` · <span class="ok">đủ media</span>` : "") +
           antiLine +
           mediaLine +
-          videoNote +
           `<div style="margin:0 0 .45rem;font-size:.82rem;padding:.4rem .55rem;border-radius:8px;background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.3)">` +
           `<b>Loại hẹn đang dùng:</b> ${srcHint}` +
           (r.timing_source ? ` · <code>${esc(r.timing_source)}</code>` : "") +
+          ` · <span class="muted">Hẹn FB Graph (ảnh/video/text). Video public kém ổn → dùng mode chờ giờ đăng trực tiếp.</span>` +
           `</div>` +
           (r.mode === "active_times"
             ? `<div class="muted" style="margin:0 0 .45rem;font-size:.78rem">Nguồn giờ: preferred từng page / preset VN. Jitter + min-gap theo anti · gap page A→B.</div>`

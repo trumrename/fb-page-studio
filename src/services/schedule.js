@@ -387,27 +387,14 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       if (!mediaPath) {
         throw new Error(`Không có video chưa dùng: ${cfg.media_folder || "(trống)"}`);
       }
-      // Graph published=false + scheduled_publish_time cho VIDEO hay để bài
-      // chỉ admin thấy sau giờ hẹn. → Đăng published=true ngay nếu đã tới giờ;
-      // nếu còn xa: báo dùng job bulk (local wait) — scheduleOnePost HTTP không sleep dài.
-      const nowSec = Math.floor(Date.now() / 1000);
-      if (unix > nowSec + 120 && opts.allow_graph_video_schedule !== true) {
-        throw new Error(
-          "Hẹn VIDEO: Graph schedule Facebook hay chỉ admin thấy. " +
-            "Dùng tab «Hẹn giờ hàng loạt» (job local: chờ đến giờ → đăng public). " +
-            "Hoặc đăng video ngay (không hẹn)."
-        );
-      }
-      // Tới giờ / sắp tới → publish public (không schedule Graph)
-      if (unix > nowSec + 5) {
-        await sleep((unix - nowSec) * 1000);
-      }
+      // Hẹn giờ Facebook (Graph) — cùng path ảnh/text. Video một số page public OK.
+      // Muốn chắc public: dùng mode «chờ giờ đăng trực tiếp» (tool mở, published=true).
       result = await publishVideo(
         page.page_id,
         pageToken,
         mediaPath,
         caption || "",
-        null // published=true
+        schedule
       );
     } else {
       throw new Error(`Loại bài không hỗ trợ hẹn giờ: ${postType}`);
@@ -483,8 +470,6 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
     });
 
     const scheduledIso = new Date(unix * 1000).toISOString();
-    // Video path đăng live public → status published; ảnh/text Graph schedule → scheduled
-    const isVideoLive = postType === "video";
     const log = logScheduled({
       page_row_id: pageRowId,
       page_id: page.page_id,
@@ -495,7 +480,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       fb_post_id: result.post_id,
       fb_post_url: result.post_url,
       day_index: null,
-      status: isVideoLive ? "published" : "scheduled",
+      status: "scheduled",
       error: commentImmediateError
         ? `Comment ngay fail (sẽ thử lại sau publish): ${commentImmediateError}`
         : null,
@@ -507,8 +492,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
 
     return {
       ok: true,
-      scheduled: !isVideoLive,
-      local_video_schedule: isVideoLive,
+      scheduled: true,
       post_type: postType,
       scheduled_publish_time: unix,
       scheduled_at_iso: scheduledIso,
@@ -1028,7 +1012,6 @@ export async function scheduleBulk(body = {}) {
   });
 
   if (dryRun) {
-    const forceType = postType || body.post_type || "auto";
     return {
       dry_run: true,
       mode,
@@ -1044,15 +1027,11 @@ export async function scheduleBulk(body = {}) {
       days_ahead: daysAhead,
       media_check: mediaCheck,
       media_ok: mediaCheck.ok,
-      /** Video hẹn = job local (tool mở), ảnh/text = Graph schedule FB */
-      video_schedule_mode: "local_public_at_due",
-      photo_text_schedule_mode: "facebook_graph",
       policy_note:
         "Giờ / gap / max bài/ngày lấy từ cấu hình Page + anti-spam. " +
-        `Cách page A→B: ${pageGapMin}–${pageGapMax}p · ${daysAhead} ngày. ` +
-        "VIDEO hẹn: tool chờ đến giờ rồi đăng public (published=true) — cần tool mở; " +
-        "không dùng Graph schedule video (hay chỉ admin thấy). " +
-        "Ảnh/text: hẹn Graph Facebook như cũ.",
+        `Cách page A→B: ${pageGapMin}–${pageGapMax}p · hẹn ${daysAhead} ngày. ` +
+        "Mode này = hẹn giờ Facebook (Graph). " +
+        "Muốn chờ giờ rồi đăng trực tiếp (tool mở): dùng mode đăng trực tiếp / Direct Local.",
       plan: finalPlan.map((p) => ({
         ...p,
         slots: (p.slots || []).map((d) => ({
