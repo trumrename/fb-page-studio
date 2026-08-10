@@ -231,6 +231,10 @@ function normalizeConfigBody(input) {
       "comment_tpl_next",
       "comment_delay_minutes",
       "comment_min_likes",
+      "caption_lead_enabled",
+      "caption_lead_mode",
+      "caption_lead_tpl_next",
+      "caption_lead_link_next",
     ]);
     for (const [k, v] of Object.entries(body.link_lists)) {
       if (scalarKeys.has(k)) {
@@ -238,11 +242,29 @@ function normalizeConfigBody(input) {
           k === "comment_link_next" ||
           k === "comment_tpl_next" ||
           k === "comment_delay_minutes" ||
-          k === "comment_min_likes"
+          k === "comment_min_likes" ||
+          k === "caption_lead_tpl_next" ||
+          k === "caption_lead_link_next"
         ) {
           const n = Number(Array.isArray(v) ? v[0] : v);
           out[k] = Number.isFinite(n) ? Math.max(0, n) : 0;
-        } else if (k === "comment_link_mode" || k === "comment_pick_mode") {
+        } else if (k === "caption_lead_enabled") {
+          const raw = Array.isArray(v) ? v[0] : v;
+          const s = String(raw ?? "").trim().toLowerCase();
+          out[k] =
+            raw === true ||
+            raw === 1 ||
+            s === "1" ||
+            s === "on" ||
+            s === "true" ||
+            s === "yes"
+              ? 1
+              : 0;
+        } else if (
+          k === "comment_link_mode" ||
+          k === "comment_pick_mode" ||
+          k === "caption_lead_mode"
+        ) {
           const raw = Array.isArray(v) ? v[0] : v;
           const m = String(raw || "random").trim().toLowerCase();
           out[k] =

@@ -19,6 +19,7 @@ import {
   pickMedia,
   moveToPosted,
   pickCaption,
+  composeCaptionWithLead,
   buildComment,
   assignCommentForPost,
   ensureDir,
@@ -153,11 +154,10 @@ export function savePagePostConfig(pageRowId, body) {
   };
   // Apply anti-spam floors/caps so UI and DB stay consistent
   next = clampPageLimits(next);
-  // Persist story_link_mode inside link_lists JSON (no new column)
+  // Deep-merge link_lists so bulk partial update không xóa comment_links / lead…
   const linkLists = {
-    ...(next.link_lists && typeof next.link_lists === "object"
-      ? next.link_lists
-      : {}),
+    ...(cur.link_lists && typeof cur.link_lists === "object" ? cur.link_lists : {}),
+    ...(body?.link_lists && typeof body.link_lists === "object" ? body.link_lists : {}),
   };
   if (next.story_link_mode) {
     linkLists.story_link_mode = String(next.story_link_mode);
@@ -448,6 +448,13 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     }
     // CAPTION_DUP / MEDIA_DUP / KEYWORD → retry pick
     mediaPath = null;
+  }
+
+  // Dòng mở đầu (view full album : + link) + caption kho — tuỳ chọn
+  const leadPack = composeCaptionWithLead(caption, cfg);
+  caption = leadPack.text || caption;
+  if (leadPack.link_lists) {
+    cfg = { ...cfg, link_lists: leadPack.link_lists };
   }
 
   const dayIndex = (cfg.posts_today || 0) + 1;

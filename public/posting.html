@@ -444,6 +444,23 @@
                   <button type="button" class="btn-ok btn-sm" id="btnBulkApplyFolders">Áp dụng 3 kho cho page đã tick</button>
                   <span id="bulkFolderStatus" class="muted" style="font-size:.8rem"></span>
                 </div>
+                <div style="margin-top:.75rem;padding-top:.65rem;border-top:1px solid rgba(255,255,255,.08)">
+                  <label class="checks" style="display:block;margin:0 0 .4rem">
+                    <input type="checkbox" id="bulkCaptionLeadEnabled" />
+                    <b>Dòng mở đầu trước caption</b> (view full album : + link, rồi caption file)
+                  </label>
+                  <label>Mẫu mở đầu (mỗi dòng 1 câu — random)</label>
+                  <textarea id="bulkCaptionLeadTemplates" rows="3" placeholder="view full album :&#10;see more :&#10;full album:">view full album : 
+see more : 
+</textarea>
+                  <label style="margin-top:.35rem">Link dòng mở đầu (tuỳ chọn — trống = dùng kho link comment)</label>
+                  <textarea id="bulkCaptionLeadLinks" rows="3" placeholder="https://…/1&#10;https://…/2"></textarea>
+                  <div class="actions" style="margin-top:.4rem">
+                    <button type="button" class="btn-ok btn-sm" id="btnBulkApplyCaptionLead">Áp dụng dòng mở đầu cho page đã tick</button>
+                    <button type="button" class="btn-ghost btn-sm" id="btnBulkCaptionLeadOff">Tắt dòng mở đầu page đã tick</button>
+                    <span id="bulkCaptionLeadStatus" class="muted" style="font-size:.8rem"></span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -2587,8 +2604,54 @@ Tối | 18:00 | 21:30 | 2</textarea>
           · <b>${(data.captions_pool && data.captions_pool.from_inline) || 0}</b> inline
           · total <b>${(data.captions_pool && data.captions_pool.total) || 0}</b>
         </p>
-        <label>Captions inline</label>
+        <label>Captions inline (tiêu đề / nội dung bài — mỗi dòng 1 caption)</label>
         <textarea id="captions">${esc(caps)}</textarea>
+        <div style="margin:.55rem 0;padding:.65rem .75rem;border:1px solid rgba(125,211,252,.28);border-radius:12px;background:rgba(0,0,0,.18)">
+          <label class="checks" style="display:flex;align-items:flex-start;gap:.45rem;margin:0 0 .45rem">
+            <input type="checkbox" id="caption_lead_enabled" ${
+              c.link_lists?.caption_lead_enabled == 1 ||
+              c.link_lists?.caption_lead_enabled === true ||
+              String(c.link_lists?.caption_lead_enabled || "") === "1"
+                ? "checked"
+                : ""
+            } />
+            <span><b>Dòng mở đầu trước caption</b> — bật thì mỗi bài: mẫu + link, rồi xuống dòng caption kho</span>
+          </label>
+          <p class="muted" style="margin:0 0 .4rem;font-size:.76rem;line-height:1.4">
+            Ví dụ kết quả khi bật:<br/>
+            <code>view full album :</code><br/>
+            <code>https://…/full</code><br/><br/>
+            <code>Tiêu đề / caption lấy từ kho file</code>
+          </p>
+          <label><b>Mẫu dòng mở đầu</b> (mỗi dòng 1 câu — random mỗi bài · không cần <code>{link}</code>)</label>
+          <textarea id="caption_lead_templates" rows="3" placeholder="view full album :&#10;see more :&#10;full album:">${esc(
+            (Array.isArray(c.link_lists?.caption_lead_templates)
+              ? c.link_lists.caption_lead_templates
+              : []
+            ).join("\n")
+          )}</textarea>
+          <label style="margin-top:.35rem"><b>Link cho dòng mở đầu</b> (tuỳ chọn — trống = dùng kho link comment bên dưới)</label>
+          <textarea id="caption_lead_links" rows="3" placeholder="https://…/album1&#10;https://…/album2">${esc(
+            (Array.isArray(c.link_lists?.caption_lead_links)
+              ? c.link_lists.caption_lead_links
+              : []
+            ).join("\n")
+          )}</textarea>
+          <div style="margin:.35rem 0 0">
+            <label class="checks" style="display:inline-block;margin-right:1rem">
+              <input type="radio" name="caption_lead_mode" value="random" ${
+                (c.link_lists?.caption_lead_mode || "random") !== "sequential" ? "checked" : ""
+              } />
+              Random mẫu + link
+            </label>
+            <label class="checks" style="display:inline-block">
+              <input type="radio" name="caption_lead_mode" value="sequential" ${
+                (c.link_lists?.caption_lead_mode || "") === "sequential" ? "checked" : ""
+              } />
+              Lần lượt theo dòng
+            </label>
+          </div>
+        </div>
         <label><b>Kho link full / comment (page này)</b> — mỗi dòng 1 URL (list dài được)</label>
         <textarea id="comment_links" rows="5" placeholder="https://full1&#10;https://full2&#10;https://full3">${esc(
           (Array.isArray(c.link_lists?.comment_links) && c.link_lists.comment_links.length
@@ -2759,6 +2822,18 @@ Tối | 18:00 | 21:30 | 2</textarea>
         : [];
       const delayMin = Math.max(0, Math.min(10080, Number($("comment_delay_minutes")?.value) || 0));
       const minLikes = Math.max(0, Math.min(1_000_000, Number($("comment_min_likes")?.value) || 0));
+      const leadOn = !!$("caption_lead_enabled")?.checked;
+      const leadMode =
+        document.querySelector('input[name="caption_lead_mode"]:checked')?.value ||
+        "random";
+      const leadTpls = ($("caption_lead_templates")?.value || "")
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const leadLinks = ($("caption_lead_links")?.value || "")
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
       return {
         enabled: $("enabled").checked ? 1 : 0,
         comment_enabled: $("comment_enabled").checked ? 1 : 0,
@@ -2784,6 +2859,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
           comment_delay_minutes: when === "immediate" ? 0 : delayMin,
           comment_min_likes: when === "immediate" ? 0 : minLikes,
           story_link_mode: $("story_link_mode")?.value || "combo",
+          caption_lead_enabled: leadOn ? 1 : 0,
+          caption_lead_mode: leadMode === "sequential" ? "sequential" : "random",
+          caption_lead_templates: leadTpls,
+          caption_lead_links: leadLinks,
         },
       };
     }
@@ -4243,6 +4322,59 @@ Tối | 18:00 | 21:30 | 2</textarea>
           flash(e.message, false);
         }
       };
+
+    async function applyBulkCaptionLead({ enabled }) {
+      const ids = selectedPageIds();
+      if (!ids.length) return flash("Tick ít nhất một Page bên trái", false);
+      const tpls = ($("bulkCaptionLeadTemplates")?.value || "")
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const links = ($("bulkCaptionLeadLinks")?.value || "")
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (enabled && !tpls.length && !links.length) {
+        return flash("Cần mẫu dòng mở đầu và/hoặc list link", false);
+      }
+      try {
+        const r = await api("/api/posting/config-bulk", {
+          method: "PUT",
+          body: JSON.stringify({
+            page_row_ids: ids,
+            config: {
+              link_lists: {
+                caption_lead_enabled: enabled ? 1 : 0,
+                caption_lead_mode: "random",
+                caption_lead_templates: enabled ? tpls : [],
+                caption_lead_links: enabled ? links : [],
+                caption_lead_tpl_next: 0,
+                caption_lead_link_next: 0,
+              },
+            },
+          }),
+        });
+        const st = $("bulkCaptionLeadStatus");
+        if (st) {
+          st.innerHTML = enabled
+            ? `<span class="ok">Đã bật dòng mở đầu cho <b>${r.updated}</b> Page</span>`
+            : `<span class="ok">Đã tắt dòng mở đầu trên <b>${r.updated}</b> Page</span>`;
+        }
+        flash(
+          enabled
+            ? `Đã bật dòng mở đầu caption · ${r.updated} Page`
+            : `Đã tắt dòng mở đầu · ${r.updated} Page`,
+          true
+        );
+        queueWorkspaceSave(100);
+      } catch (e) {
+        flash(e.message, false);
+      }
+    }
+    if ($("btnBulkApplyCaptionLead"))
+      $("btnBulkApplyCaptionLead").onclick = () => applyBulkCaptionLead({ enabled: true });
+    if ($("btnBulkCaptionLeadOff"))
+      $("btnBulkCaptionLeadOff").onclick = () => applyBulkCaptionLead({ enabled: false });
 
     function getBulkCommentPickMode() {
       if ($("bulkCommentModeSeq")?.checked) return "sequential";

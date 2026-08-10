@@ -303,6 +303,132 @@ export function captionPoolStats(captionsFolder, inlineCaptions = []) {
   };
 }
 
+/**
+ * Kho link cho dòng mở đầu caption (lead).
+ * Ưu tiên caption_lead_links → comment_links → full_album + see_more.
+ */
+export function getCaptionLeadLinkPool(linkLists = {}) {
+  const ll = linkLists && typeof linkLists === "object" ? linkLists : {};
+  const primary = normalizeLineList(ll.caption_lead_links);
+  if (primary.length) return primary;
+  return getCommentLinkPool(ll);
+}
+
+/**
+ * Dòng mở đầu caption (tuỳ chọn):
+ *   view full album :
+ *   https://link...
+ *
+ *   <caption từ kho tiêu đề>
+ *
+ * Bật: link_lists.caption_lead_enabled = 1 / true / "on"
+ * Mẫu: caption_lead_templates (mỗi dòng 1 câu, random/sequential)
+ * Link: caption_lead_links hoặc kho link comment
+ *
+ * @returns {{ text: string, lead: string|null, link: string|null, link_lists: object }}
+ */
+export function composeCaptionWithLead(captionBody, cfg = {}) {
+  const body = String(captionBody || "").trim();
+  const ll0 =
+    cfg.link_lists && typeof cfg.link_lists === "object" ? { ...cfg.link_lists } : {};
+  const enRaw = ll0.caption_lead_enabled;
+  const enabled =
+    enRaw === true ||
+    enRaw === 1 ||
+    enRaw === "1" ||
+    String(enRaw || "").toLowerCase() === "on" ||
+    String(enRaw || "").toLowerCase() === "true" ||
+    String(enRaw || "").toLowerCase() === "yes";
+
+  if (!enabled) {
+    return { text: body, lead: null, link: null, link_lists: ll0 };
+  }
+
+  const templates = normalizeLineList(
+    ll0.caption_lead_templates ?? ll0.caption_lead ?? ll0.title_lead_templates
+  );
+  const links = getCaptionLeadLinkPool(ll0);
+  const modeRaw = String(
+    ll0.caption_lead_mode || ll0.comment_link_mode || "random"
+  )
+    .trim()
+    .toLowerCase();
+  const mode =
+    modeRaw === "sequential" || modeRaw === "sequence" || modeRaw === "theo_bai"
+      ? "sequential"
+      : "random";
+
+  if (!templates.length && !links.length) {
+    return { text: body, lead: null, link: null, link_lists: ll0 };
+  }
+
+  let tplNext = Number(ll0.caption_lead_tpl_next) || 0;
+  let linkNext = Number(ll0.caption_lead_link_next) || 0;
+  let tpl = "";
+  let link = "";
+
+  if (templates.length) {
+    if (mode === "sequential") {
+      const i = Math.abs(tplNext) % templates.length;
+      tpl = templates[i];
+      tplNext = i + 1;
+    } else {
+      tpl = templates[Math.floor(Math.random() * templates.length)];
+      tplNext += 1;
+    }
+  }
+  if (links.length) {
+    if (mode === "sequential") {
+      const i = Math.abs(linkNext) % links.length;
+      link = links[i];
+      linkNext = i + 1;
+    } else {
+      link = links[Math.floor(Math.random() * links.length)];
+      linkNext += 1;
+    }
+  }
+
+  let lead = "";
+  if (tpl) {
+    const hasPh = /\{link\}|\{see_more\}|\{full_album\}/.test(tpl);
+    lead = tpl
+      .replace(/\{link\}/g, () => link || "")
+      .replace(/\{see_more\}/g, () => link || "")
+      .replace(/\{full_album\}/g, () => link || "");
+    if (!hasPh && link && !lead.includes(link)) {
+      // "view full album :\nhttps://..."
+      lead = `${lead.trim()}\n${link}`.trim();
+    }
+  } else if (link) {
+    lead = link;
+  }
+
+  const text = [lead, body].filter(Boolean).join("\n\n").trim();
+  const link_lists = {
+    ...ll0,
+    caption_lead_enabled: 1,
+    caption_lead_mode: mode,
+    caption_lead_tpl_next: tplNext,
+    caption_lead_link_next: linkNext,
+    caption_lead_templates: templates.length
+      ? templates
+      : ll0.caption_lead_templates || [],
+    caption_lead_links:
+      Array.isArray(ll0.caption_lead_links) && ll0.caption_lead_links.length
+        ? ll0.caption_lead_links
+        : links.length
+          ? links
+          : ll0.caption_lead_links || [],
+  };
+
+  return {
+    text: text || body,
+    lead: lead || null,
+    link: link || null,
+    link_lists,
+  };
+}
+
 /** Normalize list of non-empty strings (1 line = 1 item). */
 export function normalizeLineList(raw) {
   if (Array.isArray(raw)) {

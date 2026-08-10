@@ -16,7 +16,12 @@ import {
   forcePublishScheduledObject,
 } from "./publish.js";
 import path from "path";
-import { pickCaption, buildComment, assignCommentForPost } from "./mediaLibrary.js";
+import {
+  pickCaption,
+  buildComment,
+  assignCommentForPost,
+  composeCaptionWithLead,
+} from "./mediaLibrary.js";
 import { getCaptionStats, getPagePostConfig, savePagePostConfig } from "./poster.js";
 import {
   getActiveTimesForPageRow,
@@ -262,7 +267,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
   const unix = validateScheduleUnix(
     opts.scheduled_publish_time ?? opts.unix ?? opts.at
   );
-  const cfg = getPagePostConfig(pageRowId);
+  let cfg = getPagePostConfig(pageRowId);
   const slot = cfg.next_slot_index || 0;
   const captionSlot = cfg.caption_slot_index || 0;
   const sequence =
@@ -350,6 +355,13 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       throw new Error(gate.error || "Không chọn được caption để hẹn giờ");
     }
     mediaPath = null;
+  }
+
+  // Dòng mở đầu (view full album : + link) rồi caption kho
+  const leadPack = composeCaptionWithLead(caption, cfg);
+  caption = leadPack.text || caption;
+  if (leadPack.link_lists) {
+    cfg = { ...cfg, link_lists: leadPack.link_lists };
   }
 
   const pageToken = decryptToken(page.page_token_enc);
