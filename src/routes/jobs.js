@@ -240,8 +240,9 @@ router.post("/rotation/run-now", (req, res) => {
         ? `Vòng ${s.post_round} · đăng trực tiếp ngay · ${s.account_name}`
         : `Vòng ${s.post_round} · tool chờ ${s.local_label} VN rồi đăng trực tiếp · ${s.account_name}`,
       opts: {
-        ignore_quota: false,
-        ignore_interval: false,
+        // Direct Local: gap đã có trong lịch job — không chặn lại bằng quota/anti Page
+        ignore_quota: true,
+        ignore_interval: true,
         post_type: s.planned_post_type,
         run_at: s.iso,
       },

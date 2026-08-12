@@ -899,35 +899,32 @@ export function buildRunNowPlan(inputSettings = {}) {
     let maxSlots = 0;
     for (const [pageRowId, cfg] of pageConfigs) {
       const pref = resolvePreferredHours(pageRowId);
-      const maxDay = resolveMaxPostsPerDay(cfg, anti, req);
-      const minGap = resolveMinGapMinutes(cfg, anti);
+      // Theo cài Direct Local (req bài/ngày), không cắt theo max/quota anti
+      const postsWanted = req;
+      const minGap = Math.max(
+        15,
+        Math.round((Number(settings.same_page_gap_hours_min) || 1) * 60)
+      );
       let slots = buildSlotsFromActiveHours(pref.hours, {
         daysAhead: 1,
-        postsPerDay: maxDay,
+        postsPerDay: postsWanted,
         tzOffsetMinutes: tz,
         minGapMinutes: minGap,
-        jitterMinutes: anti.enabled
-          ? Math.max(3, Number(anti.jitter_minutes_min) || 3)
-          : 8,
+        jitterMinutes: 5,
         pageStaggerMinutes: 0,
       });
       // If all past for today, take future slots within 2 days
       if (!slots.length || slots.every((t) => t.getTime() < nowMs - 60 * 1000)) {
         slots = buildSlotsFromActiveHours(pref.hours, {
           daysAhead: 2,
-          postsPerDay: maxDay,
+          postsPerDay: postsWanted,
           tzOffsetMinutes: tz,
           minGapMinutes: minGap,
-          jitterMinutes: anti.enabled
-            ? Math.max(3, Number(anti.jitter_minutes_min) || 3)
-            : 8,
+          jitterMinutes: 5,
           pageStaggerMinutes: 0,
         }).filter((t) => t.getTime() >= nowMs + 60 * 1000);
         if (slots.length) planDayShifted = true;
       }
-      const used = countPagePostsOnLocalDay(pageRowId, todayVn, tz);
-      const remain = Math.max(0, maxDay - used);
-      slots = slots.slice(0, remain);
       preferredTimesByPage.set(pageRowId, slots);
       maxSlots = Math.max(maxSlots, slots.length);
     }
@@ -958,65 +955,38 @@ export function buildRunNowPlan(inputSettings = {}) {
       1,
       12
     );
-    // gap_chain: tìm ngày còn quota (đăng + hẹn FB đều tính). Chỉ +1 ngày khi
-    // hôm nay full sẽ fail nếu ngày mai cũng đã hẹn đủ max.
-    if (pageConfigs.size > 0 && !settings.force_plan_day) {
-      const remainingOn = (dayYmd) => {
-        let pagesWithRoom = 0;
-        let totalRemain = 0;
-        for (const [id, cfg] of pageConfigs) {
-          const postedLogs = countPagePostsOnLocalDay(id, dayYmd, tz);
+    // Direct Local gap_chain: KHÔNG dời ngày / cắt slot theo quota hay anti.
+    // Chỉ theo «bài/Page/ngày» + gap user cài. Quota/anti chỉ ghi chú (không chặn plan).
+    planDay = settings.force_plan_day || todayVn;
+    if (pageConfigs.size > 0) {
+      const fullDays = [];
+      for (let d = 0; d < 3; d++) {
+        const day = addDaysYmd(todayVn, d);
+        const allFull = [...pageConfigs.entries()].every(([id, cfg]) => {
+          const postedLogs = countPagePostsOnLocalDay(id, day, tz);
           const postedCfg =
-            cfg?.posts_today_date === dayYmd
+            cfg?.posts_today_date === day
               ? Math.max(0, Number(cfg?.posts_today) || 0)
               : 0;
           const max = resolveMaxPostsPerDay(cfg, anti, rounds);
-          const rem = Math.max(0, max - Math.max(postedLogs, postedCfg));
-          if (rem > 0) pagesWithRoom += 1;
-          totalRemain += rem;
-        }
-        return { pagesWithRoom, totalRemain };
-      };
-      let foundDay = null;
-      let foundInfo = null;
-      for (let d = 0; d < 7; d++) {
-        const day = addDaysYmd(todayVn, d);
-        const info = remainingOn(day);
-        if (info.pagesWithRoom > 0) {
-          foundDay = day;
-          foundInfo = info;
-          if (d > 0) {
-            planDayShifted = true;
-            warnings.push(
-              d === 1
-                ? `Tất cả page đã đủ quota hôm nay (${todayVn}) — gồm đăng + hẹn FB. Kế hoạch chuyển sang ${day} (${info.pagesWithRoom} page còn chỗ, ~${info.totalRemain} slot).`
-                : `Ngày ${todayVn}…${addDaysYmd(todayVn, d - 1)} đã full (đăng/hẹn). Kế hoạch chuyển sang ${day} (${info.pagesWithRoom} page còn chỗ).`
-            );
-          }
-          break;
-        }
+          return Math.max(postedLogs, postedCfg) >= max;
+        });
+        if (allFull) fullDays.push(day);
       }
-      if (foundDay) {
-        planDay = foundDay;
-      } else {
-        planDay = todayVn;
-        planDayShifted = true;
+      if (fullDays.length) {
         warnings.push(
-          `7 ngày tới (${todayVn} → ${addDaysYmd(todayVn, 6)}) mọi page đều đủ quota (đăng trực tiếp + bài hẹn FB). ` +
-            `Tăng max bài/ngày trên Page, hoặc hủy bớt bài hẹn, rồi «Xem lịch» lại.`
+          `Ghi chú (không chặn chạy): ngày ${fullDays.join(", ")} đã có đủ bài đăng/hẹn theo max Page — ` +
+            `Direct Local vẫn lập lịch theo cài đặt của bạn (bỏ cắt slot quota).`
         );
       }
     }
   }
-  // Gap = max(rotation UI, page interval, anti floor/cooldown) — same formula as FB schedule
-  const policyGaps = [...pageConfigs.values()].map((c) => resolveMinGapMinutes(c, anti) / 60);
-  const maxPolicyGapHours = Math.max(0, ...policyGaps, 0);
-  const effectiveGapMinHours = Math.max(
-    settings.same_page_gap_hours_min,
-    maxPolicyGapHours,
-    0.25
+  // Gap: CHỈ theo UI user (same_page_gap / between_tasks) — không ép anti/cooldown Page
+  const effectiveGapMinHours = Math.max(0.25, Number(settings.same_page_gap_hours_min) || 1);
+  const effectiveGapMaxHours = Math.max(
+    effectiveGapMinHours,
+    Number(settings.same_page_gap_hours_max) || effectiveGapMinHours
   );
-  const effectiveGapMaxHours = Math.max(settings.same_page_gap_hours_max, effectiveGapMinHours);
   const gapMinMs = effectiveGapMinHours * 3600 * 1000;
   const gapMaxMs = effectiveGapMaxHours * 3600 * 1000;
   const maxAdmins = Math.max(0, ...groups.map((g) => g.admin_count), 0);
@@ -1055,14 +1025,8 @@ export function buildRunNowPlan(inputSettings = {}) {
       const page = admin.pages[pageIdx];
       if (!page) return;
       const cfg = pageConfigs.get(page.page_row_id);
-      // Quota: config counter + already scheduled/direct logs (shared with FB schedule)
-      const postedCfg =
-        cfg?.posts_today_date === quotaDay ? Math.max(0, Number(cfg?.posts_today) || 0) : 0;
-      const postedLogs = countPagePostsOnLocalDay(page.page_row_id, quotaDay, tz);
-      const postedOnPlanDay = Math.max(postedCfg, postedLogs);
-      const maxPerDay = resolveMaxPostsPerDay(cfg, anti, rounds);
-      const remainingToday = Math.max(0, maxPerDay - postedOnPlanDay);
-      const pageRounds = Math.min(rounds, remainingToday);
+      // Direct Local: luôn đủ `rounds` theo cài user — không cắt vì quota đã đăng/hẹn
+      const pageRounds = rounds;
       if (round >= pageRounds) return;
       const plannedPostType = resolvePlannedPostType(settings, cfg, round);
       let when;
@@ -1140,24 +1104,6 @@ export function buildRunNowPlan(inputSettings = {}) {
     const nPages = pageConfigs.size;
     const nAdmins = groups.reduce((n, g) => n + (g.admin_count || 0), 0);
     const nMaxPages = Math.max(0, ...groups.map((g) => g.max_pages || 0), 0);
-    // Chẩn đoán quota ngày plan (đăng + hẹn FB)
-    let fullOnPlan = 0;
-    let sample = null;
-    for (const [id, cfg] of pageConfigs) {
-      const logs = countPagePostsOnLocalDay(id, planDay, tz);
-      const cfgN =
-        cfg?.posts_today_date === planDay
-          ? Math.max(0, Number(cfg?.posts_today) || 0)
-          : 0;
-      const max = resolveMaxPostsPerDay(cfg, anti, rounds);
-      const used = Math.max(logs, cfgN);
-      if (used >= max) {
-        fullOnPlan += 1;
-        if (!sample) {
-          sample = `vd Page#${id}: đã ${used}/${max} (log ${logs}, counter ${cfgN}) ngày ${planDay}`;
-        }
-      }
-    }
     if (!nPages) {
       blockers.push(
         "Không có Page trong kế hoạch — tick Page ở bước 1 (hoặc chọn «Tất cả page») rồi bấm «Xem lịch» lại."
@@ -1166,21 +1112,9 @@ export function buildRunNowPlan(inputSettings = {}) {
       blockers.push(
         "Có Page nhưng nhóm rotation không gắn admin — xóa nhóm rotation cũ / bật auto nhóm App, «Xem lịch» lại."
       );
-    } else if (fullOnPlan >= nPages) {
-      blockers.push(
-        `Ngày plan ${planDay}: ${fullOnPlan}/${nPages} page đã đủ quota (đăng trực tiếp + bài hẹn FB đều tính). ` +
-          (sample ? sample + ". " : "") +
-          `Cách xử lý: (1) tăng max bài/ngày từng Page, (2) hủy bớt bài hẹn FB ngày đó, (3) đợi ngày trống hơn.`
-      );
-    } else if (planDayShifted) {
-      blockers.push(
-        `Đã dời plan sang ${planDay} nhưng vẫn 0 task (${fullOnPlan}/${nPages} page full ngày đó). ` +
-          `Tăng max bài/ngày hoặc giảm số bài hẹn sẵn, rồi «Xem lịch» lại.`
-      );
     } else {
       blockers.push(
-        `Đã thấy ${nPages} Page / ${nAdmins} admin nhưng 0 task. ` +
-          `Thường do hết quota (đăng+hẹn) hoặc max bài/ngày. ${sample || ""}`
+        `Đã thấy ${nPages} Page / ${nAdmins} admin nhưng 0 task (kiểm tra mode giờ ưa thích / khung Sáng-Tối nếu bật).`
       );
     }
   }
@@ -1194,39 +1128,7 @@ export function buildRunNowPlan(inputSettings = {}) {
     .sort((a, b) => a[0] - b[0])
     .map(([, s]) => new Date(s.unix * 1000));
 
-  if (effectiveGapMinHours > settings.same_page_gap_hours_min) {
-    warnings.push(
-      `Gap cùng Page min đã tự nâng từ ${settings.same_page_gap_hours_min}h lên ${effectiveGapMinHours}h để khớp interval/cooldown Page.`
-    );
-  }
-  const limitedPages = [...pageConfigs.entries()]
-    .map(([id, c]) => {
-      const postedToday =
-        c.posts_today_date === quotaDay ? Math.max(0, Number(c.posts_today) || 0) : 0;
-      const max = Number(c.max_posts_per_day) || rounds;
-      const remaining = Math.max(0, max - postedToday);
-      return { id, postedToday, remaining, max };
-    })
-    .filter((x) => x.remaining < rounds);
-  if (limitedPages.length) {
-    warnings.push(
-      `Cấu hình ${rounds} bài/Page/ngày nhưng max Page cắt bớt: ` +
-        limitedPages
-          .slice(0, 8)
-          .map((x) => `Page#${x.id} chỉ còn ${x.remaining}/${x.max} (đã đăng ${x.postedToday})`)
-          .join("; ") +
-        `. Muốn đủ ${rounds} bài: tăng max_posts_per_day trên config Page.`
-    );
-  }
-  const byPageCount = new Map();
-  for (const s of finalSlots) {
-    byPageCount.set(s.page_row_id, (byPageCount.get(s.page_row_id) || 0) + 1);
-  }
-  if ([...byPageCount.values()].some((n) => n < rounds) && limitedPages.length) {
-    warnings.push(
-      `Tổng task thực tế ${finalSlots.length} (kỳ vọng ~${rounds}×số page). Một số page không đủ ${rounds} vòng vì max bài/ngày.`
-    );
-  }
+  // (Direct Local: không cắt max/quota — theo đúng cài UI)
 
   // Media/caption requirements are aggregated by shared pool. Multiple Pages
   // pointing at one caption folder consume one common sequential pool.
@@ -1353,12 +1255,15 @@ export function buildRunNowPlan(inputSettings = {}) {
         ? "vòng bài# → từng App → pageIndex → toàn bộ admin của App"
         : "vòng bài# → pageIndex → adminIndex → App 1/App 2 so le",
       wait_logic: useWindows
-        ? `Khung Sáng/Tối ngày ${planDay} (VN) · so le Page/Admin khác nhau ~${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút · gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours}h giữa các vòng`
-        : `Bài 1 gần ngay · gap giữa Page/Admin khác ${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút · gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours}h giữa các vòng`,
-      gap_same_page: `${effectiveGapMinHours}–${effectiveGapMaxHours} giờ (cùng 1 Page giữa 2 vòng bài)`,
-      gap_other_page: `${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút (Page/Admin khác nhau trong cùng vòng)`,
+        ? `Khung Sáng/Tối ngày ${planDay} (VN) · gap Page/Admin khác ~${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max}p · gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours}h (theo UI, không ép anti)`
+        : `Bài 1 gần ngay · gap Page/Admin khác ${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max}p · gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours}h (theo UI, không ép anti/quota)`,
+      gap_same_page: `${effectiveGapMinHours}–${effectiveGapMaxHours} giờ (cùng 1 Page giữa 2 vòng bài · theo cài UI)`,
+      gap_other_page: `${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút (Page/Admin khác · theo cài UI)`,
       timezone: "Asia/Ho_Chi_Minh (UTC+7)",
-      can_run: blockers.length === 0,
+      can_run: blockers.length === 0 && finalSlots.length > 0,
+      respects_user_settings_only: true,
+      ignores_daily_quota: true,
+      ignores_anti_gap: true,
     },
     round_times: [...roundTimesMap.entries()]
       .sort((a, b) => a[0] - b[0])
