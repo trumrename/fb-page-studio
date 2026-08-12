@@ -198,6 +198,20 @@ router.post("/rotation/run-now", (req, res) => {
   try {
     const body = req.body || {};
     if (body.dry_run) {
+      // Lưu gap/settings user vừa nhập (kể cả 0) để lần mở app sau không bị 15–25p cũ
+      try {
+        const {
+          dry_run: _d,
+          plan_id: _p,
+          continuous: _c,
+          save: _s,
+          run: _r,
+          ...toSave
+        } = body;
+        if (Object.keys(toSave).length) saveRotationSettings(toSave);
+      } catch (e) {
+        console.warn("[run-now] persist settings:", e.message);
+      }
       const plan = buildRunNowPlan(body);
       const planId = saveRunNowPlan(plan);
       return res.json({ ok: true, dry_run: true, plan_id: planId, ...plan });

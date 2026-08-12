@@ -797,8 +797,9 @@ async function runJob(jobId) {
           finished_at: null,
           run_at: s.iso,
           opts: {
-            ignore_quota: false,
-            ignore_interval: false,
+            // Direct Local continuous: cùng first batch — gap/quota do lịch, không chặn lại
+            ignore_quota: true,
+            ignore_interval: true,
             post_type: s.planned_post_type,
             run_at: s.iso,
           },

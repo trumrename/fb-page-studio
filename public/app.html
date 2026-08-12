@@ -498,7 +498,7 @@
         const strategy = s.app_rotation_mode === "interleave_apps" ? "Hai App so le" : "Chạy lần lượt từng App";
         const perDay = Number(s.posts_per_page_per_day || s.posts_per_day || 0);
         const warning = s.app_rotation_mode === "interleave_apps" && appCount < 2 ? " · ⚠ hiện chỉ có 1 Meta App, sẽ chạy như chế độ 1 App" : "";
-        setText("rotationSummary", `${strategy} · ${perDay || "—"} bài/Page/ngày · chờ task ${s.between_tasks_gap_minutes_min || 12}–${s.between_tasks_gap_minutes_max || 25} phút${warning}`);
+        setText("rotationSummary", `${strategy} · ${perDay || "—"} bài/Page/ngày · chờ task ${s.between_tasks_gap_minutes_min ?? 0}–${s.between_tasks_gap_minutes_max ?? 0} phút${warning}`);
       } catch (e) {
         setText("rotationSummary", "Không đọc được cấu hình rotation: " + e.message);
       }

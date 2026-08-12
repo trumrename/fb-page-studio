@@ -50,9 +50,10 @@ export const DEFAULT_ROTATION = {
   auto_groups_by_meta_app: true,
   /** per_app | interleave_apps */
   app_rotation_mode: "interleave_apps",
-  between_tasks_gap_minutes_min: 15,
-  between_tasks_gap_minutes_max: 25,
-  posts_per_page_per_day: 2,
+  /** 0 = 30 page 1 bài đăng gần cùng lúc (Direct Local mặc định) */
+  between_tasks_gap_minutes_min: 0,
+  between_tasks_gap_minutes_max: 0,
+  posts_per_page_per_day: 1,
   days_ahead: 1,
   /** windows mode: distribute posts into named ranges */
   mode: "windows", // windows | fixed_gap
@@ -66,15 +67,15 @@ export const DEFAULT_ROTATION = {
     gap_hours_min: 2,
     gap_hours_max: 2.5,
   },
-  /** same page same admin — min/max hours between consecutive posts */
-  same_page_gap_hours_min: 1.75,
-  same_page_gap_hours_max: 2.5,
-  /** extra random minutes on each planned time */
-  jitter_minutes_min: 3,
-  jitter_minutes_max: 35,
-  /** tiny stagger between so-le slots so clocks aren't identical (seconds) */
-  interleave_stagger_sec_min: 15,
-  interleave_stagger_sec_max: 90,
+  /** same page same admin — min/max hours between consecutive posts; 0 = không chờ */
+  same_page_gap_hours_min: 0,
+  same_page_gap_hours_max: 0,
+  /** extra random minutes on each planned time (FB schedule); Direct Local gap_chain ignores */
+  jitter_minutes_min: 0,
+  jitter_minutes_max: 0,
+  /** tiny stagger between so-le slots so clocks aren't identical (seconds) — 0 = cùng mốc */
+  interleave_stagger_sec_min: 0,
+  interleave_stagger_sec_max: 0,
   tz_offset_minutes: 420,
   post_type: "auto",
   /**
@@ -204,7 +205,41 @@ export function loadRotationSettings() {
     const f = SETTINGS_FILE();
     if (fs.existsSync(f)) {
       const raw = JSON.parse(fs.readFileSync(f, "utf8"));
-      return normalizeSettings({ ...DEFAULT_ROTATION, ...raw });
+      // v1.4.2: file cũ mặc định 15–25p / 1.5–2.5h khiến Direct Local luôn
+      // giãn ~10–15p/page dù user muốn đăng 1 lúc. Chỉ migrate khi đúng cặp
+      // default cũ (user chưa tùy chỉnh gap riêng).
+      const migrated = { ...raw };
+      let dirty = false;
+      const tMin = Number(raw.between_tasks_gap_minutes_min);
+      const tMax = Number(raw.between_tasks_gap_minutes_max);
+      if (tMin === 15 && (tMax === 25 || tMax === 15)) {
+        migrated.between_tasks_gap_minutes_min = 0;
+        migrated.between_tasks_gap_minutes_max = 0;
+        dirty = true;
+      }
+      const gMin = Number(raw.same_page_gap_hours_min);
+      const gMax = Number(raw.same_page_gap_hours_max);
+      if (
+        (gMin === 1.5 || gMin === 1.75) &&
+        (gMax === 2.5 || gMax === 1.5 || gMax === 1.75)
+      ) {
+        migrated.same_page_gap_hours_min = 0;
+        migrated.same_page_gap_hours_max = 0;
+        dirty = true;
+      }
+      const next = normalizeSettings({ ...DEFAULT_ROTATION, ...migrated });
+      if (dirty) {
+        try {
+          fs.mkdirSync(path.dirname(f), { recursive: true });
+          fs.writeFileSync(f, JSON.stringify(next, null, 2), "utf8");
+          console.log(
+            "[rotation] migrated legacy default gaps 15–25p / 1.5–2.5h → 0 (đăng cùng lúc)"
+          );
+        } catch (e) {
+          console.warn("[rotation] migrate write:", e.message);
+        }
+      }
+      return next;
     }
   } catch (e) {
     console.warn("[rotation] load settings:", e.message);
@@ -231,7 +266,7 @@ export function normalizeSettings(s) {
   {
     const gMin = Number(out.same_page_gap_hours_min);
     out.same_page_gap_hours_min = clamp(
-      Number.isFinite(gMin) ? gMin : 1.5,
+      Number.isFinite(gMin) ? gMin : 0,
       0,
       24
     );
@@ -261,11 +296,11 @@ export function normalizeSettings(s) {
       ? true
       : !!out.auto_groups_by_meta_app;
   out.app_rotation_mode = out.app_rotation_mode === "per_app" ? "per_app" : "interleave_apps";
-  // Gap Page/Admin khác: cho phép 0 = bắn gần như cùng lúc (không ép min 12p)
+  // Gap Page/Admin khác: 0 = bắn gần như cùng lúc. Fallback mặc định = 0 (không ép 12/15p)
   {
     const tMin = Number(out.between_tasks_gap_minutes_min);
     out.between_tasks_gap_minutes_min = clamp(
-      Number.isFinite(tMin) ? tMin : 15,
+      Number.isFinite(tMin) ? tMin : 0,
       0,
       1440
     );

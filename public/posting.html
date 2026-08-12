@@ -733,11 +733,11 @@ full album:
                 <div class="row2">
                   <div>
                     <label>Page A → page B tối thiểu (phút)</label>
-                    <input type="number" id="bulkPageGapMin" min="0" max="1440" value="10" title="Khoảng cách tối thiểu giữa 2 page liên tiếp" />
+                    <input type="number" id="bulkPageGapMin" min="0" max="1440" value="0" title="0 = nhiều page cùng mốc giờ; >0 = giãn giữa page" />
                   </div>
                   <div>
                     <label>tối đa (phút)</label>
-                    <input type="number" id="bulkPageGapMax" min="0" max="1440" value="30" title="= min → lệch cố định; &gt; min → random" />
+                    <input type="number" id="bulkPageGapMax" min="0" max="1440" value="0" title="0 = cùng mốc; = min → lệch cố định; &gt; min → random" />
                   </div>
                 </div>
               </div>
@@ -997,9 +997,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
                   </div>
                 </div>
                 <p class="muted" style="margin:.4rem 0 0;font-size:.76rem;line-height:1.4;color:#bae6fd">
-                  Muốn <b>1 lần bấm · tất cả page đăng gần cùng lúc</b>: đặt gap Page/Admin <b>0–0</b>, mỗi page <b>1 bài</b>, rồi Xem lịch → Chạy.
-                  (API vẫn gọi tuần tự rất nhanh ~vài trăm ms/page, không chờ 10–15 phút.)
+                  Muốn <b>1 lần bấm · tất cả page đăng gần cùng lúc</b>: gap Page/Admin = <b>0–0</b>, mỗi page <b>1 bài</b>, rồi Xem lịch → Chạy.
+                  Mặc định tool = <b>0</b> (không chờ). API gọi tuần tự rất nhanh (~vài trăm ms–vài giây/page khi upload), <b>không</b> chờ 10–15 phút giữa các page.
                 </p>
+                <div style="margin-top:.45rem">
+                  <button type="button" class="btn-ghost btn-sm" id="btnRotGapZero" title="Đặt mọi khoảng chờ = 0, 1 bài/page">
+                    ⚡ Gap = 0 · đăng 1 lúc hết page
+                  </button>
+                </div>
               </div>
               <label class="checks" style="display:block;margin-top:.75rem;padding:.55rem .65rem;border:1px solid rgba(61,214,140,.35);border-radius:10px">
                 <input type="checkbox" id="rotNowContinuous" checked />
@@ -3008,7 +3013,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const mode = kind === "active_times" ? "active_times" : "fixed";
       const pgMin = Number($("bulkPageGapMin")?.value);
       const pgMaxRaw = Number($("bulkPageGapMax")?.value);
-      const pageGapMin = Number.isFinite(pgMin) && pgMin >= 0 ? pgMin : 10;
+      // 0 hợp lệ = đăng/hẹn nhiều page cùng mốc; không fallback 10
+      const pageGapMin = Number.isFinite(pgMin) && pgMin >= 0 ? pgMin : 0;
       const pageGapMax = Math.max(
         pageGapMin,
         Number.isFinite(pgMaxRaw) ? pgMaxRaw : pageGapMin
@@ -3754,10 +3760,23 @@ Tối | 18:00 | 21:30 | 2</textarea>
         media_pattern_mode: mediaMode,
         media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
         app_rotation_mode: $("rotAppStrategy")?.value || "interleave_apps",
-        between_tasks_gap_minutes_min: Number($("rotTaskGapMin")?.value) || 15,
-        between_tasks_gap_minutes_max: Number($("rotTaskGapMax")?.value) || 25,
-        same_page_gap_hours_min: Number($("rotGapMin").value) || 1.75,
-        same_page_gap_hours_max: Number($("rotGapMax").value) || 2.5,
+        // Cho phép 0 — không dùng `|| 15` (0 bị thành 15)
+        between_tasks_gap_minutes_min: (() => {
+          const n = Number($("rotTaskGapMin")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
+        between_tasks_gap_minutes_max: (() => {
+          const n = Number($("rotTaskGapMax")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
+        same_page_gap_hours_min: (() => {
+          const n = Number($("rotGapMin")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
+        same_page_gap_hours_max: (() => {
+          const n = Number($("rotGapMax")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
         jitter_minutes_min: Number($("rotJitMin").value) || 0,
         jitter_minutes_max: Number($("rotJitMax").value) || 30,
         only_enabled_pages: $("rotOnlyEnabled").checked,
@@ -3837,12 +3856,30 @@ Tối | 18:00 | 21:30 | 2</textarea>
       $("rotDays").value = s.days_ahead ?? 1;
       $("rotPostType").value = s.post_type || "auto";
       if ($("rotAppStrategy")) $("rotAppStrategy").value = s.app_rotation_mode === "per_app" ? "per_app" : "interleave_apps";
-      if ($("rotTaskGapMin")) $("rotTaskGapMin").value = s.between_tasks_gap_minutes_min ?? 15;
-      if ($("rotTaskGapMax")) $("rotTaskGapMax").value = s.between_tasks_gap_minutes_max ?? 25;
-      $("rotGapMin").value = s.same_page_gap_hours_min ?? 1.75;
-      $("rotGapMax").value = s.same_page_gap_hours_max ?? 2.5;
-      $("rotJitMin").value = s.jitter_minutes_min ?? 3;
-      $("rotJitMax").value = s.jitter_minutes_max ?? 35;
+      // 0 là hợp lệ — dùng nullish ??, không fallback 15 (gây “mỗi bài 10–15p” mặc định)
+      if ($("rotTaskGapMin")) {
+        $("rotTaskGapMin").value =
+          s.between_tasks_gap_minutes_min != null ? s.between_tasks_gap_minutes_min : 0;
+      }
+      if ($("rotTaskGapMax")) {
+        $("rotTaskGapMax").value =
+          s.between_tasks_gap_minutes_max != null ? s.between_tasks_gap_minutes_max : 0;
+      }
+      if ($("rotNowGapMin")) {
+        $("rotNowGapMin").value =
+          s.same_page_gap_hours_min != null ? s.same_page_gap_hours_min : 0;
+      }
+      if ($("rotNowGapMax")) {
+        $("rotNowGapMax").value =
+          s.same_page_gap_hours_max != null ? s.same_page_gap_hours_max : 0;
+      }
+      if ($("rotGapMin")) $("rotGapMin").value = s.same_page_gap_hours_min != null ? s.same_page_gap_hours_min : 0;
+      if ($("rotGapMax")) $("rotGapMax").value = s.same_page_gap_hours_max != null ? s.same_page_gap_hours_max : 0;
+      if ($("rotJitMin")) $("rotJitMin").value = s.jitter_minutes_min != null ? s.jitter_minutes_min : 0;
+      if ($("rotJitMax")) $("rotJitMax").value = s.jitter_minutes_max != null ? s.jitter_minutes_max : 0;
+      if ($("rotNowPerDay") && s.posts_per_page_per_day != null) {
+        $("rotNowPerDay").value = s.posts_per_page_per_day;
+      }
       $("rotOnlyEnabled").checked = !!s.only_enabled_pages;
       $("rotPerDay").value = s.posts_per_page_per_day ?? 2;
       if (s.page_target_mode === "all") {
@@ -4246,6 +4283,34 @@ Tối | 18:00 | 21:30 | 2</textarea>
         $("rotResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
       }
     };
+    function setDirectLocalGapsZero() {
+      if ($("rotTaskGapMin")) $("rotTaskGapMin").value = "0";
+      if ($("rotTaskGapMax")) $("rotTaskGapMax").value = "0";
+      if ($("rotNowGapMin")) $("rotNowGapMin").value = "0";
+      if ($("rotNowGapMax")) $("rotNowGapMax").value = "0";
+      if ($("rotNowPerDay")) $("rotNowPerDay").value = "1";
+      if ($("rotNowTimeGap")) $("rotNowTimeGap").checked = true;
+      runNowPlanId = null;
+      runNowPlanSignature = null;
+      scheduleWorkspaceSave(200);
+    }
+    $("btnRotGapZero")?.addEventListener("click", () => {
+      setDirectLocalGapsZero();
+      flash("Đã đặt gap = 0 · 1 bài/page. Bấm «Xem lịch» — mọi page cùng mốc giờ.", true);
+    });
+    // Invalidate plan khi đổi gap (tránh chạy plan cũ còn 10–15p)
+    ["rotTaskGapMin", "rotTaskGapMax", "rotNowGapMin", "rotNowGapMax", "rotNowPerDay"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener("change", () => {
+        runNowPlanId = null;
+        runNowPlanSignature = null;
+      });
+      el.addEventListener("input", () => {
+        runNowPlanId = null;
+        runNowPlanSignature = null;
+      });
+    });
     $("btnRotNowPreview").onclick = async () => {
       $("rotResult").innerHTML = "Đang tính lịch theo giờ Việt Nam…";
       try {
@@ -4258,6 +4323,13 @@ Tối | 18:00 | 21:30 | 2</textarea>
         runNowPlanId = r.plan_id || null;
         runNowPlanSignature = JSON.stringify(settingsBody);
         renderRunNowResult(r, false);
+        const gMin = settingsBody.between_tasks_gap_minutes_min;
+        const gMax = settingsBody.between_tasks_gap_minutes_max;
+        if (gMin === 0 && gMax === 0) {
+          flash("Gap 0 · tất cả page cùng mốc giờ (đăng gần 1 lúc).", true);
+        } else {
+          flash(`Preview · gap Page/Admin ${gMin}–${gMax}p · ${(r.summary?.total_final || 0)} task`, true);
+        }
       } catch (e) {
         $("rotResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
       }
