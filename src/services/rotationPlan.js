@@ -227,12 +227,21 @@ export function normalizeSettings(s) {
   out.tz_offset_minutes = Number.isFinite(Number(out.tz_offset_minutes))
     ? Number(out.tz_offset_minutes)
     : 420;
-  out.same_page_gap_hours_min = clamp(Number(out.same_page_gap_hours_min) || 1.5, 0.25, 24);
-  out.same_page_gap_hours_max = clamp(
-    Number(out.same_page_gap_hours_max) || out.same_page_gap_hours_min,
-    out.same_page_gap_hours_min,
-    48
-  );
+  // Cho phép 0 (đăng cùng lúc / không chờ). Không dùng `|| 1.5` vì 0 bị coi falsy.
+  {
+    const gMin = Number(out.same_page_gap_hours_min);
+    out.same_page_gap_hours_min = clamp(
+      Number.isFinite(gMin) ? gMin : 1.5,
+      0,
+      24
+    );
+    const gMax = Number(out.same_page_gap_hours_max);
+    out.same_page_gap_hours_max = clamp(
+      Number.isFinite(gMax) ? gMax : out.same_page_gap_hours_min,
+      out.same_page_gap_hours_min,
+      48
+    );
+  }
   out.jitter_minutes_min = clamp(Number(out.jitter_minutes_min) || 0, 0, 180);
   out.jitter_minutes_max = clamp(
     Number(out.jitter_minutes_max) || out.jitter_minutes_min,
@@ -252,12 +261,21 @@ export function normalizeSettings(s) {
       ? true
       : !!out.auto_groups_by_meta_app;
   out.app_rotation_mode = out.app_rotation_mode === "per_app" ? "per_app" : "interleave_apps";
-  out.between_tasks_gap_minutes_min = clamp(Number(out.between_tasks_gap_minutes_min) || 15, 12, 1440);
-  out.between_tasks_gap_minutes_max = clamp(
-    Number(out.between_tasks_gap_minutes_max) || out.between_tasks_gap_minutes_min,
-    out.between_tasks_gap_minutes_min,
-    2880
-  );
+  // Gap Page/Admin khác: cho phép 0 = bắn gần như cùng lúc (không ép min 12p)
+  {
+    const tMin = Number(out.between_tasks_gap_minutes_min);
+    out.between_tasks_gap_minutes_min = clamp(
+      Number.isFinite(tMin) ? tMin : 15,
+      0,
+      1440
+    );
+    const tMax = Number(out.between_tasks_gap_minutes_max);
+    out.between_tasks_gap_minutes_max = clamp(
+      Number.isFinite(tMax) ? tMax : out.between_tasks_gap_minutes_min,
+      out.between_tasks_gap_minutes_min,
+      2880
+    );
+  }
   out.post_type = out.post_type || "auto";
   out.page_target_mode = out.page_target_mode === "all" ? "all" : "selected";
   {
@@ -981,11 +999,18 @@ export function buildRunNowPlan(inputSettings = {}) {
       }
     }
   }
-  // Gap: CHỈ theo UI user (same_page_gap / between_tasks) — không ép anti/cooldown Page
-  const effectiveGapMinHours = Math.max(0.25, Number(settings.same_page_gap_hours_min) || 1);
+  // Gap: đúng UI user — 0 = không chờ (30 page 1 bài → cùng mốc giờ)
+  const effectiveGapMinHours = Math.max(
+    0,
+    Number.isFinite(Number(settings.same_page_gap_hours_min))
+      ? Number(settings.same_page_gap_hours_min)
+      : 0
+  );
   const effectiveGapMaxHours = Math.max(
     effectiveGapMinHours,
-    Number(settings.same_page_gap_hours_max) || effectiveGapMinHours
+    Number.isFinite(Number(settings.same_page_gap_hours_max))
+      ? Number(settings.same_page_gap_hours_max)
+      : effectiveGapMinHours
   );
   const gapMinMs = effectiveGapMinHours * 3600 * 1000;
   const gapMaxMs = effectiveGapMaxHours * 3600 * 1000;
@@ -1073,9 +1098,14 @@ export function buildRunNowPlan(inputSettings = {}) {
       });
       lastSlotMs = when.getTime();
       if (!useWindows && !usePreferred) {
-        cursorMs += randBetween(taskGapMinMs, taskGapMaxMs);
-      } else {
-        cursorMs = when.getTime() + randBetween(taskGapMinMs * 0.15, taskGapMinMs * 0.35);
+        // gap 0 → giữ cùng timestamp (đăng 1 lúc nhiều page)
+        if (taskGapMaxMs > 0 || taskGapMinMs > 0) {
+          cursorMs += randBetween(taskGapMinMs, Math.max(taskGapMinMs, taskGapMaxMs));
+        }
+      } else if (taskGapMinMs > 0) {
+        cursorMs =
+          when.getTime() +
+          randBetween(taskGapMinMs * 0.15, Math.max(taskGapMinMs * 0.15, taskGapMinMs * 0.35));
       }
     };
 

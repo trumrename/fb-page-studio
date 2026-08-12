@@ -976,26 +976,30 @@ Tối | 18:00 | 21:30 | 2</textarea>
                 <div class="row3" style="margin-top:.45rem" id="rotNowGapBox">
                   <div>
                     <label>Cùng 1 Page · giờ min<br/><span class="muted" style="font-weight:400">giữa 2 vòng bài</span></label>
-                    <input type="number" id="rotNowGapMin" min="0.25" max="24" step="0.25" value="1.75" />
+                    <input type="number" id="rotNowGapMin" min="0" max="24" step="0.25" value="0" title="0 = không chờ giữa các vòng cùng Page" />
                   </div>
                   <div>
                     <label>Cùng 1 Page · giờ max<br/><span class="muted" style="font-weight:400">giữa 2 vòng bài</span></label>
-                    <input type="number" id="rotNowGapMax" min="0.25" max="48" step="0.25" value="2.5" />
+                    <input type="number" id="rotNowGapMax" min="0" max="48" step="0.25" value="0" title="0 = không chờ" />
                   </div>
                   <div class="muted" style="align-self:end;padding-bottom:.5rem;font-size:.78rem">
-                    Mode «Sáng/Tối»: gap cùng Page áp giữa các vòng; giờ cụ thể lấy từ khung.
+                    <b>0</b> = không chờ. 1 bài/page: chỉ cần gap Page/Admin = 0 để bắn gần cùng lúc.
                   </div>
                 </div>
                 <div class="row2" style="margin-top:.35rem">
                   <div>
-                    <label>Page / Admin khác nhau · phút min<br/><span class="muted" style="font-weight:400">so le trong cùng vòng</span></label>
-                    <input type="number" id="rotTaskGapMin" min="12" value="15" />
+                    <label>Page / Admin khác nhau · phút min<br/><span class="muted" style="font-weight:400">0 = đăng cùng lúc (khuyên dùng)</span></label>
+                    <input type="number" id="rotTaskGapMin" min="0" max="1440" step="1" value="0" title="0 = 30 page 1 bài ≈ cùng lúc" />
                   </div>
                   <div>
                     <label>Page / Admin khác nhau · phút max</label>
-                    <input type="number" id="rotTaskGapMax" min="12" value="25" />
+                    <input type="number" id="rotTaskGapMax" min="0" max="2880" step="1" value="0" title="0 = không chờ" />
                   </div>
                 </div>
+                <p class="muted" style="margin:.4rem 0 0;font-size:.76rem;line-height:1.4;color:#bae6fd">
+                  Muốn <b>1 lần bấm · tất cả page đăng gần cùng lúc</b>: đặt gap Page/Admin <b>0–0</b>, mỗi page <b>1 bài</b>, rồi Xem lịch → Chạy.
+                  (API vẫn gọi tuần tự rất nhanh ~vài trăm ms/page, không chờ 10–15 phút.)
+                </p>
               </div>
               <label class="checks" style="display:block;margin-top:.75rem;padding:.55rem .65rem;border:1px solid rgba(61,214,140,.35);border-radius:10px">
                 <input type="checkbox" id="rotNowContinuous" checked />
@@ -3801,10 +3805,23 @@ Tối | 18:00 | 21:30 | 2</textarea>
         mode: timeMode === "windows" ? "windows" : "fixed_gap",
         windows,
         app_rotation_mode: $("rotAppStrategy")?.value || "interleave_apps",
-        between_tasks_gap_minutes_min: Number($("rotTaskGapMin")?.value) || 15,
-        between_tasks_gap_minutes_max: Number($("rotTaskGapMax")?.value) || 25,
-        same_page_gap_hours_min: Number($("rotNowGapMin").value) || 1.75,
-        same_page_gap_hours_max: Number($("rotNowGapMax").value) || 2.5,
+        // Cho phép 0 (Number("")=0; không dùng || 15 vì 0 bị thay thành 15)
+        between_tasks_gap_minutes_min: (() => {
+          const n = Number($("rotTaskGapMin")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
+        between_tasks_gap_minutes_max: (() => {
+          const n = Number($("rotTaskGapMax")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
+        same_page_gap_hours_min: (() => {
+          const n = Number($("rotNowGapMin")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
+        same_page_gap_hours_max: (() => {
+          const n = Number($("rotNowGapMax")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
         tz_offset_minutes: 420,
         page_row_ids: target === "all" ? [] : selectedPageIds(),
         auto_groups_by_meta_app: true,

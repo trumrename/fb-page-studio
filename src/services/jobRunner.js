@@ -679,8 +679,18 @@ async function runJob(jobId) {
     recompute(job);
     emit(job);
 
-    // gentle pace between tasks
-    await sleep(350);
+    // Pace: gap 0 / cùng mốc giờ → bắn nhanh (chỉ ~80ms chống rate limit nhẹ)
+    const next = job.tasks[job.tasks.indexOf(task) + 1];
+    const tDue = Date.parse(task.run_at || task.opts?.run_at || "") || 0;
+    const nDue = next
+      ? Date.parse(next.run_at || next.opts?.run_at || "") || 0
+      : 0;
+    const burst =
+      next &&
+      tDue > 0 &&
+      nDue > 0 &&
+      Math.abs(nDue - tDue) < 15_000; // cùng đợt < 15s
+    await sleep(burst ? 80 : 350);
   }
 
   // Mark remaining pending as skipped if stopped mid-run
