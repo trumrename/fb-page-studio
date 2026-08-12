@@ -958,21 +958,52 @@ export function buildRunNowPlan(inputSettings = {}) {
       1,
       12
     );
-    // gap_chain: if every page is quota-exhausted today, shift to tomorrow
-    // (mirrors windows-mode behavior; prevents empty plan when pages already hit daily cap)
-    if (pageConfigs.size > 0) {
-      const allExhausted = [...pageConfigs.entries()].every(([id, cfg]) => {
-        const postedLogs = countPagePostsOnLocalDay(id, todayVn, tz);
-        const postedCfg = cfg?.posts_today_date === todayVn
-          ? Math.max(0, Number(cfg?.posts_today) || 0) : 0;
-        const max = resolveMaxPostsPerDay(cfg, anti, rounds);
-        return Math.max(postedLogs, postedCfg) >= max;
-      });
-      if (allExhausted) {
-        planDay = addDaysYmd(todayVn, 1);
+    // gap_chain: tìm ngày còn quota (đăng + hẹn FB đều tính). Chỉ +1 ngày khi
+    // hôm nay full sẽ fail nếu ngày mai cũng đã hẹn đủ max.
+    if (pageConfigs.size > 0 && !settings.force_plan_day) {
+      const remainingOn = (dayYmd) => {
+        let pagesWithRoom = 0;
+        let totalRemain = 0;
+        for (const [id, cfg] of pageConfigs) {
+          const postedLogs = countPagePostsOnLocalDay(id, dayYmd, tz);
+          const postedCfg =
+            cfg?.posts_today_date === dayYmd
+              ? Math.max(0, Number(cfg?.posts_today) || 0)
+              : 0;
+          const max = resolveMaxPostsPerDay(cfg, anti, rounds);
+          const rem = Math.max(0, max - Math.max(postedLogs, postedCfg));
+          if (rem > 0) pagesWithRoom += 1;
+          totalRemain += rem;
+        }
+        return { pagesWithRoom, totalRemain };
+      };
+      let foundDay = null;
+      let foundInfo = null;
+      for (let d = 0; d < 7; d++) {
+        const day = addDaysYmd(todayVn, d);
+        const info = remainingOn(day);
+        if (info.pagesWithRoom > 0) {
+          foundDay = day;
+          foundInfo = info;
+          if (d > 0) {
+            planDayShifted = true;
+            warnings.push(
+              d === 1
+                ? `Tất cả page đã đủ quota hôm nay (${todayVn}) — gồm đăng + hẹn FB. Kế hoạch chuyển sang ${day} (${info.pagesWithRoom} page còn chỗ, ~${info.totalRemain} slot).`
+                : `Ngày ${todayVn}…${addDaysYmd(todayVn, d - 1)} đã full (đăng/hẹn). Kế hoạch chuyển sang ${day} (${info.pagesWithRoom} page còn chỗ).`
+            );
+          }
+          break;
+        }
+      }
+      if (foundDay) {
+        planDay = foundDay;
+      } else {
+        planDay = todayVn;
         planDayShifted = true;
         warnings.push(
-          `Tất cả page đã đủ quota hôm nay (${todayVn}). Kế hoạch chuyển sang ${planDay}.`
+          `7 ngày tới (${todayVn} → ${addDaysYmd(todayVn, 6)}) mọi page đều đủ quota (đăng trực tiếp + bài hẹn FB). ` +
+            `Tăng max bài/ngày trên Page, hoặc hủy bớt bài hẹn, rồi «Xem lịch» lại.`
         );
       }
     }
@@ -998,10 +1029,19 @@ export function buildRunNowPlan(inputSettings = {}) {
   let previousRoundStartMs = null;
   let previousRoundEndMs = null;
   const quotaDay = planDay; // always follow planDay (may be shifted to tomorrow)
+  /** 07:30 VN on planDay — khi plan không phải hôm nay */
+  function planDayStartMs() {
+    if (!planDay || planDay <= todayVn) return Date.now() + 2000;
+    const [y, m, d] = planDay.split("-").map(Number);
+    // midnight UTC of calendar day → shift to VN offset, then +7.5h = 07:30 VN
+    const midnightUtc = Date.UTC(y, m - 1, d, 0, 0, 0);
+    const at0730Vn = midnightUtc - tz * 60 * 1000 + 7.5 * 3600 * 1000;
+    return Math.max(at0730Vn, Date.now() + 2000);
+  }
   for (let round = 0; round < rounds; round++) {
     let cursorMs;
     if (round === 0) {
-      cursorMs = Date.now() + 2000;
+      cursorMs = planDayStartMs();
     } else {
       const bySamePageGap = previousRoundStartMs + randBetween(gapMinMs, gapMaxMs);
       const afterPreviousRound = previousRoundEndMs + randBetween(taskGapMinMs, taskGapMaxMs);
@@ -1100,23 +1140,47 @@ export function buildRunNowPlan(inputSettings = {}) {
     const nPages = pageConfigs.size;
     const nAdmins = groups.reduce((n, g) => n + (g.admin_count || 0), 0);
     const nMaxPages = Math.max(0, ...groups.map((g) => g.max_pages || 0), 0);
+    // Chẩn đoán quota ngày plan (đăng + hẹn FB)
+    let fullOnPlan = 0;
+    let sample = null;
+    for (const [id, cfg] of pageConfigs) {
+      const logs = countPagePostsOnLocalDay(id, planDay, tz);
+      const cfgN =
+        cfg?.posts_today_date === planDay
+          ? Math.max(0, Number(cfg?.posts_today) || 0)
+          : 0;
+      const max = resolveMaxPostsPerDay(cfg, anti, rounds);
+      const used = Math.max(logs, cfgN);
+      if (used >= max) {
+        fullOnPlan += 1;
+        if (!sample) {
+          sample = `vd Page#${id}: đã ${used}/${max} (log ${logs}, counter ${cfgN}) ngày ${planDay}`;
+        }
+      }
+    }
     if (!nPages) {
       blockers.push(
         "Không có Page trong kế hoạch — tick Page ở bước 1 (hoặc chọn «Tất cả page») rồi bấm «Xem lịch» lại."
       );
     } else if (!nAdmins || !nMaxPages) {
       blockers.push(
-        "Có Page nhưng nhóm rotation không gắn admin — tool đã fallback; nếu vẫn lỗi hãy xóa nhóm rotation cũ / bật auto nhóm App."
+        "Có Page nhưng nhóm rotation không gắn admin — xóa nhóm rotation cũ / bật auto nhóm App, «Xem lịch» lại."
+      );
+    } else if (fullOnPlan >= nPages) {
+      blockers.push(
+        `Ngày plan ${planDay}: ${fullOnPlan}/${nPages} page đã đủ quota (đăng trực tiếp + bài hẹn FB đều tính). ` +
+          (sample ? sample + ". " : "") +
+          `Cách xử lý: (1) tăng max bài/ngày từng Page, (2) hủy bớt bài hẹn FB ngày đó, (3) đợi ngày trống hơn.`
       );
     } else if (planDayShifted) {
       blockers.push(
-        `Đã chuyển plan sang ${planDay} vì hết quota hôm nay (${todayVn}) nhưng vẫn không tạo được task. ` +
-          `Kiểm tra max bài/ngày Page (cần ≥ 1), posting enabled, và bấm «Xem lịch» lại.`
+        `Đã dời plan sang ${planDay} nhưng vẫn 0 task (${fullOnPlan}/${nPages} page full ngày đó). ` +
+          `Tăng max bài/ngày hoặc giảm số bài hẹn sẵn, rồi «Xem lịch» lại.`
       );
     } else {
       blockers.push(
-        `Đã thấy ${nPages} Page / ${nAdmins} admin nhưng 0 task (hết quota / max=0 / giờ đã qua). ` +
-          `Tăng max_posts_per_day, đợi ngày mới, hoặc bật «bỏ giới hạn» nếu có.`
+        `Đã thấy ${nPages} Page / ${nAdmins} admin nhưng 0 task. ` +
+          `Thường do hết quota (đăng+hẹn) hoặc max bài/ngày. ${sample || ""}`
       );
     }
   }
