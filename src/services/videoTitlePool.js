@@ -59,19 +59,35 @@ export function resolveVideoTitlesPath(ll = {}) {
  * Load titles from a .txt/.csv file or a folder of them.
  * Reuses caption file parsers (one line / first column = one title).
  */
+/** Meta title: UTF-8 ≤255 bytes; chỉ dòng đầu; max ~120 ký tự cho an toàn */
+function clampTitleLine(raw) {
+  let s = String(raw ?? "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+  if (!s) return "";
+  s = (s.split("\n").map((l) => l.trim()).find(Boolean) || s)
+    .replace(/\s+/g, " ")
+    .trim();
+  const chars = Array.from(s);
+  if (chars.length > 120) s = chars.slice(0, 120).join("");
+  let out = "";
+  for (const ch of Array.from(s)) {
+    const next = out + ch;
+    if (Buffer.byteLength(next, "utf8") > 255) break;
+    out = next;
+  }
+  return out;
+}
+
 export function loadVideoTitles(titlesPath) {
   const p = String(titlesPath || "").trim();
   if (!p) return [];
   try {
     const list = loadCaptionsFromDisk(p);
+    // Bỏ dòng quá dài kiểu caption full (user lỡ trỏ kho caption) — title phải ngắn
     return list
-      .map((t) => String(t || "").trim())
-      .filter(Boolean)
-      .map((t) => {
-        // Meta title ≤ 255
-        const chars = Array.from(t);
-        return chars.length <= 255 ? t : chars.slice(0, 255).join("");
-      });
+      .map((t) => clampTitleLine(t))
+      .filter((t) => t && Buffer.byteLength(t, "utf8") <= 255);
   } catch (e) {
     console.warn("[videoTitlePool] load:", e.message);
     return [];

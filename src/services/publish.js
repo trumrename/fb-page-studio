@@ -349,6 +349,42 @@ export async function publishPhoto(
 }
 
 /**
+ * Meta video `title` hard limit 255 — Graph often counts UTF-8 **bytes**
+ * (tiếng Việt/emoji: 255 ký tự có thể > 255 byte → lỗi #100).
+ * Clamp by bytes; giữ title ngắn (caption full nằm ở description).
+ */
+export function clampMetaVideoTitle(raw, maxBytes = 255) {
+  let s = String(raw ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+  if (!s) return "";
+  // Chỉ 1 dòng — title ≠ caption dài nhiều dòng
+  const firstLine = s.split("\n").map((l) => l.trim()).find(Boolean) || s;
+  s = firstLine.replace(/\s+/g, " ").trim();
+  // Soft cap ký tự rồi siết theo byte
+  const chars = Array.from(s);
+  if (chars.length > 200) s = chars.slice(0, 200).join("");
+  let out = "";
+  for (const ch of Array.from(s)) {
+    const next = out + ch;
+    if (Buffer.byteLength(next, "utf8") > maxBytes) break;
+    out = next;
+  }
+  return out;
+}
+
+function isTitleLengthError(err) {
+  const msg = String(err?.message || err?.fb?.message || "");
+  return (
+    /title/i.test(msg) &&
+    (/255|less than or equal|must be less|length of param title/i.test(msg) ||
+      err?.code === 100 ||
+      err?.fb?.code === 100)
+  );
+}
+
+/**
  * Video post — local file.
  * @param {string} description caption FULL (lead + link + body) → Graph `description`
  * @param {object|null} schedule
@@ -365,27 +401,47 @@ export async function publishVideo(
   if (!fs.existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`);
   }
-  // Caption bài = description FULL. Title Meta ≤255 — chỉ gửi nếu user bật kho title.
+  // Caption bài = description FULL. Title Meta — clamp byte ≤255, không copy caption dài.
   const desc = description ? String(description) : "";
-  let title = opts?.title != null ? String(opts.title).trim() : "";
-  if (title) {
-    const chars = Array.from(title);
-    if (chars.length > 255) title = chars.slice(0, 255).join("");
-  }
-  const fields = {
+  let title = clampMetaVideoTitle(opts?.title);
+  const baseFields = {
     description: desc,
-    ...(title ? { title } : {}),
     secret: "false",
     no_story: "false",
     embeddable: "true",
     ...scheduleFields(schedule, { kind: "video" }),
   };
-  const data = await graphPostForm(
-    `/${pageId}/videos`,
-    pageToken,
-    fields,
-    { name: "source", filePath }
-  );
+
+  const postOnce = async (withTitle) => {
+    const fields = {
+      ...baseFields,
+      ...(withTitle && title ? { title } : {}),
+    };
+    return graphPostForm(
+      `/${pageId}/videos`,
+      pageToken,
+      fields,
+      { name: "source", filePath }
+    );
+  };
+
+  let data;
+  try {
+    data = await postOnce(!!title);
+  } catch (e) {
+    // Title vẫn fail (kho trỏ nhầm caption dài / Meta đếm lạ) → đăng lại không title
+    if (title && isTitleLengthError(e)) {
+      console.warn(
+        "[publishVideo] title rejected by Meta, retry without title:",
+        e.message
+      );
+      title = "";
+      data = await postOnce(false);
+    } else {
+      throw e;
+    }
+  }
+
   const postId = data.id || data.post_id || null;
   const base = {
     post_id: postId,
@@ -394,6 +450,7 @@ export async function publishVideo(
     scheduled_publish_time: schedule?.scheduled_publish_time
       ? Number(schedule.scheduled_publish_time)
       : null,
+    video_title: title || null,
     raw: data,
   };
   return enrichPublishResult(postId, pageToken, base);
