@@ -20,13 +20,14 @@ import {
   moveToPosted,
   pickCaption,
   composeCaptionWithLead,
-  loadCaptionsFromDisk,
   buildComment,
   assignCommentForPost,
   ensureDir,
   listMediaFiles,
   captionPoolStats,
+  loadCaptionsFromDisk,
 } from "./mediaLibrary.js";
+import * as mediaLibrary from "./mediaLibrary.js";
 import { pickNextVideoTitle } from "./videoTitlePool.js";
 import { appendPostCsv } from "./postLogCsv.js";
 import {
@@ -832,7 +833,20 @@ export function mediaStats(folder) {
 
 export function getCaptionStats(cfg) {
   const basic = captionPoolStats(cfg.captions_folder, cfg.captions);
-  const fromDisk = loadCaptionsFromDisk(cfg.captions_folder);
+  // Namespace fallback — tránh ReferenceError nếu named import bị thiếu khi build
+  const loadDisk =
+    typeof loadCaptionsFromDisk === "function"
+      ? loadCaptionsFromDisk
+      : typeof mediaLibrary.loadCaptionsFromDisk === "function"
+        ? mediaLibrary.loadCaptionsFromDisk
+        : () => [];
+  let fromDisk = [];
+  try {
+    fromDisk = loadDisk(cfg?.captions_folder) || [];
+  } catch (e) {
+    console.warn("[getCaptionStats] load captions:", e.message);
+    fromDisk = [];
+  }
   const inline = Array.isArray(cfg.captions)
     ? cfg.captions.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
