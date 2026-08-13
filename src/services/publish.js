@@ -348,21 +348,6 @@ export async function publishPhoto(
   return enrichPublishResult(data.post_id || postId, pageToken, base);
 }
 
-/**
- * Meta video `title` max 255 code points — cứng, không nới được.
- * - caption ≤ 255 → title = full caption
- * - caption > 255 → title = 255 ký tự đầu (full trong giới hạn Meta)
- * Caption đầy đủ luôn gửi qua `description` (đó là text bài đăng trên Page).
- */
-function videoTitleFromCaption(description) {
-  const raw = String(description || "").trim();
-  if (!raw) return undefined;
-  // Array.from = code points (emoji/VN an toàn hơn String.slice UTF-16)
-  const chars = Array.from(raw);
-  if (!chars.length) return undefined;
-  return chars.length <= 255 ? raw : chars.slice(0, 255).join("");
-}
-
 /** Video post — local file */
 export async function publishVideo(
   pageId,
@@ -374,15 +359,11 @@ export async function publishVideo(
   if (!fs.existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`);
   }
-  // Video: explicit public flags — tránh secret/reference_only/no_story
-  // (Meta default secret=false; vẫn gửi rõ để không thành unlisted).
-  // description = CAPTION FULL (người xem thấy phần này)
-  // title = full nếu ≤255; dài hơn thì cắt 255 (rule Meta, không thể full hơn)
+  // Caption bài = description FULL (lead + link + body) — phần người xem thấy.
+  // Không gửi `title` (không cần; gửi caption dài vào title → lỗi #100 ≤255).
   const desc = description ? String(description) : "";
-  const title = videoTitleFromCaption(desc);
   const fields = {
     description: desc,
-    ...(title ? { title } : {}),
     secret: "false",
     no_story: "false",
     embeddable: "true",
