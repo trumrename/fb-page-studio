@@ -40,6 +40,7 @@ import {
   ensureAntiSpamTables,
   getAntiSpamSettings,
   countUnusedMedia,
+  inspectMediaFolder,
 } from "./antiSpam.js";
 import {
   resolvePagePostingPolicy,
@@ -169,17 +170,26 @@ function assessMediaForPlan(finalPlan, { postType, bodyPostType } = {}) {
   const messages = [];
 
   for (const need of mediaNeeds.values()) {
-    let available = 0;
+    let inv = {
+      total: 0,
+      unused: 0,
+      used: 0,
+      protect_used: false,
+      media_once_forever: false,
+    };
     if (!need.folder) {
-      available = 0;
+      inv = { total: 0, unused: 0, used: 0, protect_used: false };
     } else {
       try {
-        available = countUnusedMedia(need.folder, need.kind);
+        inv = inspectMediaFolder(need.folder, need.kind);
       } catch {
-        available = 0;
+        inv = { total: 0, unused: 0, used: 0, protect_used: false };
       }
     }
+    const available = Number(inv.unused) || 0;
     need.available = available;
+    need.total_on_disk = Number(inv.total) || 0;
+    need.used_hashes = Number(inv.used) || 0;
     need.ok = available >= need.required;
     need.short = Math.max(0, need.required - available);
     pools.push({ ...need });
@@ -191,9 +201,19 @@ function assessMediaForPlan(finalPlan, { postType, bodyPostType } = {}) {
           `Thiếu folder media cho ${need.page_names.slice(0, 4).join(", ")}` +
             `${need.page_names.length > 4 ? "…" : ""} — cần ${need.required} ${kindLabel}`
         );
+      } else if (inv.total > 0 && inv.used > 0 && available === 0) {
+        // Case phổ biến: folder còn file nhưng hash đã đăng (media_once_forever)
+        messages.push(
+          `Kho còn ${inv.total} ${kindLabel} trên đĩa nhưng 0 chưa dùng (đã ghi hash ${inv.used} file — rule «1 file = 1 lần» / media_once_forever). ` +
+            `Folder: ${need.folder}. ` +
+            `Cách xử lý: Anti-spam → tắt «1 ảnh/video = 1 lần đời» hoặc «Xóa hash media» cho folder này, rồi Xem kế hoạch lại.` +
+            (need.page_names.length
+              ? ` (page: ${need.page_names.slice(0, 5).join(", ")}${need.page_names.length > 5 ? "…" : ""})`
+              : "")
+        );
       } else {
         messages.push(
-          `Thiếu ${kindLabel}: cần ${need.required}, còn ${available} trong ${need.folder}` +
+          `Thiếu ${kindLabel}: cần ${need.required}, còn ${available}/${inv.total || 0} trong ${need.folder}` +
             (need.page_names.length
               ? ` (page: ${need.page_names.slice(0, 5).join(", ")}${need.page_names.length > 5 ? "…" : ""})`
               : "")

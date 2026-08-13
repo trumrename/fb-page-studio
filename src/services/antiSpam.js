@@ -729,19 +729,117 @@ function pickRandomMediaSpaced(files, folder, kind) {
   return picked;
 }
 
-export function countUnusedMedia(folder, kind) {
+/**
+ * Inventory one media folder for plan checks / UI.
+ * total = files on disk · used = hash already in media_hash_used · unused = can post
+ */
+export function inspectMediaFolder(folder, kind) {
   const s = getAntiSpamSettings();
-  const protectUsed = Boolean(s.media_once_forever || (s.enabled && s.block_duplicate_media));
-  if (!protectUsed) return listMediaFilesSync(folder, kind).length;
-  let count = 0;
-  for (const file of listMediaFilesSync(folder, kind)) {
+  const protectUsed = Boolean(
+    s.media_once_forever || (s.enabled && s.block_duplicate_media)
+  );
+  const files = listMediaFilesSync(folder, kind);
+  let unused = 0;
+  let used = 0;
+  let unreadable = 0;
+  if (!protectUsed) {
+    return {
+      folder: folder || null,
+      kind,
+      total: files.length,
+      unused: files.length,
+      used: 0,
+      unreadable: 0,
+      protect_used: false,
+      media_once_forever: !!s.media_once_forever,
+      anti_enabled: !!s.enabled,
+    };
+  }
+  for (const file of files) {
     try {
-      if (!isMediaHashUsed(fileSha256(file))) count++;
+      if (isMediaHashUsed(fileSha256(file))) used++;
+      else unused++;
     } catch {
-      count++;
+      unreadable++;
+      unused++; // still try at pick time
     }
   }
-  return count;
+  return {
+    folder: folder || null,
+    kind,
+    total: files.length,
+    unused,
+    used,
+    unreadable,
+    protect_used: true,
+    media_once_forever: !!s.media_once_forever,
+    anti_enabled: !!s.enabled,
+  };
+}
+
+export function countUnusedMedia(folder, kind) {
+  return inspectMediaFolder(folder, kind).unused;
+}
+
+/**
+ * Xóa hash media đã ghi — cho phép đăng lại file cùng nội dung.
+ * @param {{ folder?: string, all?: boolean }} opts
+ */
+export function clearMediaHashes(opts = {}) {
+  ensureAntiSpamTables();
+  const db = getDb();
+  if (opts.all) {
+    const n = db.prepare(`SELECT COUNT(*) AS n FROM media_hash_used`).get().n;
+    db.prepare(`DELETE FROM media_hash_used`).run();
+    logEvent("media_hash_cleared", `all=${n}`);
+    return { ok: true, deleted: n, scope: "all" };
+  }
+  const folder = String(opts.folder || "").trim();
+  if (!folder) {
+    throw new Error("Cần folder media hoặc all=true");
+  }
+  const resolved = path.resolve(folder).toLowerCase();
+  // Match by source_folder column OR by re-hashing files currently in folder
+  let deleted = 0;
+  const byFolder = db
+    .prepare(
+      `DELETE FROM media_hash_used
+       WHERE source_folder IS NOT NULL
+         AND lower(source_folder) = ?`
+    )
+    .run(resolved);
+  deleted += byFolder.changes || 0;
+
+  // Files still in folder (often renamed with timestamp prefix) — free by content hash
+  const hashes = [];
+  for (const kind of ["video", "photo"]) {
+    for (const file of listMediaFilesSync(folder, kind)) {
+      try {
+        hashes.push(fileSha256(file));
+      } catch {
+        /* skip */
+      }
+    }
+  }
+  const uniq = [...new Set(hashes)];
+  const delHash = db.prepare(`DELETE FROM media_hash_used WHERE hash = ?`);
+  const tx = db.transaction((list) => {
+    let n = 0;
+    for (const h of list) n += delHash.run(h).changes || 0;
+    return n;
+  });
+  deleted += tx(uniq);
+  logEvent(
+    "media_hash_cleared",
+    `folder=${resolved} deleted≈${deleted} file_hashes=${uniq.length}`
+  );
+  return {
+    ok: true,
+    deleted,
+    scope: "folder",
+    folder: path.resolve(folder),
+    file_hashes_checked: uniq.length,
+  };
 }
 
 /** Apply floor to page config interval / daily max */

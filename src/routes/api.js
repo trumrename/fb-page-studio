@@ -47,6 +47,8 @@ import {
   getRecommendations,
   listRecentBlocks,
   ensureAntiSpamTables,
+  clearMediaHashes,
+  inspectMediaFolder,
 } from "../services/antiSpam.js";
 import { pickFolder } from "../services/folderPicker.js";
 import { getAppSetting, saveAppSetting } from "../services/appSettings.js";
@@ -1306,6 +1308,35 @@ router.post("/anti-spam/preset", (req, res) => {
 
 router.get("/anti-spam/events", (req, res) => {
   res.json({ events: listRecentBlocks(Number(req.query.limit) || 40) });
+});
+
+/**
+ * POST /api/anti-spam/clear-media-hashes
+ * Body: { folder?: string, all?: boolean }
+ * Xóa hash → file trong kho được coi là chưa đăng (đăng lại được).
+ */
+router.post("/anti-spam/clear-media-hashes", (req, res) => {
+  try {
+    const result = clearMediaHashes({
+      folder: req.body?.folder,
+      all: !!req.body?.all,
+    });
+    res.json({ ok: true, ...result, stats: getAntiSpamStats() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** GET /api/anti-spam/media-inspect?folder=&kind=video|photo */
+router.get("/anti-spam/media-inspect", (req, res) => {
+  try {
+    const folder = String(req.query.folder || "").trim();
+    const kind = String(req.query.kind || "video").toLowerCase() === "photo" ? "photo" : "video";
+    if (!folder) return res.status(400).json({ ok: false, error: "Thiếu folder" });
+    res.json({ ok: true, ...inspectMediaFolder(folder, kind) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
 });
 
 /** GET /api/version — current build + update config */

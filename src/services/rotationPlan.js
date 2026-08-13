@@ -23,6 +23,7 @@ import {
   getAntiSpamSettings,
   countEffectivePostsBetween,
   countUnusedMedia,
+  inspectMediaFolder,
 } from "./antiSpam.js";
 import { listMetaAppsPublic } from "./metaApps.js";
 import { getPagePostConfig, getCaptionStats } from "./poster.js";
@@ -1238,9 +1239,21 @@ export function buildRunNowPlan(inputSettings = {}) {
     mediaNeeds.get(key).required += 1;
   }
   for (const need of mediaNeeds.values()) {
-    need.available = countUnusedMedia(need.folder, need.kind);
+    const inv = inspectMediaFolder(need.folder, need.kind);
+    need.available = inv.unused;
+    need.total_on_disk = inv.total;
+    need.used_hashes = inv.used;
     if (need.available < need.required) {
-      blockers.push(`Thiếu ${need.kind}: cần ${need.required}, hiện có ${need.available} trong ${need.folder || "(chưa chọn folder)"}`);
+      if (inv.total > 0 && inv.used > 0 && inv.unused === 0) {
+        blockers.push(
+          `Thiếu ${need.kind}: cần ${need.required} — folder còn ${inv.total} file nhưng cả ${inv.used} đã dùng hash (media_once_forever). ` +
+            `Vào Anti-spam → Xóa hash media / tắt «1 file = 1 lần». ${need.folder || ""}`
+        );
+      } else {
+        blockers.push(
+          `Thiếu ${need.kind}: cần ${need.required}, hiện còn ${need.available}/${inv.total} trong ${need.folder || "(chưa chọn folder)"}`
+        );
+      }
     }
   }
   for (const need of captionNeeds.values()) {

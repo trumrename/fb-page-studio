@@ -74,6 +74,24 @@
           <div class="stat"><div class="n" id="stCap">—</div><div class="l">Caption đã track</div></div>
           <div class="stat"><div class="n" id="stBack">—</div><div class="l">Backoff (giây)</div></div>
         </div>
+        <div class="panel section-gap" style="margin-top:.75rem">
+          <h2 class="panel-hd">Media hash — đăng lại file đã đăng</h2>
+          <div class="panel-body">
+            <p class="muted" style="margin:0 0 .55rem;font-size:.84rem;line-height:1.45">
+              Tool đếm <b>nội dung file (hash)</b>, không chỉ «còn file trong folder».
+              Folder còn 12 video nhưng hash đã ghi = <b>còn 0 video chưa dùng</b>.
+              Xóa hash → coi file là mới, đăng lại được.
+            </p>
+            <div class="row2" style="gap:.5rem;align-items:end">
+              <div style="flex:1">
+                <label>Folder media (để trống + nút «Xóa TẤT CẢ» nếu muốn clear toàn bộ)</label>
+                <input type="text" id="clearMediaFolder" placeholder="C:\...\video đã sửa" />
+              </div>
+              <button type="button" class="btn-ghost" id="btnClearMediaFolder">Xóa hash folder này</button>
+              <button type="button" class="btn-warn" id="btnClearMediaAll">Xóa TẤT CẢ hash media</button>
+            </div>
+          </div>
+        </div>
 
         <div class="panel section-gap" style="margin-top:0">
           <h2 class="panel-hd">Gợi ý an toàn</h2>
@@ -270,6 +288,35 @@
     $("btnSafe").onclick = () => preset("safe");
     $("btnStrict").onclick = () => preset("strict");
     $("btnLoose").onclick = () => preset("loose");
+
+    $("btnClearMediaFolder")?.addEventListener("click", async () => {
+      const folder = ($("clearMediaFolder")?.value || "").trim();
+      if (!folder) return flash("Nhập path folder media cần xóa hash", false);
+      if (!confirm(`Xóa hash media cho folder?\n${folder}\n\nFile trong folder sẽ được coi là chưa đăng.`)) return;
+      try {
+        const r = await api("/api/anti-spam/clear-media-hashes", {
+          method: "POST",
+          body: JSON.stringify({ folder }),
+        });
+        flash(`Đã xóa ~${r.deleted || 0} hash (folder)`, true);
+        await load();
+      } catch (e) {
+        flash(e.message, false);
+      }
+    });
+    $("btnClearMediaAll")?.addEventListener("click", async () => {
+      if (!confirm("Xóa TẤT CẢ media hash trong DB?\nMọi file đã đăng có thể bị đăng lại.")) return;
+      try {
+        const r = await api("/api/anti-spam/clear-media-hashes", {
+          method: "POST",
+          body: JSON.stringify({ all: true }),
+        });
+        flash(`Đã xóa ${r.deleted || 0} hash (toàn bộ)`, true);
+        await load();
+      } catch (e) {
+        flash(e.message, false);
+      }
+    });
 
     $("btnMasterToggle").onclick = async () => {
       try {
