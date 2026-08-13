@@ -2661,6 +2661,35 @@ Tối | 18:00 | 21:30 | 2</textarea>
             </label>
           </div>
         </div>
+        <div style="margin:.55rem 0;padding:.65rem .75rem;border:1px solid rgba(245,201,106,.3);border-radius:12px;background:rgba(0,0,0,.16)">
+          <label class="checks" style="display:flex;align-items:flex-start;gap:.45rem;margin:0 0 .4rem">
+            <input type="checkbox" id="video_title_enabled" ${
+              c.link_lists?.video_title_enabled == 1 ||
+              c.link_lists?.video_title_enabled === true ||
+              String(c.link_lists?.video_title_enabled || "") === "1"
+                ? "checked"
+                : ""
+            } />
+            <span><b>Video · lấy title từ kho</b> (tùy chọn — Meta title ngắn)</span>
+          </label>
+          <p class="muted" style="margin:0 0 .4rem;font-size:.76rem;line-height:1.4">
+            <b>Bỏ tick</b> = đăng video <b>không</b> gửi title (chỉ caption full + link ở mô tả bài).<br/>
+            <b>Bật tick</b> = lấy title lần lượt trong kho → hết vòng thì <b>xáo random</b> rồi lấy lại từ đầu.<br/>
+            Caption bài (lead + link + body) <b>không</b> bị cắt — luôn full ở description.
+          </p>
+          <label>Kho title video (.txt / .csv hoặc folder)</label>
+          <div class="row2" style="align-items:end;gap:.4rem">
+            <div style="flex:1">
+              <input type="text" id="video_titles_path" value="${esc(
+                c.link_lists?.video_titles_path || ""
+              )}" placeholder="…\\data\\media\\captions\\video-titles-300.txt (trống = mặc định)" />
+            </div>
+            <button type="button" class="btn-ghost btn-sm" id="btnPickVideoTitles">📂 Chọn</button>
+          </div>
+          <p class="muted" style="margin:.3rem 0 0;font-size:.76rem">
+            Gợi ý: kho sẵn <code>video-titles-300.txt</code> (300 title cùng tone caption). 1 dòng = 1 title.
+          </p>
+        </div>
         <label><b>Kho link full / comment (page này)</b> — mỗi dòng 1 URL (list dài được)</label>
         <textarea id="comment_links" rows="5" placeholder="https://full1&#10;https://full2&#10;https://full3">${esc(
           (Array.isArray(c.link_lists?.comment_links) && c.link_lists.comment_links.length
@@ -2809,6 +2838,12 @@ Tối | 18:00 | 21:30 | 2</textarea>
         pickFolderInto("posted_folder", "Chọn folder đã đăng (posted)");
       $("btnPickCaptions").onclick = () =>
         pickFolderInto("captions_folder", "Chọn kho tiêu đề / caption (.txt .csv)");
+      $("btnPickVideoTitles")?.addEventListener("click", () =>
+        pickFolderInto(
+          "video_titles_path",
+          "Chọn folder/kho title video (.txt/.csv) — hoặc dán path file video-titles-300.txt"
+        )
+      );
       if ($("oneScheduleAt") || $("oneSchedDay")) {
         writeOneScheduleParts(new Date(Date.now() + 2 * 60 * 60 * 1000));
         ensureOneScheduleFuture({ silent: true });
@@ -2843,6 +2878,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         .split(/\r?\n/)
         .map((s) => s.trim())
         .filter(Boolean);
+      const videoTitleOn = !!$("video_title_enabled")?.checked;
       return {
         enabled: $("enabled").checked ? 1 : 0,
         comment_enabled: $("comment_enabled").checked ? 1 : 0,
@@ -2872,6 +2908,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
           caption_lead_mode: leadMode === "sequential" ? "sequential" : "random",
           caption_lead_templates: leadTpls,
           caption_lead_links: leadLinks,
+          video_title_enabled: videoTitleOn ? 1 : 0,
+          video_titles_path: ($("video_titles_path")?.value || "").trim(),
         },
       };
     }

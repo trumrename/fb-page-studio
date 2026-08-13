@@ -235,6 +235,8 @@ function normalizeConfigBody(input) {
       "caption_lead_mode",
       "caption_lead_tpl_next",
       "caption_lead_link_next",
+      "video_title_enabled",
+      "video_titles_path",
     ]);
     for (const [k, v] of Object.entries(body.link_lists)) {
       if (scalarKeys.has(k)) {
@@ -248,7 +250,7 @@ function normalizeConfigBody(input) {
         ) {
           const n = Number(Array.isArray(v) ? v[0] : v);
           out[k] = Number.isFinite(n) ? Math.max(0, n) : 0;
-        } else if (k === "caption_lead_enabled") {
+        } else if (k === "caption_lead_enabled" || k === "video_title_enabled") {
           const raw = Array.isArray(v) ? v[0] : v;
           const s = String(raw ?? "").trim().toLowerCase();
           out[k] =
@@ -260,6 +262,9 @@ function normalizeConfigBody(input) {
             s === "yes"
               ? 1
               : 0;
+        } else if (k === "video_titles_path") {
+          const raw = Array.isArray(v) ? v[0] : v;
+          out[k] = String(raw ?? "").trim();
         } else if (
           k === "comment_link_mode" ||
           k === "comment_pick_mode" ||

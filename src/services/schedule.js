@@ -22,6 +22,7 @@ import {
   assignCommentForPost,
   composeCaptionWithLead,
 } from "./mediaLibrary.js";
+import { pickNextVideoTitle } from "./videoTitlePool.js";
 import { getCaptionStats, getPagePostConfig, savePagePostConfig } from "./poster.js";
 import {
   getActiveTimesForPageRow,
@@ -400,13 +401,15 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         throw new Error(`Không có video chưa dùng: ${cfg.media_folder || "(trống)"}`);
       }
       // Hẹn giờ Facebook (Graph) — cùng path ảnh/text. Video một số page public OK.
-      // Muốn chắc public: dùng mode «chờ giờ đăng trực tiếp» (tool mở, published=true).
+      // Title Meta tùy chọn (kho title xoay vòng) — caption full vẫn ở description.
+      const titlePick = pickNextVideoTitle(cfg);
       result = await publishVideo(
         page.page_id,
         pageToken,
         mediaPath,
         caption || "",
-        schedule
+        schedule,
+        { title: titlePick.title || null }
       );
     } else {
       throw new Error(`Loại bài không hỗ trợ hẹn giờ: ${postType}`);

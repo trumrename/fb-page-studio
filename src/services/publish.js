@@ -348,22 +348,33 @@ export async function publishPhoto(
   return enrichPublishResult(data.post_id || postId, pageToken, base);
 }
 
-/** Video post — local file */
+/**
+ * Video post — local file.
+ * @param {string} description caption FULL (lead + link + body) → Graph `description`
+ * @param {object|null} schedule
+ * @param {{ title?: string|null }} [opts] title ngắn tùy chọn (kho title); không gửi nếu trống
+ */
 export async function publishVideo(
   pageId,
   pageToken,
   filePath,
   description = "",
-  schedule = null
+  schedule = null,
+  opts = {}
 ) {
   if (!fs.existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`);
   }
-  // Caption bài = description FULL (lead + link + body) — phần người xem thấy.
-  // Không gửi `title` (không cần; gửi caption dài vào title → lỗi #100 ≤255).
+  // Caption bài = description FULL. Title Meta ≤255 — chỉ gửi nếu user bật kho title.
   const desc = description ? String(description) : "";
+  let title = opts?.title != null ? String(opts.title).trim() : "";
+  if (title) {
+    const chars = Array.from(title);
+    if (chars.length > 255) title = chars.slice(0, 255).join("");
+  }
   const fields = {
     description: desc,
+    ...(title ? { title } : {}),
     secret: "false",
     no_story: "false",
     embeddable: "true",

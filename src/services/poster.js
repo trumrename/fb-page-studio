@@ -25,8 +25,8 @@ import {
   ensureDir,
   listMediaFiles,
   captionPoolStats,
-  loadCaptionsFromDisk,
 } from "./mediaLibrary.js";
+import { pickNextVideoTitle } from "./videoTitlePool.js";
 import { appendPostCsv } from "./postLogCsv.js";
 import {
   assertCanPublish,
@@ -508,12 +508,22 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         ignore_interval: !!opts.ignore_interval,
       });
       if (!gate2.ok) throw new Error(gate2.error);
+      // Title Meta tùy chọn: tick kho title → xoay vòng; hết thì xáo random lại
+      const titlePick = pickNextVideoTitle(cfg);
+      if (titlePick.warning) {
+        console.warn("[video title]", titlePick.warning);
+      }
       result = await publishVideo(
         page.page_id,
         pageToken,
         mediaPath,
-        caption
+        caption,
+        null,
+        { title: titlePick.title || null }
       );
+      if (titlePick.title) {
+        result = { ...result, video_title: titlePick.title };
+      }
     } else if (
       postType === "story" ||
       postType === "story_photo" ||
