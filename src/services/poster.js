@@ -20,6 +20,7 @@ import {
   moveToPosted,
   pickCaption,
   composeCaptionWithLead,
+  loadCaptionsFromDisk,
   buildComment,
   assignCommentForPost,
   ensureDir,
