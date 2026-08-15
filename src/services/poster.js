@@ -157,10 +157,35 @@ export function savePagePostConfig(pageRowId, body) {
   // Apply anti-spam floors/caps so UI and DB stay consistent
   next = clampPageLimits(next);
   // Deep-merge link_lists so bulk partial update không xóa comment_links / lead…
-  const linkLists = {
-    ...(cur.link_lists && typeof cur.link_lists === "object" ? cur.link_lists : {}),
-    ...(body?.link_lists && typeof body.link_lists === "object" ? body.link_lists : {}),
-  };
+  const prevLl =
+    cur.link_lists && typeof cur.link_lists === "object" ? cur.link_lists : {};
+  const bodyLl =
+    body?.link_lists && typeof body.link_lists === "object" ? body.link_lists : {};
+  const linkLists = { ...prevLl, ...bodyLl };
+  // Không ghi đè mảng URL đang có bằng mảng rỗng (tránh mất link khi lưu form khác)
+  for (const key of [
+    "comment_links",
+    "full_album",
+    "see_more",
+    "caption_lead_links",
+    "caption_lead_templates",
+  ]) {
+    if (
+      Object.prototype.hasOwnProperty.call(bodyLl, key) &&
+      Array.isArray(bodyLl[key]) &&
+      bodyLl[key].length === 0 &&
+      Array.isArray(prevLl[key]) &&
+      prevLl[key].length > 0 &&
+      bodyLl.force_clear_link_lists !== true &&
+      bodyLl.force_clear_link_lists !== 1
+    ) {
+      linkLists[key] = prevLl[key];
+    }
+  }
+  // Bỏ key undefined (từ collect partial)
+  for (const k of Object.keys(linkLists)) {
+    if (linkLists[k] === undefined) delete linkLists[k];
+  }
   if (next.story_link_mode) {
     linkLists.story_link_mode = String(next.story_link_mode);
   }

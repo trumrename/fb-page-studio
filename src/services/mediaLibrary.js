@@ -444,25 +444,31 @@ export function normalizeLineList(raw) {
 }
 
 /**
- * Kho link comment của 1 page (ưu tiên comment_links, rồi full_album + see_more).
- * Mỗi page tự có list riêng → random / lần lượt theo bài của page đó.
+ * Kho link comment của 1 page.
+ * Ưu tiên: comment_links → caption_lead_links (cùng kho lead) → full_album + see_more.
+ * Tránh case: user dán link ở lead / bulk nhưng comment_links rỗng → comment chỉ còn "see more :".
  */
 export function getCommentLinkPool(linkLists = {}) {
   const ll = linkLists && typeof linkLists === "object" ? linkLists : {};
-  const primary = normalizeLineList(ll.comment_links);
-  if (primary.length) return primary;
-  const merged = [
-    ...normalizeLineList(ll.full_album),
-    ...normalizeLineList(ll.see_more),
+  const buckets = [
+    normalizeLineList(ll.comment_links),
+    normalizeLineList(ll.caption_lead_links),
+    normalizeLineList(ll.full_album),
+    normalizeLineList(ll.see_more),
   ];
-  // unique preserve order
   const seen = new Set();
   const out = [];
-  for (const u of merged) {
-    const k = u.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(u);
+  for (const arr of buckets) {
+    for (const u of arr) {
+      const k = String(u || "").trim().toLowerCase();
+      if (!k || seen.has(k)) continue;
+      // chỉ nhận URL-ish
+      if (!/^https?:\/\//i.test(u) && !/^[\w.-]+\.[a-z]{2,}/i.test(u)) continue;
+      seen.add(k);
+      out.push(String(u).trim());
+    }
+    // Dùng bucket đầu tiên có dữ liệu (ưu tiên comment_links, rồi lead…)
+    if (out.length) break;
   }
   return out;
 }
@@ -563,18 +569,30 @@ export function assignCommentForPost(cfg = {}) {
     const hasPh =
       /\{see_more\}|\{full_album\}|\{link\}|\{link:[a-zA-Z0-9_]+\}/.test(tpl);
     text = tpl
-      .replace(/\{link:([a-zA-Z0-9_]+)\}/g, (_, key) => pickKey(key))
-      .replace(/\{see_more\}/g, () => pickKey("see_more") || link)
-      .replace(/\{full_album\}/g, () => pickKey("full_album") || link)
-      .replace(/\{link\}/g, () => link || pickKey("see_more") || pickKey("full_album"));
-    if (!hasPh && link && !text.includes(link)) {
+      .replace(/\{link:([a-zA-Z0-9_]+)\}/g, (_, key) => pickKey(key) || link || "")
+      .replace(/\{see_more\}/g, () => pickKey("see_more") || link || "")
+      .replace(/\{full_album\}/g, () => pickKey("full_album") || link || "")
+      .replace(/\{link\}/g, () => link || pickKey("see_more") || pickKey("full_album") || "");
+    // Luôn ghép URL nếu template không chứa link (vd "see more :") — tránh comment không có URL
+    if (link && !text.includes(link)) {
       text = `${text.trim()}\n${link}`.trim();
+    } else if (!link && hasPh) {
+      // placeholder rỗng → bỏ dòng trống thừa
+      text = text.replace(/\n{2,}/g, "\n").trim();
     }
   } else if (link) {
     text = link;
   }
 
+  // Template kiểu "see more :" mà không có link nào trong kho → null (đừng comment rỗng ý nghĩa)
   text = String(text || "").trim() || null;
+  if (text && !link && !/https?:\/\//i.test(text)) {
+    // Chỉ câu mẫu, không URL — vẫn cho gửi (user có thể chỉ muốn text),
+    // nhưng ghi log để debug bulk
+    console.warn(
+      "[assignCommentForPost] comment không có URL — kho link trống (comment_links / caption_lead_links)"
+    );
+  }
 
   const link_lists = {
     ...ll0,

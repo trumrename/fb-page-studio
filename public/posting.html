@@ -2861,7 +2861,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const when =
         $("comment_when_immediate")?.checked ? "immediate" : "after_publish";
       const linksRaw = ($("comment_links")?.value || "").trim();
-      const linkLines = linksRaw
+      let linkLines = linksRaw
         ? linksRaw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
         : [];
       const delayMin = Math.max(0, Math.min(10080, Number($("comment_delay_minutes")?.value) || 0));
@@ -2878,6 +2878,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
         .split(/\r?\n/)
         .map((s) => s.trim())
         .filter(Boolean);
+      // Comment pool: nếu trống thì dùng caption_lead_links (tránh comment «see more :» không URL)
+      if (!linkLines.length && leadLinks.length) {
+        linkLines = leadLinks.filter((s) => /^https?:\/\//i.test(s) || /^[\w.-]+\.[a-z]{2,}/i.test(s));
+      }
       const videoTitleOn = !!$("video_title_enabled")?.checked;
       return {
         enabled: $("enabled").checked ? 1 : 0,
@@ -2895,10 +2899,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
         comment_templates: $("comment_templates")?.value || "",
         link_lists: {
           comment_links: linkLines,
-          full_album: linkLines,
-          see_more: linkLines.length
-            ? linkLines
-            : ($("see_more")?.value || ""),
+          full_album: linkLines.length ? linkLines : undefined,
+          see_more: linkLines.length ? linkLines : undefined,
           comment_link_mode: mode,
           comment_when: when,
           comment_delay_minutes: when === "immediate" ? 0 : delayMin,
@@ -3307,6 +3309,35 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if (!body.page_row_ids.length) {
         flash("Tick ít nhất 1 page", false);
         return;
+      }
+      // Tự áp panel comment bulk → từng page TRƯỚC khi hẹn (tránh quên bấm «Áp dụng» → comment không có link)
+      if ($("bulkCommentEnabled")?.checked) {
+        try {
+          // Nếu kho comment trống nhưng có link ở dòng mở đầu caption → dùng luôn
+          let links = parseBulkCommentLinks();
+          if (!links.length) {
+            const leadLinks = ($("bulkCaptionLeadLinks")?.value || "")
+              .split(/\r?\n/)
+              .map((s) => s.trim())
+              .filter((s) => /^https?:\/\//i.test(s));
+            if (leadLinks.length && $("bulkCommentLinks")) {
+              $("bulkCommentLinks").value = leadLinks.join("\n");
+              links = parseBulkCommentLinks();
+            }
+          }
+          const templates = ($("bulkCommentTemplates")?.value || "").trim();
+          if (templates || links.length) {
+            await applyBulkCommentToSelected({ enabled: true });
+          } else if (!dry) {
+            flash(
+              "Auto comment đang bật nhưng chưa có link/câu — comment sẽ thiếu URL. Dán kho link rồi hẹn lại.",
+              false
+            );
+          }
+        } catch (e) {
+          flash(`Áp comment bulk: ${e.message}`, false);
+          if (!dry) return;
+        }
       }
       if (!dry && !confirm(`Hẹn giờ ${body.page_row_ids.length} page trên Facebook?\nMode: ${body.mode}\n\nTool sẽ chặn nếu thiếu media (ảnh/video).`)) return;
       $("bulkResult").innerHTML = dry ? "Đang lập kế hoạch + kiểm tra media…" : "Đang tạo job hẹn giờ…";
@@ -4578,7 +4609,19 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if (!ids.length) return flash("Tick ít nhất một Page (tab 1 hoặc summary)", false);
       const templates = ($("bulkCommentTemplates")?.value || "").trim();
       renderBulkLinksFreeList();
-      const linkLines = parseBulkCommentLinks();
+      let linkLines = parseBulkCommentLinks();
+      // Fallback: link ở panel «dòng mở đầu caption» nếu kho comment trống
+      if (enabled && !linkLines.length) {
+        const leadLinks = ($("bulkCaptionLeadLinks")?.value || "")
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter((s) => /^https?:\/\//i.test(s));
+        if (leadLinks.length) {
+          linkLines = leadLinks;
+          if ($("bulkCommentLinks")) $("bulkCommentLinks").value = leadLinks.join("\n");
+          renderBulkLinksFreeList();
+        }
+      }
       if (enabled && !templates && !linkLines.length) {
         return flash("Cần ít nhất: kho link (mỗi dòng 1 URL) hoặc câu comment", false);
       }
