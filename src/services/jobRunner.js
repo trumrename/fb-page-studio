@@ -747,8 +747,15 @@ async function runJob(jobId) {
       recompute(job);
       emit(job);
 
+      // Giữ đúng phạm vi page lúc bấm Chạy (selected + page_row_ids) — không mở rộng all
+      const cont = job.continuous_settings || {};
       const plan = buildRunNowPlan({
-        ...job.continuous_settings,
+        ...cont,
+        page_target_mode: cont.page_target_mode === "all" ? "all" : "selected",
+        page_row_ids:
+          cont.page_target_mode === "all"
+            ? []
+            : (cont.page_row_ids || []).map(Number).filter((n) => n > 0),
         force_plan_day: forceDay || undefined,
       });
       if (plan.blockers?.length || !plan.slots?.length) {

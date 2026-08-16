@@ -1929,7 +1929,26 @@ Tối | 18:00 | 21:30 | 2</textarea>
 
     function selectedPageIds() {
       const active = pages.length ? new Set(pages.map((p) => Number(p.id))) : null;
-      return [...selectedPageSet].filter((id) => id > 0 && (!active || active.has(id)));
+      // unique + chỉ page đang active trong list
+      return [
+        ...new Set(
+          [...selectedPageSet]
+            .map(Number)
+            .filter((id) => id > 0 && (!active || active.has(id)))
+        ),
+      ];
+    }
+
+    /** Tên page đã tick (preview confirm) */
+    function selectedPageSummary(maxNames = 10) {
+      const ids = selectedPageIds();
+      const byId = new Map(pages.map((p) => [Number(p.id), p]));
+      const names = ids
+        .map((id) => byId.get(id)?.name || `#${id}`)
+        .filter(Boolean);
+      const head = names.slice(0, maxNames).join(", ");
+      const more = names.length > maxNames ? ` … +${names.length - maxNames}` : "";
+      return { ids, names, text: names.length ? `${head}${more}` : "(không page)" };
     }
 
     function renderHourBars(hourly) {
@@ -3047,6 +3066,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
     }
 
     function bulkBody(dryRun) {
+      // Luôn đọc lại tick hiện tại (không cache id cũ)
       const ids = selectedPageIds();
       applyBulkExclusiveUi();
       const kind = getBulkScheduleKind();
@@ -3061,6 +3081,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
       );
       const body = {
         page_row_ids: ids,
+        // Chặn server mở rộng ngoài list
+        page_target_mode: "selected",
         mode,
         post_type: $("bulkPostType").value,
         tz_offset_minutes: Number($("bulkTz").value) || 420,
@@ -3339,7 +3361,26 @@ Tối | 18:00 | 21:30 | 2</textarea>
           if (!dry) return;
         }
       }
-      if (!dry && !confirm(`Hẹn giờ ${body.page_row_ids.length} page trên Facebook?\nMode: ${body.mode}\n\nTool sẽ chặn nếu thiếu media (ảnh/video).`)) return;
+      {
+        const sum = selectedPageSummary(12);
+        body.page_row_ids = sum.ids; // sync lần cuối trước confirm
+        if (!sum.ids.length) {
+          flash("Tick ít nhất 1 page — page không tick sẽ không chạy", false);
+          return;
+        }
+        if (
+          !dry &&
+          !confirm(
+            `Hẹn giờ ${sum.ids.length} page ĐÃ TICK trên Facebook?\n` +
+              `${sum.text}\n\n` +
+              `Mode: ${body.mode}\n` +
+              `Page KHÔNG tick sẽ không vào job.\n` +
+              `Tool chặn nếu thiếu media.`
+          )
+        ) {
+          return;
+        }
+      }
       $("bulkResult").innerHTML = dry ? "Đang lập kế hoạch + kiểm tra media…" : "Đang tạo job hẹn giờ…";
       try {
         const endpoint = dry ? "/api/posting/schedule/bulk" : "/api/jobs/bulk-schedule";
@@ -3602,17 +3643,31 @@ Tối | 18:00 | 21:30 | 2</textarea>
       flash(`Đã lấy giờ ${ids.length} page (preferred / preset)`, true);
     });
     $("btnSelAll").onclick = () => {
-      const q = $("pagePickFilter")?.value || "";
-      pages.filter((p) => pageMatchesFilter(p, q)).forEach((page) => selectedPageSet.add(Number(page.id)));
+      const q = String($("pagePickFilter")?.value || "").trim();
+      const matched = pages.filter((p) => pageMatchesFilter(p, q));
+      // Có ô lọc: CHỈ giữ page khớp filter (tránh tick ẩn ngoài filter vẫn chạy job)
+      // Không lọc: chọn tất cả page đang load
+      if (q) {
+        selectedPageSet = new Set(matched.map((p) => Number(p.id)));
+      } else {
+        matched.forEach((page) => selectedPageSet.add(Number(page.id)));
+      }
       renderPageList();
       invalidateRunNowPlan();
       queueWorkspaceSave();
+      flash(
+        q
+          ? `Đã chọn ${selectedPageSet.size} page (đúng filter) — page ngoài filter đã bỏ tick`
+          : `Đã chọn ${selectedPageSet.size} page`,
+        true
+      );
     };
     $("btnSelNone").onclick = () => {
       selectedPageSet.clear();
       renderPageList();
       invalidateRunNowPlan();
       queueWorkspaceSave();
+      flash("Đã bỏ tick toàn bộ page", true);
     };
     $("pagePickFilter")?.addEventListener("input", () => {
       renderPageList();
@@ -4720,7 +4775,18 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if (!runNowPlanId || runNowPlanSignature !== JSON.stringify(settingsBody)) {
         return flash("Cài đặt đã thay đổi hoặc chưa preview. Bấm Xem lịch đăng trực tiếp trước.", false);
       }
-      const scope = settingsBody.page_target_mode === "all" ? "TẤT CẢ page" : `${selectedPageIds().length} page đã tick`;
+      // Sync lại tick — không dùng cache plan nếu user vừa bỏ tick
+      const sum = selectedPageSummary(12);
+      if (settingsBody.page_target_mode === "selected") {
+        settingsBody.page_row_ids = sum.ids;
+        if (!sum.ids.length) {
+          return flash("Chế độ tick: chọn ít nhất 1 Page — page không tick không chạy", false);
+        }
+      }
+      const scope =
+        settingsBody.page_target_mode === "all"
+          ? "⚠ TẤT CẢ page active (không theo tick)"
+          : `${sum.ids.length} page đã tick: ${sum.text}`;
       const timeLbl =
         settingsBody.run_now_time_mode === "preferred"
           ? "giờ ưa thích từng page"
@@ -4731,7 +4797,19 @@ Tối | 18:00 | 21:30 | 2</textarea>
         ? `pattern ${settingsBody.media_pattern}`
         : settingsBody.media_pattern_mode;
       const cont = settingsBody.run_now_continuous ? "CÓ — ngày qua ngày đến khi Dừng" : "Không — chỉ 1 đợt";
-      if (!confirm(`Bắt đầu job đăng TRỰC TIẾP local?\nPhạm vi: ${scope}\nGiờ: ${timeLbl}\nMedia: ${mediaLbl}\nChạy liên tục: ${cont}\n\nKHÔNG tạo lịch hẹn Facebook. Giữ tool/PC bật.`)) return;
+      if (
+        !confirm(
+          `Bắt đầu job đăng TRỰC TIẾP local?\n` +
+            `Phạm vi: ${scope}\n` +
+            `Giờ: ${timeLbl}\nMedia: ${mediaLbl}\nChạy liên tục: ${cont}\n\n` +
+            (settingsBody.page_target_mode === "all"
+              ? "Bạn đang chọn «Tất cả page» — mọi page active sẽ chạy dù không tick.\n"
+              : "Chỉ page đã tick ở bước 1.\n") +
+            `KHÔNG tạo lịch hẹn Facebook. Giữ tool/PC bật.`
+        )
+      ) {
+        return;
+      }
       try {
         const body = {
           plan_id: runNowPlanId,

@@ -330,10 +330,23 @@ router.post("/bulk-schedule", async (req, res) => {
       return res.json(plan);
     }
 
+    // Chỉ page trong body.page_row_ids — chặn lọt page ngoài tick
+    const allowedIds = new Set(
+      (Array.isArray(body.page_row_ids) ? body.page_row_ids : [])
+        .map(Number)
+        .filter((n) => n > 0)
+    );
+    if (!allowedIds.size) {
+      return res.status(400).json({
+        ok: false,
+        error: "Chưa tick page — không tạo job (tránh chạy nhầm mọi page)",
+      });
+    }
     const planned = await scheduleBulk({ ...body, dry_run: true });
     const slots = [];
     for (const p of planned.plan || []) {
       if (p.error || !p.slots?.length) continue;
+      if (!allowedIds.has(Number(p.page_row_id))) continue;
       const meta = pagesMeta([p.page_row_id])[0] || {};
       for (const s of p.slots) {
         slots.push({

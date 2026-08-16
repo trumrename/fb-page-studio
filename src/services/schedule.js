@@ -616,11 +616,15 @@ export async function scheduleOnePost(pageRowId, opts = {}) {
  *  - dry_run?: boolean — only return planned slots
  */
 export async function scheduleBulk(body = {}) {
-  const pageIds = Array.isArray(body.page_row_ids)
-    ? body.page_row_ids.map(Number).filter((n) => n > 0)
-    : [];
+  const pageIds = [
+    ...new Set(
+      (Array.isArray(body.page_row_ids) ? body.page_row_ids : [])
+        .map(Number)
+        .filter((n) => n > 0)
+    ),
+  ];
   if (!pageIds.length) {
-    throw new Error("Chọn ít nhất 1 page (page_row_ids)");
+    throw new Error("Chọn ít nhất 1 page đã tick (page_row_ids) — không chạy page ngoài danh sách");
   }
 
   const mode =

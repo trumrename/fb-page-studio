@@ -436,10 +436,20 @@ export function loadAccountPageMatrix(settings) {
     accounts = accounts.filter((a) => set.has(a.id));
   }
 
-  // Number() — UI/JSON hay gửi string; Set.has("12") ≠ 12 → tick page mà matrix rỗng
-  const pageFilter = settings.page_row_ids?.length
-    ? new Set(settings.page_row_ids.map((x) => Number(x)).filter((n) => n > 0))
-    : null;
+  // Phạm vi page:
+  // - page_target_mode=selected → CHỈ page_row_ids (rỗng = 0 page, KHÔNG = tất cả)
+  // - page_target_mode=all → mọi page active (bỏ page_row_ids)
+  // Trước đây page_row_ids rỗng → null filter → lọt hết page (bug page không tick vẫn chạy)
+  const targetMode = settings.page_target_mode === "all" ? "all" : "selected";
+  const selectedIds = (settings.page_row_ids || [])
+    .map((x) => Number(x))
+    .filter((n) => n > 0);
+  const pageFilter =
+    targetMode === "all"
+      ? null
+      : selectedIds.length
+        ? new Set(selectedIds)
+        : new Set(); // selected + rỗng → không page nào
 
   return accounts.map((a) => {
     let pages = db
@@ -643,6 +653,11 @@ export function planTimesForPageDay(settings, dayYmd) {
  */
 export function buildRotationPlan(inputSettings = {}) {
   const settings = normalizeSettings({ ...loadRotationSettings(), ...inputSettings });
+  if (settings.page_target_mode === "selected" && !settings.page_row_ids.length) {
+    throw new Error(
+      "Chế độ «Chỉ page đã tick»: hãy tick ít nhất 1 Page, hoặc chọn «Tất cả page»."
+    );
+  }
   const matrix = loadAccountPageMatrix(settings).filter((a) => a.pages.length > 0);
   const groups = resolveGroups(settings, matrix);
 
