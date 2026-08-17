@@ -241,6 +241,7 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
     throw e;
   }
 
+  const graphMeta = pages?.__syncMeta || null;
   const remoteTotal = Array.isArray(pages) ? pages.length : 0;
   const skippedNoToken = [];
   const withToken = [];
@@ -250,6 +251,7 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
       skippedNoToken.push({
         page_id: String(p.id),
         name: p.name || String(p.id),
+        sources: p._sources || [],
       });
       continue;
     }
@@ -355,22 +357,39 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
 
   // Ghi chú lỗi dễ hiểu khi 0 page (không nuốt im lặng)
   let hint = null;
+  const bmClient = Number(graphMeta?.bm_client || 0);
+  const bmOwned = Number(graphMeta?.bm_owned || 0);
+  const bmAssigned = Number(graphMeta?.bm_assigned || 0);
+  const bmBiz = Number(graphMeta?.bm_businesses || 0);
+  const meAcc = Number(graphMeta?.me_accounts || 0);
+  const partnerListed = bmClient + bmOwned + bmAssigned;
+
   if (result.length === 0) {
     if (remoteTotal === 0) {
       hint =
-        "Graph /me/accounts trả 0 Page. Thường do: (1) App đang Development — nick Connect phải là Admin/Developer/Tester của App; " +
-        "(2) Thiếu quyền business_management (Page Business Suite / New Pages Experience); " +
-        "(3) Scope pages_show_list chưa được cấp / App chưa Live + Advanced Access. " +
-        "Cách: Meta Developers → App → Roles thêm user; App Review Advanced Access cho pages_* + business_management; " +
-        "Connect lại (rerequest) và chọn đủ Page.";
+        "Graph không trả Page nào (me/accounts + BM owned/client/assigned). " +
+        "Kiểm tra: (1) App Development — nick Connect phải là Admin/Developer/Tester App; " +
+        "(2) Scope business_management + pages_show_list (Advanced Access, App Live); " +
+        "(3) Share đối tác Full chỉ chia BM — vẫn phải gán Page cho nick (CREATE_CONTENT) trong Business Settings; " +
+        "(4) Connect lại (rerequest) và chọn đủ Page/Business.";
     } else if (skippedNoToken.length > 0 && skippedNoToken.length === remoteTotal) {
-      hint =
-        `Graph thấy ${remoteTotal} Page nhưng không có page access_token (bị bỏ). ` +
-        `Cần role Admin/Editor với CREATE_CONTENT + scope pages_manage_posts. ` +
-        `Page mẫu: ${skippedNoToken
-          .slice(0, 3)
-          .map((p) => p.name)
-          .join(", ")}.`;
+      const sample = skippedNoToken
+        .slice(0, 3)
+        .map((p) => p.name)
+        .join(", ");
+      if (partnerListed > 0 || skippedNoToken.some((p) => (p.sources || []).some((s) => String(s).startsWith("bm:")))) {
+        hint =
+          `Đã thấy ${remoteTotal} Page qua Business/đối tác (BM client/owned/assigned) nhưng KHÔNG có page access_token — tool không đăng được. ` +
+          `Share “Full partner” ≠ gán quyền đăng cho nick. ` +
+          `Cách đúng: Business Settings → People → chọn nick Connect → Assign assets → Pages → bật Content (CREATE_CONTENT) / Full control; ` +
+          `hoặc Page → Page access thêm nick làm Editor/Admin. Sau đó Connect lại / Sync Pages. ` +
+          `Mẫu: ${sample}.`;
+      } else {
+        hint =
+          `Graph thấy ${remoteTotal} Page nhưng không có page access_token (bị bỏ). ` +
+          `Cần role Admin/Editor với CREATE_CONTENT + scope pages_manage_posts. ` +
+          `Page mẫu: ${sample}.`;
+      }
     } else if (skippedByLicense.length > 0) {
       hint = `License chặn ${skippedByLicense.length} Page mới — nâng license hoặc xóa Page cũ.`;
     } else {
@@ -378,8 +397,12 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
     }
     db.prepare(
       `UPDATE fb_accounts SET last_error = ?, updated_at = datetime('now') WHERE id = ?`
-    ).run(hint.slice(0, 500), accountId);
-    console.warn(`[syncPages] account=${accountId} 0 pages · remote=${remoteTotal} no_token=${skippedNoToken.length} license=${skippedByLicense.length}`);
+    ).run(hint.slice(0, 900), accountId);
+    console.warn(
+      `[syncPages] account=${accountId} 0 pages · remote=${remoteTotal} no_token=${skippedNoToken.length} ` +
+        `license=${skippedByLicense.length} me=${meAcc} bm_biz=${bmBiz} bm_client=${bmClient} ` +
+        `bm_owned=${bmOwned} bm_assigned=${bmAssigned}`
+    );
   } else {
     db.prepare(
       `UPDATE fb_accounts SET last_error = NULL, updated_at = datetime('now') WHERE id = ?`
@@ -395,6 +418,18 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
     skipped_pages: skippedByLicense,
     skipped_no_token: skippedNoToken.length,
     skipped_no_token_pages: skippedNoToken.slice(0, 20),
+    graph: graphMeta
+      ? {
+          me_accounts: meAcc,
+          bm_businesses: bmBiz,
+          bm_owned: bmOwned,
+          bm_client: bmClient,
+          bm_assigned: bmAssigned,
+          token_resolved: graphMeta.token_resolved || 0,
+          token_resolve_fail: graphMeta.token_resolve_fail || 0,
+          bm_errors: (graphMeta.bm_errors || []).slice(0, 8),
+        }
+      : null,
     hint,
   };
   return result;

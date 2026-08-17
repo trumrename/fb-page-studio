@@ -210,40 +210,224 @@ export async function getMe(userToken, opts = {}) {
   );
 }
 
+const PAGE_LIST_FIELDS =
+  "id,name,category,access_token,tasks,followers_count,fan_count,link,picture.type(large)";
+
+/** Soft-paginate a Graph edge (BM partner/client pages etc.). */
+async function graphGetEdgeAllSoft(path, accessToken, query = {}, opts = {}, maxPages = 40) {
+  const all = [];
+  let after = null;
+  let lastError = null;
+  for (let i = 0; i < maxPages; i++) {
+    const q = { ...query, limit: query.limit || 100 };
+    if (after) q.after = after;
+    const r = await graphGetSoft(path, accessToken, q, opts);
+    if (!r.ok) {
+      lastError = r.error;
+      break;
+    }
+    const batch = r.data?.data || [];
+    all.push(...batch);
+    const next = r.data?.paging?.cursors?.after;
+    if (!r.data?.paging?.next || !next || batch.length === 0) break;
+    after = next;
+    await sleep(35);
+  }
+  return { ok: !lastError || all.length > 0, data: all, error: lastError };
+}
+
+function mergePageIntoMap(byId, page, source) {
+  if (!page?.id) return false;
+  const id = String(page.id);
+  const prev = byId.get(id);
+  if (!prev) {
+    byId.set(id, {
+      ...page,
+      id,
+      tasks: page.tasks || page.permitted_tasks || [],
+      _sources: [source],
+    });
+    return true;
+  }
+  // Prefer entry that already has page access_token
+  const keepToken = prev.access_token || page.access_token;
+  const merged = {
+    ...prev,
+    ...page,
+    id,
+    access_token: keepToken || page.access_token || prev.access_token,
+    tasks: page.tasks?.length
+      ? page.tasks
+      : page.permitted_tasks?.length
+        ? page.permitted_tasks
+        : prev.tasks || [],
+    _sources: [...new Set([...(prev._sources || []), source])],
+  };
+  byId.set(id, merged);
+  return false;
+}
+
 /**
- * Fetch ALL pages the user manages (paginated).
- * Scale: loops until no paging.next — safe for hundreds of pages per account.
+ * Resolve page access_token when BM edges list the page but omit token.
+ * Works only if the connected user actually has Page tasks (Editor+).
+ */
+async function tryResolvePageToken(pageId, userToken, graphOpts) {
+  const r = await graphGetSoft(
+    `/${pageId}`,
+    userToken,
+    { fields: PAGE_LIST_FIELDS },
+    graphOpts
+  );
+  if (r.ok && r.data?.access_token) return r.data;
+  return null;
+}
+
+/**
+ * Fetch ALL pages the user can publish on.
+ * 1) /me/accounts (classic roles)
+ * 2) BM owned_pages + client_pages (đối tác / agency share Full)
+ * 3) /me/business_users → assigned_pages (page gán cho nick trong BM)
+ * 4) For BM-only pages missing access_token → GET /{page-id}?fields=access_token
+ *
+ * Meta "Partner Full" alone is NOT enough: nick still needs Page CREATE_CONTENT
+ * (assigned asset) so Graph returns a page access_token.
+ *
  * @param {string} userToken
- * @param {{ onPage?: Function, appSecret?: string }} [opts]
+ * @param {{ onPage?: Function, appSecret?: string, metaAppKey?: string }} [opts]
+ * @returns {Promise<Array>} pages; also pages.__syncMeta for diagnostics
  */
 export async function getAllPages(userToken, opts = {}) {
   const onPage = typeof opts === "function" ? opts : opts.onPage;
   const appSecret = typeof opts === "object" && opts ? opts.appSecret : undefined;
   const metaAppKey = typeof opts === "object" && opts ? opts.metaAppKey : undefined;
-  // picture + followers khi Graph cho phép (không phải lúc nào cũng có đủ → enrich bổ sung)
-  const fields =
-    "id,name,category,access_token,tasks,followers_count,fan_count,link,picture.type(large)";
-  let urlPath = "/me/accounts";
-  let query = { fields, limit: 100 };
-  const pages = [];
   const graphOpts = { appSecret, metaAppKey };
+  const byId = new Map();
+  const meta = {
+    me_accounts: 0,
+    bm_businesses: 0,
+    bm_owned: 0,
+    bm_client: 0,
+    bm_assigned: 0,
+    token_resolved: 0,
+    token_resolve_fail: 0,
+    bm_errors: [],
+  };
 
-  // First request via helper; subsequent via absolute paging URL
-  let data = await graphGet(urlPath, userToken, query, graphOpts);
-
+  // --- 1) Classic page roles ---
+  let data = await graphGet(
+    "/me/accounts",
+    userToken,
+    { fields: PAGE_LIST_FIELDS, limit: 100 },
+    graphOpts
+  );
   while (true) {
-    const batch = data.data || [];
-    for (const p of batch) {
-      pages.push(p);
-      if (onPage) onPage(p, pages.length);
+    for (const p of data.data || []) {
+      if (mergePageIntoMap(byId, p, "me/accounts")) meta.me_accounts++;
     }
-
     const next = data.paging?.next;
     if (!next) break;
-
     data = await graphFetchAbsolute(next, userToken, graphOpts);
   }
 
+  // --- 2+3) Business Manager / partner client pages ---
+  try {
+    const bizRes = await graphGetSoft(
+      "/me/businesses",
+      userToken,
+      { fields: "id,name", limit: 50 },
+      graphOpts
+    );
+    if (!bizRes.ok) {
+      if (bizRes.error) meta.bm_errors.push(`me/businesses: ${bizRes.error}`);
+    } else {
+      const businesses = bizRes.data?.data || [];
+      meta.bm_businesses = businesses.length;
+
+      for (const b of businesses) {
+        if (!b?.id) continue;
+        for (const edge of ["owned_pages", "client_pages"]) {
+          const edgeRes = await graphGetEdgeAllSoft(
+            `/${b.id}/${edge}`,
+            userToken,
+            {
+              fields:
+                "id,name,category,access_token,tasks,permitted_tasks,followers_count,fan_count,link,picture.type(large)",
+              limit: 100,
+            },
+            graphOpts
+          );
+          if (!edgeRes.ok && edgeRes.error) {
+            meta.bm_errors.push(`${b.name || b.id}/${edge}: ${edgeRes.error}`);
+            continue;
+          }
+          for (const p of edgeRes.data) {
+            const isNew = mergePageIntoMap(byId, p, `bm:${edge}`);
+            if (isNew) {
+              if (edge === "owned_pages") meta.bm_owned++;
+              else meta.bm_client++;
+            }
+          }
+          await sleep(40);
+        }
+      }
+    }
+
+    // Business-scoped user → pages assigned to this nick (partner share → assign)
+    const buRes = await graphGetSoft(
+      "/me/business_users",
+      userToken,
+      { fields: "id,name,role,business{id,name}", limit: 50 },
+      graphOpts
+    );
+    if (buRes.ok) {
+      for (const bu of buRes.data?.data || []) {
+        if (!bu?.id) continue;
+        const assigned = await graphGetEdgeAllSoft(
+          `/${bu.id}/assigned_pages`,
+          userToken,
+          {
+            fields:
+              "id,name,category,access_token,tasks,permitted_tasks,followers_count,fan_count,link,picture.type(large)",
+            limit: 100,
+          },
+          graphOpts
+        );
+        if (!assigned.ok && assigned.error) {
+          meta.bm_errors.push(`assigned_pages ${bu.id}: ${assigned.error}`);
+          continue;
+        }
+        for (const p of assigned.data) {
+          const isNew = mergePageIntoMap(byId, p, "bm:assigned_pages");
+          if (isNew) meta.bm_assigned++;
+        }
+        await sleep(40);
+      }
+    } else if (buRes.error) {
+      meta.bm_errors.push(`me/business_users: ${buRes.error}`);
+    }
+  } catch (e) {
+    meta.bm_errors.push(e.message || String(e));
+  }
+
+  // --- 4) Fill missing page access_tokens (partner pages often list without token) ---
+  for (const [id, p] of byId) {
+    if (p.access_token) continue;
+    const resolved = await tryResolvePageToken(id, userToken, graphOpts);
+    if (resolved?.access_token) {
+      mergePageIntoMap(byId, resolved, "resolve_token");
+      meta.token_resolved++;
+    } else {
+      meta.token_resolve_fail++;
+    }
+    await sleep(45);
+  }
+
+  const pages = [...byId.values()];
+  for (let i = 0; i < pages.length; i++) {
+    if (onPage) onPage(pages[i], i + 1);
+  }
+  // Diagnostics for syncPagesForAccount (array property — callers ignore it)
+  pages.__syncMeta = meta;
   return pages;
 }
 

@@ -1053,15 +1053,23 @@
         const pe = r.profile_enrich || {};
         const withFl = (r.pages || []).filter((p) => p.followers_count != null).length;
         const withPic = (r.pages || []).filter((p) => p.picture_url).length;
+        const g = s.graph || {};
         alert(
           `Đã đồng bộ: ${r.page_count} Page đang hoạt động` +
             (s.added_pages ? `\nThêm mới: ${s.added_pages}` : "") +
             (s.skipped_license ? `\nBỏ qua do license: ${s.skipped_license} Page` : "") +
+            (s.skipped_no_token
+              ? `\nThấy page nhưng thiếu token (không lưu): ${s.skipped_no_token}`
+              : "") +
+            (s.remote_pages != null
+              ? `\nGraph remote: ${s.remote_pages} (me/accounts: ${g.me_accounts ?? "?"} · BM client: ${g.bm_client ?? "?"} · assigned: ${g.bm_assigned ?? "?"})`
+              : "") +
             `\nĐã có follow: ${withFl}/${r.page_count} · avatar: ${withPic}/${r.page_count}` +
             (pe.total
               ? `\nVừa lấy profile: ok ${pe.ok_count || 0} · lỗi ${pe.fail_count || 0}`
               : "") +
-            (pe.error ? `\nProfile enrich: ${pe.error}` : "")
+            (pe.error ? `\nProfile enrich: ${pe.error}` : "") +
+            (s.hint ? `\n\n⚠ ${s.hint}` : "")
         );
         await refreshAll();
       } catch (e) {

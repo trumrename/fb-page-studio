@@ -363,7 +363,8 @@ function sendConnectedPage(res, result, app) {
         bỏ thiếu token: ${sum.skipped_no_token || 0},
         license: ${sum.skipped_license || 0}).
         ${sum.hint ? `<br/><span style="font-size:.88rem">${escapeHtml(sum.hint)}</span>` : ""}
-        <br/><span style="font-size:.85rem">Connect lại với quyền đủ (pages_show_list + business_management) · App Live · nick là Admin App/Page.</span>
+        <br/><span style="font-size:.85rem">Connect lại (pages_show_list + business_management) · App Live · nick Admin App/Page.
+        Share đối tác Full: vẫn phải <b>gán Page cho nick</b> (CREATE_CONTENT) trong Business Settings → People → Assign assets.</span>
       </p>`
       : "";
   res.type("html").send(`<!DOCTYPE html>
