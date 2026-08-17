@@ -389,7 +389,11 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
         );
       } else if (diag && !diag.has_business_management) {
         parts.push(
-          "Thiếu business_management — Page gắn Business Suite / đối tác thường ẩn hết. Meta Developers → App Review Advanced Access → Connect rerequest."
+          "Token KHÔNG có business_management (dù App Meta có thể đã bật quyền). " +
+            "Khác nhau: quyền trên App Dashboard ≠ quyền đã grant vào token. " +
+            "Cách: (1) trong .env máy này FB_SCOPES phải có business_management; " +
+            "(2) Facebook → Business integrations → gỡ app; " +
+            "(3) Connect rerequest, bật đủ quyền, chọn Page."
         );
       } else if (granularN > 0) {
         parts.push(
@@ -534,8 +538,8 @@ function buildZeroPageChecklist(diag) {
   items.push({
     ok: !!diag?.has_business_management,
     text: diag?.has_business_management
-      ? "Có business_management"
-      : "THIẾU business_management — Page BM/đối tác sẽ 0 (cần Advanced Access)",
+      ? "Có business_management trên TOKEN"
+      : "TOKEN thiếu business_management (App có quyền ≠ token đã grant). Kiểm tra FB_SCOPES + Connect rerequest + gỡ Business integrations rồi login lại",
   });
   items.push({
     ok: !!diag?.has_pages_manage_posts,

@@ -157,7 +157,7 @@ if (fs.existsSync(bakedPath)) {
     "# FB_APP_SECRET=   ← KHÔNG ship. Relay RELAY_EXCHANGE=1 giữ secret.",
     "FB_APP_NAME=App 1",
     "FB_GRAPH_VERSION=v21.0",
-    "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
+    "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,pages_manage_metadata,pages_read_user_content,business_management,read_insights,public_profile",
     "# TOKEN_ENCRYPTION_KEY tự sinh lần đầu nếu trống (app first-run)",
     "TOKEN_ENCRYPTION_KEY=",
     `GITHUB_REPO=${pkg.githubRepo || "trumrename/fb-page-studio"}`,

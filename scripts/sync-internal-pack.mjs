@@ -107,7 +107,7 @@ const lines = [
     : "# RELAY_ADMIN_TOKEN=",
   "",
   `FB_GRAPH_VERSION=${srcEnv.FB_GRAPH_VERSION || "v21.0"}`,
-  `FB_SCOPES=${srcEnv.FB_SCOPES || "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile"}`,
+  `FB_SCOPES=${srcEnv.FB_SCOPES || "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,pages_manage_metadata,pages_read_user_content,business_management,read_insights,public_profile"}`,
   `TOKEN_ENCRYPTION_KEY=${srcEnv.TOKEN_ENCRYPTION_KEY || crypto.randomBytes(32).toString("hex")}`,
   `GITHUB_REPO=${srcEnv.GITHUB_REPO || pkg.githubRepo || "trumrename/fb-page-studio"}`,
   "UPDATE_ASSET=FB-Page-Studio-Desktop.exe",

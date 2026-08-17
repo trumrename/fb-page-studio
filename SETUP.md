@@ -27,7 +27,7 @@ FB_APP_ID=your_app_id
 FB_APP_SECRET=your_app_secret
 FB_REDIRECT_URI=https://YOUR-NGROK-URL/auth/facebook/callback
 FB_GRAPH_VERSION=v21.0
-FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile
+FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,pages_manage_metadata,pages_read_user_content,business_management,read_insights,public_profile
 TOKEN_ENCRYPTION_KEY=doi-thanh-chuoi-ngau-nhien-dai-32-ky-tu
 GITHUB_REPO=trumrename/fb-page-studio
 ```

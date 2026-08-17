@@ -142,7 +142,7 @@ fs.writeFileSync(
     "OAUTH_RELAY_URL=https://modelswiki.top",
     "NGROK_AUTOSTART=0",
     "FB_GRAPH_VERSION=v21.0",
-    "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile",
+    "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,pages_manage_metadata,pages_read_user_content,business_management,read_insights,public_profile",
     "TOKEN_ENCRYPTION_KEY=change-me-to-a-long-random-string-32+",
     "GITHUB_REPO=your-github-user/fb-page-studio",
     "",
