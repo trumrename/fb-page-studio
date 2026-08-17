@@ -244,18 +244,40 @@ function allServerAppsWithSecrets() {
 
 function appCreds(metaAppKey, appIdHint = "") {
   const hint = String(appIdHint || "").trim();
-  // Prefer lookup by Meta App ID — each customer machine has local "App 1/App 2"
-  // but server stores many real apps; must not use wrong secret via slot name alone.
+  // ── Ưu tiên Meta App ID (đúng yêu cầu: nhiều máy, mỗi máy App 1/2 local khác nhau) ──
+  // Tên "App 1/App 2" trên EXE chỉ là slot local (meta_app_key). Secret trên server
+  // gắn theo app_id số; KHÔNG được fallback sang secret của slot app1 khi ID khác.
   if (hint) {
     const hit = allServerAppsWithSecrets().get(hint);
-    if (hit?.appId && hit?.appSecret) return hit;
+    if (hit?.appId && hit?.appSecret) {
+      return {
+        appId: hit.appId,
+        appSecret: hit.appSecret,
+        name: hit.name,
+        key: hit.key || metaAppKey,
+      };
+    }
+    // Có App ID trong state nhưng server chưa có secret → lỗi rõ, không mượn app1
+    return {
+      appId: hint,
+      appSecret: "",
+      name: `Meta ${hint}`,
+      key: String(metaAppKey || "").trim() || `app_id_${hint}`,
+      missing_secret_for_id: true,
+    };
   }
+  // Không có appId trong OAuth state (client cũ) — mới fallback theo slot app1/app2
   const key = String(metaAppKey || "app1").trim() || "app1";
   const fromEnv = envAppCreds(key);
-  if (fromEnv.appId && fromEnv.appSecret) return fromEnv;
+  if (fromEnv.appId && fromEnv.appSecret) return { ...fromEnv, key };
   const fromFile = readAppsFile().find((a) => a.key === key);
   if (fromFile?.appId && fromFile?.appSecret) {
-    return { appId: fromFile.appId, appSecret: fromFile.appSecret, name: fromFile.name, key };
+    return {
+      appId: fromFile.appId,
+      appSecret: fromFile.appSecret,
+      name: fromFile.name,
+      key,
+    };
   }
   if (fromEnv.appId && fromFile?.appSecret) {
     return {
@@ -429,12 +451,17 @@ function redirectUriFromRequest(req, requestUrl) {
 }
 
 async function exchangeCode(code, metaAppKey, appIdHint = "", redirectOverride = "") {
-  const { appId, appSecret } = appCreds(metaAppKey, appIdHint);
+  const creds = appCreds(metaAppKey, appIdHint);
+  const { appId, appSecret } = creds;
   if (!appId || !appSecret) {
     throw new Error(
-      `Relay thiếu secret cho app ${metaAppKey}` +
-        (appIdHint ? ` (Meta ID ${appIdHint})` : "") +
-        " — khách cần đẩy App ID+Secret lên server trước."
+      creds.missing_secret_for_id
+        ? `Relay chưa có App Secret cho Meta App ID ${appIdHint || appId}. ` +
+            `Tên «App 1/App 2» trên máy chỉ là nhãn local — secret lưu theo App ID. ` +
+            `Mở Cấu hình lần đầu → nhập đúng App ID + Secret → đẩy lên server, rồi Connect lại.`
+        : `Relay thiếu secret cho slot ${metaAppKey}` +
+            (appIdHint ? ` (Meta ID ${appIdHint})` : "") +
+            " — đẩy App ID+Secret lên server trước."
     );
   }
   // Exact URI Facebook redirected to (or env fallback). Never invent a second URI.
