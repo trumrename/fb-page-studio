@@ -241,6 +241,21 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
     throw e;
   }
 
+  const remoteTotal = Array.isArray(pages) ? pages.length : 0;
+  const skippedNoToken = [];
+  const withToken = [];
+  for (const p of pages || []) {
+    if (!p?.id) continue;
+    if (!p.access_token) {
+      skippedNoToken.push({
+        page_id: String(p.id),
+        name: p.name || String(p.id),
+      });
+      continue;
+    }
+    withToken.push(p);
+  }
+
   const upsert = db.prepare(`
     INSERT INTO fb_pages (
       account_id, page_id, name, category, tasks_json, page_token_enc,
@@ -330,19 +345,57 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
     ).run(activeForAccount, accountId);
   });
 
-  tx(pages);
+  tx(withToken);
 
   const result = db
     .prepare(
       `SELECT * FROM fb_pages WHERE account_id = ? AND status = 'active' ORDER BY name COLLATE NOCASE`
     )
     .all(accountId);
+
+  // Ghi chú lỗi dễ hiểu khi 0 page (không nuốt im lặng)
+  let hint = null;
+  if (result.length === 0) {
+    if (remoteTotal === 0) {
+      hint =
+        "Graph /me/accounts trả 0 Page. Thường do: (1) App đang Development — nick Connect phải là Admin/Developer/Tester của App; " +
+        "(2) Thiếu quyền business_management (Page Business Suite / New Pages Experience); " +
+        "(3) Scope pages_show_list chưa được cấp / App chưa Live + Advanced Access. " +
+        "Cách: Meta Developers → App → Roles thêm user; App Review Advanced Access cho pages_* + business_management; " +
+        "Connect lại (rerequest) và chọn đủ Page.";
+    } else if (skippedNoToken.length > 0 && skippedNoToken.length === remoteTotal) {
+      hint =
+        `Graph thấy ${remoteTotal} Page nhưng không có page access_token (bị bỏ). ` +
+        `Cần role Admin/Editor với CREATE_CONTENT + scope pages_manage_posts. ` +
+        `Page mẫu: ${skippedNoToken
+          .slice(0, 3)
+          .map((p) => p.name)
+          .join(", ")}.`;
+    } else if (skippedByLicense.length > 0) {
+      hint = `License chặn ${skippedByLicense.length} Page mới — nâng license hoặc xóa Page cũ.`;
+    } else {
+      hint = "Không lưu được Page — kiểm tra token / quyền / license.";
+    }
+    db.prepare(
+      `UPDATE fb_accounts SET last_error = ?, updated_at = datetime('now') WHERE id = ?`
+    ).run(hint.slice(0, 500), accountId);
+    console.warn(`[syncPages] account=${accountId} 0 pages · remote=${remoteTotal} no_token=${skippedNoToken.length} license=${skippedByLicense.length}`);
+  } else {
+    db.prepare(
+      `UPDATE fb_accounts SET last_error = NULL, updated_at = datetime('now') WHERE id = ?`
+    ).run(accountId);
+  }
+
   result.sync_summary = {
-    remote_pages: pages.length,
+    remote_pages: remoteTotal,
+    remote_with_token: withToken.length,
     active_pages: result.length,
     added_pages: acceptedNew,
     skipped_license: skippedByLicense.length,
     skipped_pages: skippedByLicense,
+    skipped_no_token: skippedNoToken.length,
+    skipped_no_token_pages: skippedNoToken.slice(0, 20),
+    hint,
   };
   return result;
 }

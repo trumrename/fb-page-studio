@@ -80,8 +80,10 @@ export const config = {
       `http://localhost:${process.env.PORT || 3847}/auth/facebook/callback`
     ),
     graphVersion: process.env.FB_GRAPH_VERSION || "v21.0",
+    // business_management: cần cho Page gắn Business Suite / New Pages Experience
+    // — thiếu scope này /me/accounts thường trả data:[] dù user đã chọn page khi login.
     scopes: (process.env.FB_SCOPES ||
-      "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,read_insights,public_profile")
+      "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,business_management,read_insights,public_profile")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),

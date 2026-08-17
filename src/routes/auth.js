@@ -344,20 +344,34 @@ router.get("/facebook/relay-complete", async (req, res) => {
 });
 
 function sendConnectedPage(res, result, app) {
+  const sum = result.sync_summary || {};
+  const pageN = result.pages?.length || 0;
   const q = new URLSearchParams({
     connected: "1",
     account: String(result.account.id),
-    pages: String(result.pages.length),
-    skipped: String(result.sync_summary?.skipped_license || 0),
+    pages: String(pageN),
+    skipped: String(sum.skipped_license || 0),
+    remote: String(sum.remote_pages ?? ""),
     app: app.key || "app1",
   });
   const localUi = `http://127.0.0.1:${config.port}/index.html?${q}`;
+  const zeroWarn =
+    pageN === 0
+      ? `<p style="color:#fbbf24;margin-top:.75rem;padding:.65rem;border:1px solid rgba(251,191,36,.35);border-radius:10px;background:rgba(251,191,36,.08)">
+        <b>0 Page trong tool</b> (Graph remote: ${sum.remote_pages ?? "?"},
+        có token: ${sum.remote_with_token ?? "?"},
+        bỏ thiếu token: ${sum.skipped_no_token || 0},
+        license: ${sum.skipped_license || 0}).
+        ${sum.hint ? `<br/><span style="font-size:.88rem">${escapeHtml(sum.hint)}</span>` : ""}
+        <br/><span style="font-size:.85rem">Connect lại với quyền đủ (pages_show_list + business_management) · App Live · nick là Admin App/Page.</span>
+      </p>`
+      : "";
   res.type("html").send(`<!DOCTYPE html>
 <html lang="vi"><head>
 <meta charset="utf-8"/><title>Đã kết nối</title>
 <style>
 body{font-family:Segoe UI,sans-serif;background:#0f1115;color:#e8eaed;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
-.card{max-width:480px;padding:2rem;border-radius:16px;border:1px solid #2d5c45;background:#14301f}
+.card{max-width:520px;padding:2rem;border-radius:16px;border:1px solid #2d5c45;background:#14301f}
 h1{color:#8fd9a8;font-size:1.25rem;margin:0 0 .75rem}
 p{color:#b8f0d0;line-height:1.5}a{color:#9ec1ff}
 .badge{display:inline-block;padding:.15rem .45rem;border-radius:6px;background:rgba(24,119,242,.25);color:#9ec1ff;font-size:.85rem}
@@ -365,8 +379,10 @@ p{color:#b8f0d0;line-height:1.5}a{color:#9ec1ff}
 <div class="card">
   <h1>✓ Đã kết nối Facebook</h1>
   <p><span class="badge">${escapeHtml(app.name)} · ${escapeHtml(app.key)}</span></p>
-  <p>Account #${result.account.id} · <b>${result.pages.length}</b> Page đang hoạt động.</p>
-  ${result.sync_summary?.skipped_license ? `<p style="color:#f5c96a"><b>${result.sync_summary.skipped_license}</b> Page mới không được thêm do giới hạn license.</p>` : ""}
+  <p>Account #${result.account.id} · <b>${pageN}</b> Page đang hoạt động.</p>
+  ${sum.skipped_license ? `<p style="color:#f5c96a"><b>${sum.skipped_license}</b> Page mới không được thêm do giới hạn license.</p>` : ""}
+  ${sum.skipped_no_token ? `<p style="color:#f5c96a"><b>${sum.skipped_no_token}</b> Page không có access_token (thiếu role/quyền đăng).</p>` : ""}
+  ${zeroWarn}
   <p>Tài khoản đã gắn đúng <b>${escapeHtml(app.name)}</b>.</p>
   <p><a class="btn" href="${localUi}" style="display:inline-block;margin:.5rem .5rem 0 0;padding:.65rem 1rem;background:#1877f2;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">← Quay về Pages trong app</a>
   <a class="btn" href="http://127.0.0.1:${config.port}/app.html" style="display:inline-block;margin:.5rem 0 0;padding:.65rem 1rem;background:#2a2f3a;color:#e8eaed;border-radius:8px;text-decoration:none;font-weight:700">Vận hành</a></p>
