@@ -389,9 +389,10 @@ check("Vietnam day key does not depend on Windows timezone", poster.includes('ti
 check("stored UTC last_post_at is parsed as UTC", poster.includes('`${raw.replace(" ", "T")}Z`') && poster.includes("storedUtcMs(cfg.last_post_at)"));
 check("stored UTC follower enrichment timestamp is parsed as UTC", read("src/services/enrich.js").includes('row.enriched_at.replace(" ", "T") + "Z"'));
 check(
-  "Direct preview subtracts posts already made today",
-  rot.includes("remainingToday") &&
-    (rot.includes("posts_today_date === todayVn") || rot.includes("posts_today_date === quotaDay"))
+  "Direct preview accounts for posts already made today",
+  rot.includes("posts_today_date === day") &&
+    rot.includes("countPagePostsOnLocalDay") &&
+    rot.includes("quotaDay")
 );
 check(
   "Direct Local continuous + overdue day shift",
@@ -505,6 +506,9 @@ passRun(2, () => {
 
   // Simulate 2 meta apps by temporarily tagging if only app1
   // Build plan with auto groups
+  const planPageIds = matrix
+    .flatMap((a) => a.pages.slice(0, 2).map((p) => p.page_row_id))
+    .slice(0, 6);
   const planAuto = buildRotationPlan({
     auto_groups_by_meta_app: true,
     groups: [],
@@ -518,9 +522,9 @@ passRun(2, () => {
     same_page_gap_hours_max: 2.5,
     jitter_minutes_min: 1,
     jitter_minutes_max: 10,
-    page_row_ids: matrix
-      .flatMap((a) => a.pages.slice(0, 2).map((p) => p.page_row_id))
-      .slice(0, 6),
+    // selected + empty page_row_ids throws (page-scope fix); use all when DB has no pages
+    page_target_mode: planPageIds.length ? "selected" : "all",
+    page_row_ids: planPageIds,
   });
 
   assert("P2 plan has slots or empty ok", planAuto.slots != null);
@@ -552,6 +556,7 @@ passRun(2, () => {
       ],
       same_page_gap_hours_min: 2,
       same_page_gap_hours_max: 2.2,
+      page_target_mode: ids.length ? "selected" : "all",
       page_row_ids: ids,
     });
 
@@ -602,6 +607,7 @@ passRun(2, () => {
       mode: "windows",
       days_ahead: 1,
       windows: [{ name: "Sang", start: "08:00", end: "11:00", posts: 1 }],
+      page_target_mode: ids.length ? "selected" : "all",
       page_row_ids: ids,
     });
     const firstApp2Index = scheduledPerApp.slots.findIndex((slot) => slot.group_id === "app2");
@@ -652,6 +658,7 @@ passRun(2, () => {
     const plan = buildRotationPlan({
       auto_groups_by_meta_app: false,
       groups: [{ id: "app1", name: "App1", account_ids: [matrix[0].account_id] }],
+      page_target_mode: longPages.length ? "selected" : "all",
       page_row_ids: longPages,
       mode: "fixed_gap",
       posts_per_page_per_day: 1,
@@ -721,12 +728,14 @@ passRun(3, () => {
 
   // Build plan 3 times for stability
   for (let i = 1; i <= 3; i++) {
+    const stableIds = matrix.flatMap((a) => a.pages.slice(0, 1).map((p) => p.page_row_id)).slice(0, 4);
     const p = buildRotationPlan({
       auto_groups_by_meta_app: true,
       days_ahead: 1,
       mode: "windows",
       windows: [{ name: "T", start: "19:00", end: "22:00", posts: 1 }],
-      page_row_ids: matrix.flatMap((a) => a.pages.slice(0, 1).map((p) => p.page_row_id)).slice(0, 4),
+      page_target_mode: stableIds.length ? "selected" : "all",
+      page_row_ids: stableIds,
     });
     assert(`P3 stable plan run ${i}`, Array.isArray(p.slots));
     // all unix in graph window
@@ -754,6 +763,7 @@ passRun(3, () => {
         { id: "app1", name: "App 1", account_ids: [matrix[0].account_id] },
         { id: "app2", name: "App 2", account_ids: [matrix[1].account_id] },
       ],
+      page_target_mode: ids.length ? "selected" : "all",
       page_row_ids: ids,
       mode: "windows",
       windows: [{ name: "T", start: "20:00", end: "22:30", posts: 1 }],

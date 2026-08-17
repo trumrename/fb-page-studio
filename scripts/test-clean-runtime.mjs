@@ -308,8 +308,17 @@ try {
     }),
   });
   const quotaPreview = await quotaPreviewResponse.json();
-  if (!quotaPreviewResponse.ok || quotaPreview.slots?.length !== 1) {
-    throw new Error("Direct preview did not subtract today's used Page quota: " + JSON.stringify(quotaPreview));
+  // Direct Local intentionally ignores daily quota / anti gap (user settings only).
+  // posts_today is noted in plan but does NOT cut slots when ignores_daily_quota is true.
+  if (
+    !quotaPreviewResponse.ok ||
+    quotaPreview.slots?.length !== 3 ||
+    quotaPreview.summary?.ignores_daily_quota !== true
+  ) {
+    throw new Error(
+      "Direct Local should keep full plan despite posts_today (ignores_daily_quota): " +
+        JSON.stringify(quotaPreview)
+    );
   }
 
   const invalidWindowResponse = await fetch(base + "/api/jobs/rotation/plan", {
