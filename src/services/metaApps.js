@@ -18,15 +18,44 @@ import {
   isBrokenOrLegacyRedirect,
 } from "./customerEnv.js";
 
+/** Always request these — old customer .env often omitted business_management. */
+export const REQUIRED_PAGE_SCOPES = [
+  "pages_show_list",
+  "pages_manage_posts",
+  "pages_read_engagement",
+  "pages_manage_engagement",
+  "business_management",
+  "public_profile",
+];
+
+/**
+ * Merge user/env scopes with required Page publish scopes.
+ * Prevents FB_SCOPES without business_management → token missing → 0 partner pages.
+ */
+export function ensureRequiredScopes(list) {
+  const out = [];
+  const seen = new Set();
+  for (const s of [...(list || []), ...REQUIRED_PAGE_SCOPES]) {
+    const t = String(s || "").trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
 function scopesFromEnv(envKey, fallback) {
   const raw = process.env[envKey];
+  let list;
   if (raw) {
-    return raw
+    list = raw
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+  } else {
+    list = fallback || config.facebook.scopes;
   }
-  return fallback || config.facebook.scopes;
+  return ensureRequiredScopes(list);
 }
 
 function isLocalRedirectUri(u) {

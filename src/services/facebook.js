@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { config, graphBase } from "../config.js";
+import { ensureRequiredScopes } from "./metaApps.js";
 import {
   noteGraphResponse,
   isGraphRateLimitError,
@@ -73,7 +74,9 @@ export function buildLoginUrl(state, opts = {}) {
   const app = opts.app || config.facebook;
   const appId = app.appId || app.client_id;
   const redirectUri = app.redirectUri || app.redirect_uri;
-  const scopes = app.scopes || config.facebook.scopes;
+  const scopes = ensureRequiredScopes(
+    app.scopes || config.facebook.scopes || []
+  );
   const configId = String(
     app.configId ||
       app.config_id ||
@@ -90,14 +93,11 @@ export function buildLoginUrl(state, opts = {}) {
     display: "page",
   });
   // Login for Business: config_id drives permissions/assets from Meta dashboard.
-  // Still send scope as fallback for classic Facebook Login (no config).
+  // Always also send full scope list (config alone can omit business_management).
   if (configId) {
     params.set("config_id", configId);
   }
-  params.set(
-    "scope",
-    Array.isArray(scopes) ? scopes.join(",") : String(scopes || "")
-  );
+  params.set("scope", scopes.join(","));
   // Only when user explicitly re-grants missing permissions
   if (opts.rerequest) {
     params.set("auth_type", "rerequest");

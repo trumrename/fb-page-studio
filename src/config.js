@@ -11,6 +11,7 @@ import {
 import {
   ensureCustomerEnvFile,
   healLocalhostRedirectEnv,
+  healFbScopesEnv,
 } from "./services/customerEnv.js";
 
 // Setup / portable first run: seed .env from bundled HTTPS-relay template.
@@ -18,6 +19,7 @@ import {
 try {
   ensureCustomerEnvFile();
   healLocalhostRedirectEnv();
+  healFbScopesEnv();
 } catch (e) {
   console.warn("[config] ensureCustomerEnv:", e.message);
 }
@@ -28,6 +30,7 @@ dotenv.config({ path: getEnvPath() });
 // Second pass: file may still have had legacy if heal skipped; re-heal after load
 try {
   healLocalhostRedirectEnv();
+  healFbScopesEnv();
 } catch (e) {
   console.warn("[config] heal after dotenv:", e.message);
 }

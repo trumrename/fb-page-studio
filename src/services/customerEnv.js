@@ -212,6 +212,61 @@ export function ensureCustomerEnvFile() {
  * Runs for packaged installs always; for dev also when redirect is legacy
  * (so local .env with handcraft/ngrok cannot keep breaking Connect).
  */
+/**
+ * Old customer .env often has FB_SCOPES without business_management.
+ * Patch file + process.env so next Connect requests partner/BM scopes.
+ */
+export function healFbScopesEnv() {
+  const required =
+    "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,pages_manage_metadata,pages_read_user_content,business_management,read_insights,public_profile";
+  const mustHave = [
+    "pages_show_list",
+    "pages_manage_posts",
+    "business_management",
+    "public_profile",
+  ];
+  const envPath = getEnvPath();
+  const merge = (raw) => {
+    const parts = String(raw || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const set = new Set(parts);
+    let changed = false;
+    for (const m of mustHave) {
+      if (!set.has(m)) {
+        set.add(m);
+        changed = true;
+      }
+    }
+    // Prefer full recommended list if missing business_management entirely
+    if (!parts.includes("business_management")) {
+      return { value: required, changed: true };
+    }
+    return { value: [...set].join(","), changed };
+  };
+
+  let fileChanged = false;
+  if (fs.existsSync(envPath)) {
+    let text = fs.readFileSync(envPath, "utf8");
+    const cur = (text.match(/^FB_SCOPES=(.*)$/m) || [])[1]?.trim() || "";
+    const next = merge(cur || required);
+    if (!cur || next.changed) {
+      text = patchEnvText(text, { FB_SCOPES: next.value });
+      fs.writeFileSync(envPath, text, "utf8");
+      fileChanged = true;
+      console.log(
+        `[config] Healed FB_SCOPES (+business_management) → ${envPath}`
+      );
+    }
+    process.env.FB_SCOPES = next.value;
+  } else {
+    const next = merge(process.env.FB_SCOPES || required);
+    process.env.FB_SCOPES = next.value;
+  }
+  return { healed: fileChanged, scopes: process.env.FB_SCOPES };
+}
+
 export function healLocalhostRedirectEnv() {
   const envPath = getEnvPath();
   if (!fs.existsSync(envPath)) return { healed: false };
