@@ -82,11 +82,16 @@ export const config = {
     graphVersion: process.env.FB_GRAPH_VERSION || "v21.0",
     // business_management: cần cho Page gắn Business Suite / New Pages Experience
     // — thiếu scope này /me/accounts thường trả data:[] dù user đã chọn page khi login.
+    // Match use case «Manage everything on your Page» (+ optional permissions Meta gợi ý)
     scopes: (process.env.FB_SCOPES ||
-      "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,business_management,read_insights,public_profile")
+      "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,pages_manage_metadata,pages_read_user_content,business_management,read_insights,public_profile")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    /** Facebook Login for Business Configuration ID (optional) */
+    loginConfigId: String(
+      process.env.FB_LOGIN_CONFIG_ID || process.env.FB_CONFIG_ID || ""
+    ).trim(),
   },
 };
 

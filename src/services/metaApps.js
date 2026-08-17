@@ -113,6 +113,13 @@ export function listMetaApps() {
       process.env.FB_REDIRECT_URI || config.facebook.redirectUri
     ),
     scopes: scopesFromEnv("FB_SCOPES", scopes),
+    // Facebook Login for Business (use case Manage everything on your Page)
+    configId: String(
+      process.env.FB_LOGIN_CONFIG_ID ||
+        process.env.FB_CONFIG_ID ||
+        process.env.FB_LOGIN_CONFIG_ID_1 ||
+        ""
+    ).trim(),
   });
 
   // App 2 … App 20 via FB_APP_ID_N / FB_APP_SECRET_N / FB_APP_NAME_N / FB_REDIRECT_URI_N
@@ -131,6 +138,11 @@ export function listMetaApps() {
           config.facebook.redirectUri
       ),
       scopes: scopesFromEnv(`FB_SCOPES_${n}`, scopes),
+      configId: String(
+        process.env[`FB_LOGIN_CONFIG_ID_${n}`] ||
+          process.env[`FB_CONFIG_ID_${n}`] ||
+          ""
+      ).trim(),
     });
   }
 

@@ -9,6 +9,7 @@ import {
   getAccountPublic,
   getUserToken,
   getPagePublic,
+  diagnoseAccountPages,
 } from "../services/accounts.js";
 import {
   enrichPageById,
@@ -1431,6 +1432,18 @@ router.get("/accounts/:id", (req, res) => {
   const acc = getAccountPublic(Number(req.params.id));
   if (!acc) return res.status(404).json({ error: "Account not found" });
   res.json({ account: acc });
+});
+
+/** GET /api/accounts/:id/diagnose — why 0 pages / missing scopes */
+router.get("/accounts/:id/diagnose", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!getAccountPublic(id)) return res.status(404).json({ error: "Account not found" });
+    const report = await diagnoseAccountPages(id);
+    res.json({ ok: true, diagnose: report });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 /** POST /api/accounts/:id/sync — re-fetch pages via Graph /me/accounts */

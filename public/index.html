@@ -236,6 +236,7 @@
             <div class="toolbar">
               <input type="search" id="search" placeholder="Tìm tên page / page id…" />
               <button class="btn-ghost btn-sm" id="btnSync" type="button" disabled>Sync list</button>
+              <button class="btn-ghost btn-sm" id="btnDiagnose" type="button" disabled title="Kiểm tra quyền token / vì sao 0 Page">Chẩn đoán 0 Page</button>
               <button class="btn-ok btn-sm" id="btnEnrich" type="button" disabled>Sync details</button>
               <button class="btn-ghost btn-sm" id="btnEnrichForce" type="button" disabled>Force</button>
               <button class="btn-danger btn-sm" id="btnDelete" type="button" disabled>Xóa</button>
@@ -885,7 +886,7 @@
         node.addEventListener("click", (e) => {
           if (e.target.closest(".acc-check-wrap") || e.target.closest(".acc-check")) return;
           selectedAccountId = Number(node.dataset.id);
-          ["btnSync", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
+          ["btnSync", "btnDiagnose", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
             $(id).disabled = false;
           });
           loadAccounts();
@@ -927,7 +928,7 @@
         });
         if (selectedAccountId && ids.includes(selectedAccountId)) {
           selectedAccountId = null;
-          ["btnSync", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
+          ["btnSync", "btnDiagnose", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
             $(id).disabled = true;
           });
         }
@@ -1054,6 +1055,7 @@
         const withFl = (r.pages || []).filter((p) => p.followers_count != null).length;
         const withPic = (r.pages || []).filter((p) => p.picture_url).length;
         const g = s.graph || {};
+        const d = s.diagnose || {};
         alert(
           `Đã đồng bộ: ${r.page_count} Page đang hoạt động` +
             (s.added_pages ? `\nThêm mới: ${s.added_pages}` : "") +
@@ -1062,7 +1064,7 @@
               ? `\nThấy page nhưng thiếu token (không lưu): ${s.skipped_no_token}`
               : "") +
             (s.remote_pages != null
-              ? `\nGraph remote: ${s.remote_pages} (me/accounts: ${g.me_accounts ?? "?"} · BM client: ${g.bm_client ?? "?"} · assigned: ${g.bm_assigned ?? "?"})`
+              ? `\nGraph remote: ${s.remote_pages} (me/accounts: ${g.me_accounts ?? "?"} · BM client: ${g.bm_client ?? "?"} · assigned: ${g.bm_assigned ?? "?"} · login-chọn: ${d.page_target_ids_count ?? g.granular_page_ids ?? "?"})`
               : "") +
             `\nĐã có follow: ${withFl}/${r.page_count} · avatar: ${withPic}/${r.page_count}` +
             (pe.total
@@ -1078,6 +1080,31 @@
         $("btnSync").disabled = !selectedAccountId;
       }
     };
+
+    async function runDiagnose(accountId) {
+      const id = Number(accountId || selectedAccountId);
+      if (!id) return;
+      try {
+        const r = await api(`/api/accounts/${id}/diagnose`);
+        const d = r.diagnose || {};
+        const lines = (d.checklist_vi || []).map((c) => `${c.ok ? "✓" : "✗"} ${c.text}`);
+        alert(
+          `Chẩn đoán Account #${id} — ${d.name || ""}\n` +
+            `pages_show_list: ${d.has_pages_show_list ? "OK" : "THIẾU"} · ` +
+            `business_management: ${d.has_business_management ? "OK" : "THIẾU"}\n` +
+            `me/accounts: ${d.accounts_total ?? "?"} · login chọn page: ${d.page_target_ids_count ?? 0} · BM: ${d.businesses_count ?? "?"}\n\n` +
+            lines.join("\n") +
+            (d.permissions_declined?.length
+              ? `\n\nBị từ chối: ${d.permissions_declined.join(", ")}`
+              : "") +
+            (d.accounts_error ? `\nme/accounts lỗi: ${d.accounts_error}` : "") +
+            (d.debug_error ? `\ndebug: ${d.debug_error}` : "")
+        );
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+    $("btnDiagnose").onclick = () => runDiagnose();
 
     async function runEnrich(force) {
       if (!selectedAccountId) return;
@@ -1167,7 +1194,7 @@
       if (!confirm("Xóa account + page tokens?")) return;
       await api(`/api/accounts/${selectedAccountId}`, { method: "DELETE" });
       selectedAccountId = null;
-      ["btnSync", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
+      ["btnSync", "btnDiagnose", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
         $(id).disabled = true;
       });
       await refreshAll();
@@ -1205,9 +1232,20 @@
     }
 
     showFlash();
-    refreshAll().catch((e) => {
-      $("flash").innerHTML = `<div class="flash-block err">${escapeHtml(e.message)}</div>`;
-    });
+    refreshAll()
+      .then(async () => {
+        const diagId = Number(new URLSearchParams(location.search).get("diagnose") || 0);
+        if (diagId > 0) {
+          selectedAccountId = diagId;
+          ["btnSync", "btnDiagnose", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
+            if ($(id)) $(id).disabled = false;
+          });
+          await runDiagnose(diagId);
+        }
+      })
+      .catch((e) => {
+        $("flash").innerHTML = `<div class="flash-block err">${escapeHtml(e.message)}</div>`;
+      });
 
   </script>
 </body>

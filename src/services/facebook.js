@@ -64,23 +64,40 @@ export function resolveAppSecret(explicit, metaAppKey = "") {
  * Official Facebook Login dialog URL.
  * - Do NOT force auth_type=rerequest on first login (breaks 2FA / "could not validate").
  * - Use display=page so full 2FA works in system browser.
+ * - Optional config_id = Facebook Login for Business configuration
+ *   (use case «Manage everything on your Page» → Configurations → copy Config ID).
  * @param {string} state
- * @param {{ rerequest?: boolean, app?: { appId, redirectUri, scopes } }} [opts]
+ * @param {{ rerequest?: boolean, app?: { appId, redirectUri, scopes, configId } }} [opts]
  */
 export function buildLoginUrl(state, opts = {}) {
   const app = opts.app || config.facebook;
   const appId = app.appId || app.client_id;
   const redirectUri = app.redirectUri || app.redirect_uri;
   const scopes = app.scopes || config.facebook.scopes;
+  const configId = String(
+    app.configId ||
+      app.config_id ||
+      process.env.FB_LOGIN_CONFIG_ID ||
+      process.env.FB_CONFIG_ID ||
+      ""
+  ).trim();
   const params = new URLSearchParams({
     client_id: appId,
     redirect_uri: redirectUri,
     state,
-    scope: Array.isArray(scopes) ? scopes.join(",") : String(scopes || ""),
     response_type: "code",
     // Full page in real browser — supports password + 2FA + device check
     display: "page",
   });
+  // Login for Business: config_id drives permissions/assets from Meta dashboard.
+  // Still send scope as fallback for classic Facebook Login (no config).
+  if (configId) {
+    params.set("config_id", configId);
+  }
+  params.set(
+    "scope",
+    Array.isArray(scopes) ? scopes.join(",") : String(scopes || "")
+  );
   // Only when user explicitly re-grants missing permissions
   if (opts.rerequest) {
     params.set("auth_type", "rerequest");
@@ -409,7 +426,37 @@ export async function getAllPages(userToken, opts = {}) {
     meta.bm_errors.push(e.message || String(e));
   }
 
-  // --- 4) Fill missing page access_tokens (partner pages often list without token) ---
+  // --- 4) Pages user selected in Login dialog (granular_scopes target_ids)
+  // Meta often lists selected Page IDs here even when /me/accounts returns [].
+  try {
+    const diag = await diagnoseUserPageAccess(userToken, {
+      appSecret,
+      metaAppKey,
+      appId: opts.appId,
+    });
+    meta.diagnose = diag;
+    const targetIds = diag.page_target_ids || [];
+    meta.granular_page_ids = targetIds.length;
+    for (const pid of targetIds) {
+      if (byId.has(String(pid))) continue;
+      const resolved = await tryResolvePageToken(pid, userToken, graphOpts);
+      if (resolved?.access_token) {
+        mergePageIntoMap(byId, resolved, "granular_scope");
+        meta.token_resolved++;
+      } else if (resolved?.id) {
+        // listed but no token — still track for “skipped no token”
+        mergePageIntoMap(byId, resolved, "granular_scope_no_token");
+        meta.token_resolve_fail++;
+      } else {
+        meta.token_resolve_fail++;
+      }
+      await sleep(45);
+    }
+  } catch (e) {
+    meta.bm_errors.push(`granular: ${e.message || e}`);
+  }
+
+  // --- 5) Fill missing page access_tokens (partner pages often list without token) ---
   for (const [id, p] of byId) {
     if (p.access_token) continue;
     const resolved = await tryResolvePageToken(id, userToken, graphOpts);
@@ -429,6 +476,128 @@ export async function getAllPages(userToken, opts = {}) {
   // Diagnostics for syncPagesForAccount (array property — callers ignore it)
   pages.__syncMeta = meta;
   return pages;
+}
+
+/**
+ * Inspect token scopes + page target IDs from Login granular permissions.
+ * Explains "selected pages in dialog but tool shows 0".
+ */
+export async function diagnoseUserPageAccess(userToken, opts = {}) {
+  const graphOpts = {
+    appSecret: opts.appSecret,
+    metaAppKey: opts.metaAppKey,
+  };
+  const out = {
+    me_ok: false,
+    me_id: null,
+    me_name: null,
+    me_error: null,
+    permissions_granted: [],
+    permissions_declined: [],
+    has_pages_show_list: false,
+    has_pages_manage_posts: false,
+    has_business_management: false,
+    page_target_ids: [],
+    debug_ok: false,
+    debug_error: null,
+    token_valid: null,
+    app_id_on_token: null,
+    accounts_total: null,
+    accounts_error: null,
+    businesses_count: null,
+    businesses_error: null,
+  };
+
+  const me = await graphGetSoft("/me", userToken, { fields: "id,name" }, graphOpts);
+  if (me.ok) {
+    out.me_ok = true;
+    out.me_id = me.data?.id || null;
+    out.me_name = me.data?.name || null;
+  } else {
+    out.me_error = me.error || "me failed";
+  }
+
+  const perms = await graphGetSoft("/me/permissions", userToken, {}, graphOpts);
+  if (perms.ok) {
+    for (const p of perms.data?.data || []) {
+      const name = String(p.permission || "");
+      if (p.status === "granted") out.permissions_granted.push(name);
+      else if (p.status === "declined") out.permissions_declined.push(name);
+    }
+  }
+  out.has_pages_show_list = out.permissions_granted.includes("pages_show_list");
+  out.has_pages_manage_posts = out.permissions_granted.includes("pages_manage_posts");
+  out.has_business_management = out.permissions_granted.includes("business_management");
+
+  const appId =
+    String(opts.appId || "").trim() ||
+    String(config.facebook?.appId || process.env.FB_APP_ID || "").trim();
+  const secret = resolveAppSecret(opts.appSecret, opts.metaAppKey);
+  if (appId && secret) {
+    const dbg = await graphGetSoft(
+      "/debug_token",
+      `${appId}|${secret}`,
+      { input_token: userToken },
+      { skipAppsecretProof: true }
+    );
+    if (dbg.ok && dbg.data?.data) {
+      out.debug_ok = true;
+      const d = dbg.data.data;
+      out.token_valid = d.is_valid !== false && !d.error;
+      out.app_id_on_token = d.app_id || null;
+      if (d.error?.message) out.debug_error = d.error.message;
+      const ids = new Set();
+      for (const g of d.granular_scopes || []) {
+        for (const tid of g.target_ids || []) {
+          if (tid) ids.add(String(tid));
+        }
+      }
+      out.page_target_ids = [...ids];
+      // scopes from debug if permissions edge empty
+      if (!out.permissions_granted.length && Array.isArray(d.scopes)) {
+        out.permissions_granted = d.scopes.map(String);
+        out.has_pages_show_list = out.permissions_granted.includes("pages_show_list");
+        out.has_pages_manage_posts = out.permissions_granted.includes(
+          "pages_manage_posts"
+        );
+        out.has_business_management = out.permissions_granted.includes(
+          "business_management"
+        );
+      }
+    } else {
+      out.debug_error = dbg.error || "debug_token failed";
+    }
+  } else {
+    out.debug_error = "Thiếu App Secret trên máy — không đọc được granular page IDs";
+  }
+
+  const accSum = await graphGetSoft(
+    "/me/accounts",
+    userToken,
+    { fields: "id", limit: 1, summary: "total_count" },
+    graphOpts
+  );
+  if (accSum.ok) {
+    out.accounts_total =
+      accSum.data?.summary?.total_count ??
+      (Array.isArray(accSum.data?.data) ? accSum.data.data.length : 0);
+  } else {
+    out.accounts_error = accSum.error || null;
+  }
+
+  const biz = await graphGetSoft(
+    "/me/businesses",
+    userToken,
+    { fields: "id", limit: 50 },
+    graphOpts
+  );
+  if (biz.ok) {
+    out.businesses_count = (biz.data?.data || []).length;
+  } else {
+    out.businesses_error = biz.error || null;
+  }
+
+  return out;
 }
 
 /** Debug token (optional health check) */

@@ -6,6 +6,7 @@ import {
   exchangeLongLivedUserToken,
   getMe,
   getAllPages,
+  diagnoseUserPageAccess,
 } from "./facebook.js";
 import { checkQuota } from "./license.js";
 
@@ -233,7 +234,11 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
 
   let pages;
   try {
-    pages = await getAllPages(userToken, { appSecret, metaAppKey: metaKey });
+    pages = await getAllPages(userToken, {
+      appSecret,
+      metaAppKey: metaKey,
+      appId: row.meta_app_id || process.env.FB_APP_ID || config.facebook?.appId,
+    });
   } catch (e) {
     db.prepare(
       `UPDATE fb_accounts SET status = 'error', last_error = ?, updated_at = datetime('now') WHERE id = ?`
@@ -242,6 +247,7 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
   }
 
   const graphMeta = pages?.__syncMeta || null;
+  const diag = graphMeta?.diagnose || null;
   const remoteTotal = Array.isArray(pages) ? pages.length : 0;
   const skippedNoToken = [];
   const withToken = [];
@@ -366,12 +372,44 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
 
   if (result.length === 0) {
     if (remoteTotal === 0) {
-      hint =
-        "Graph không trả Page nào (me/accounts + BM owned/client/assigned). " +
-        "Kiểm tra: (1) App Development — nick Connect phải là Admin/Developer/Tester App; " +
-        "(2) Scope business_management + pages_show_list (Advanced Access, App Live); " +
-        "(3) Share đối tác Full chỉ chia BM — vẫn phải gán Page cho nick (CREATE_CONTENT) trong Business Settings; " +
-        "(4) Connect lại (rerequest) và chọn đủ Page/Business.";
+      const declined = (diag?.permissions_declined || []).join(", ");
+      const granted = (diag?.permissions_granted || []).slice(0, 12).join(", ");
+      const granularN = Number(diag?.page_target_ids?.length || graphMeta?.granular_page_ids || 0);
+      const parts = [];
+      parts.push(
+        "Graph không trả Page nào (me/accounts + BM + page đã chọn lúc login)."
+      );
+      if (diag && !diag.me_ok) {
+        parts.push(
+          `Token lỗi: ${diag.me_error || "không gọi được /me"} — Connect lại (đổi pass / session Meta).`
+        );
+      } else if (diag && !diag.has_pages_show_list) {
+        parts.push(
+          "Thiếu quyền pages_show_list trên token (bị từ chối hoặc chưa xin). Connect lại → rerequest → bật đủ quyền."
+        );
+      } else if (diag && !diag.has_business_management) {
+        parts.push(
+          "Thiếu business_management — Page gắn Business Suite / đối tác thường ẩn hết. Meta Developers → App Review Advanced Access → Connect rerequest."
+        );
+      } else if (granularN > 0) {
+        parts.push(
+          `Login đã chọn ${granularN} Page (granular) nhưng Graph không cấp page access_token. ` +
+            "Thường do: (A) App đang Development — nick Connect phải là Admin/Developer/Tester của Meta App; " +
+            "(B) pages_* / business_management chỉ Standard Access khi App Live; " +
+            "(C) Nick chỉ có quyền BM/partner, chưa có task CREATE_CONTENT trên Page."
+        );
+      } else {
+        parts.push(
+          "Không thấy Page nào trong token. Kiểm tra: (1) Meta App Development → thêm nick vào Roles (Admin/Developer/Tester) hoặc bật App Live + Advanced Access; " +
+            "(2) Share đối tác Full ≠ quyền đăng API — gán Page CREATE_CONTENT cho nick; " +
+            "(3) Connect lại, bấm Edit access, chọn đủ Page, không bỏ quyền."
+        );
+      }
+      if (declined) parts.push(`Quyền bị từ chối: ${declined}.`);
+      if (granted) parts.push(`Đã cấp: ${granted}.`);
+      if (diag?.accounts_error) parts.push(`me/accounts: ${diag.accounts_error}`);
+      if (diag?.businesses_error) parts.push(`me/businesses: ${diag.businesses_error}`);
+      hint = parts.join(" ");
     } else if (skippedNoToken.length > 0 && skippedNoToken.length === remoteTotal) {
       const sample = skippedNoToken
         .slice(0, 3)
@@ -425,14 +463,115 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
           bm_owned: bmOwned,
           bm_client: bmClient,
           bm_assigned: bmAssigned,
+          granular_page_ids: graphMeta.granular_page_ids || 0,
           token_resolved: graphMeta.token_resolved || 0,
           token_resolve_fail: graphMeta.token_resolve_fail || 0,
           bm_errors: (graphMeta.bm_errors || []).slice(0, 8),
         }
       : null,
+    diagnose: diag
+      ? {
+          me_ok: diag.me_ok,
+          me_name: diag.me_name,
+          has_pages_show_list: diag.has_pages_show_list,
+          has_pages_manage_posts: diag.has_pages_manage_posts,
+          has_business_management: diag.has_business_management,
+          permissions_granted: diag.permissions_granted,
+          permissions_declined: diag.permissions_declined,
+          page_target_ids_count: (diag.page_target_ids || []).length,
+          accounts_total: diag.accounts_total,
+          businesses_count: diag.businesses_count,
+          token_valid: diag.token_valid,
+          debug_error: diag.debug_error,
+        }
+      : null,
     hint,
   };
   return result;
+}
+
+/**
+ * Deep diagnose why Connect shows 0 pages (permissions / App mode / partner).
+ */
+export async function diagnoseAccountPages(accountId) {
+  const db = getDb();
+  const row = db.prepare(`SELECT * FROM fb_accounts WHERE id = ?`).get(accountId);
+  if (!row) throw new Error("Account not found");
+  const userToken = decryptToken(row.user_token_enc);
+  const metaKey = String(row.meta_app_key || "app1");
+  const appSecret =
+    metaKey === "app2"
+      ? String(process.env.FB_APP_SECRET_2 || process.env.FB_APP_SECRET || "").trim()
+      : String(process.env.FB_APP_SECRET || config.facebook?.appSecret || "").trim();
+  const diag = await diagnoseUserPageAccess(userToken, {
+    appSecret,
+    metaAppKey: metaKey,
+    appId: row.meta_app_id || process.env.FB_APP_ID || config.facebook?.appId,
+  });
+  return {
+    account_id: accountId,
+    name: row.name,
+    meta_app_key: metaKey,
+    ...diag,
+    checklist_vi: buildZeroPageChecklist(diag),
+  };
+}
+
+function buildZeroPageChecklist(diag) {
+  const items = [];
+  items.push({
+    ok: !!diag?.me_ok,
+    text: diag?.me_ok
+      ? `Token /me OK — ${diag.me_name || diag.me_id}`
+      : `Token hỏng: ${diag?.me_error || "Connect lại"}`,
+  });
+  items.push({
+    ok: !!diag?.has_pages_show_list,
+    text: diag?.has_pages_show_list
+      ? "Có pages_show_list"
+      : "THIẾU pages_show_list — Connect rerequest, đừng bỏ quyền",
+  });
+  items.push({
+    ok: !!diag?.has_business_management,
+    text: diag?.has_business_management
+      ? "Có business_management"
+      : "THIẾU business_management — Page BM/đối tác sẽ 0 (cần Advanced Access)",
+  });
+  items.push({
+    ok: !!diag?.has_pages_manage_posts,
+    text: diag?.has_pages_manage_posts
+      ? "Có pages_manage_posts (đăng bài)"
+      : "THIẾU pages_manage_posts",
+  });
+  const n = diag?.page_target_ids?.length || 0;
+  items.push({
+    ok: n > 0,
+    text:
+      n > 0
+        ? `Login đã chọn ~${n} Page (granular target_ids)`
+        : "Token không có Page ID đã chọn — lúc login phải Edit → chọn Page, không «Only as myself»",
+  });
+  items.push({
+    ok: (diag?.accounts_total || 0) > 0,
+    text:
+      (diag?.accounts_total || 0) > 0
+        ? `me/accounts total=${diag.accounts_total}`
+        : "me/accounts = 0 — App Development (thêm nick Roles) HOẶC chưa Advanced Access HOẶC nick không có task Page",
+  });
+  items.push({
+    ok: (diag?.businesses_count || 0) > 0,
+    text:
+      (diag?.businesses_count || 0) > 0
+        ? `Nick thấy ${diag.businesses_count} Business`
+        : "Không thấy Business — share partner chưa vào nick này / thiếu business_management",
+  });
+  items.push({
+    ok: false,
+    text:
+      "Lưu ý: tick Page lúc login ≠ đủ. Nick phải có CREATE_CONTENT trên Page (Page access Editor) " +
+      "và Meta App Live + Advanced Access (hoặc nick là Tester/Admin App).",
+  });
+  return items;
 }
 
 export function listAccounts() {

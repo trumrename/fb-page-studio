@@ -42,6 +42,7 @@ function createOAuthSession(metaAppKey = "app1", rerequest = false) {
       appId: app.appId,
       redirectUri,
       scopes: app.scopes,
+      configId: app.configId || "",
     },
   });
   return { state, url, app: { ...app, redirectUri } };
@@ -355,16 +356,26 @@ function sendConnectedPage(res, result, app) {
     app: app.key || "app1",
   });
   const localUi = `http://127.0.0.1:${config.port}/index.html?${q}`;
+  const d = sum.diagnose || {};
   const zeroWarn =
     pageN === 0
       ? `<p style="color:#fbbf24;margin-top:.75rem;padding:.65rem;border:1px solid rgba(251,191,36,.35);border-radius:10px;background:rgba(251,191,36,.08)">
         <b>0 Page trong tool</b> (Graph remote: ${sum.remote_pages ?? "?"},
         có token: ${sum.remote_with_token ?? "?"},
-        bỏ thiếu token: ${sum.skipped_no_token || 0},
-        license: ${sum.skipped_license || 0}).
+        page chọn lúc login: ${d.page_target_ids_count ?? sum.graph?.granular_page_ids ?? "?"},
+        BM: ${sum.graph?.bm_businesses ?? "?"}).
         ${sum.hint ? `<br/><span style="font-size:.88rem">${escapeHtml(sum.hint)}</span>` : ""}
-        <br/><span style="font-size:.85rem">Connect lại (pages_show_list + business_management) · App Live · nick Admin App/Page.
-        Share đối tác Full: vẫn phải <b>gán Page cho nick</b> (CREATE_CONTENT) trong Business Settings → People → Assign assets.</span>
+        <br/><span style="font-size:.85rem;line-height:1.45;display:inline-block;margin-top:.4rem">
+        <b>Quan trọng:</b> tick Page khi login <u>không đủ</u> nếu Meta App đang <b>Development</b>
+        (nick phải là Admin/Developer/Tester của App) hoặc quyền pages_* / business_management chưa
+        <b>Advanced Access</b>. Share Full partner + gán nick vẫn cần task <b>CREATE_CONTENT</b> (Editor) trên Page.
+        </span>
+        <br/><a class="btn" href="/auth/facebook?external=1&amp;app=${escapeHtml(app.key || "app1")}&amp;rerequest=1"
+          style="display:inline-block;margin-top:.65rem;padding:.55rem .9rem;background:#f59e0b;color:#111;border-radius:8px;text-decoration:none;font-weight:700">
+          Connect lại + xin lại quyền (rerequest)</a>
+        <a class="btn" href="/index.html?diagnose=${result.account.id}"
+          style="display:inline-block;margin-top:.65rem;margin-left:.4rem;padding:.55rem .9rem;background:#2a2f3a;color:#e8eaed;border-radius:8px;text-decoration:none;font-weight:700">
+          Xem checklist chẩn đoán</a>
       </p>`
       : "";
   res.type("html").send(`<!DOCTYPE html>
