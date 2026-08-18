@@ -607,7 +607,16 @@
       const p = job.progress || {};
       setText("jobTitle", job.title || job.id);
       setText("jobPct", (p.percent || 0) + "%");
-      setText("jobStats", ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}`);
+      const pageN = (job.pages || []).length;
+      const pageExp = job.pages_expected != null ? Number(job.pages_expected) : pageN;
+      const pageLine =
+        pageExp > 0
+          ? ` · Page ${pageN}/${pageExp}${pageN < pageExp ? " ⚠ thiếu page" : ""}`
+          : "";
+      setText(
+        "jobStats",
+        ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}${pageLine}`
+      );
       setText("jobStatus", statusLabel(job.status));
       setClass("jobStatus", "badge " + (job.status === "ok" ? "on" : ["fail", "stopped", "interrupted"].includes(job.status) ? "err" : "live"));
       setStyle("jobBarFill", "width", (p.percent || 0) + "%");

@@ -329,6 +329,8 @@ export function startJob({
   continuous = false,
   continuous_settings = null,
   next_plan_day = null,
+  pages_expected = null,
+  pages_planned = null,
 } = {}) {
   trimJobs();
   const id = nanoid(10);
@@ -349,6 +351,17 @@ export function startJob({
     continuous: !!continuous,
     continuous_settings: continuous_settings || null,
     next_plan_day: next_plan_day || null,
+    /** Số page user tick vs số page thật sự có task (debug thiếu page) */
+    pages_expected:
+      pages_expected != null
+        ? Number(pages_expected)
+        : [...new Set((tasks || []).map((t) => Number(t.page_row_id)).filter((n) => n > 0))]
+            .length,
+    pages_planned:
+      pages_planned != null
+        ? Number(pages_planned)
+        : [...new Set((tasks || []).map((t) => Number(t.page_row_id)).filter((n) => n > 0))]
+            .length,
     day_cycle: 0,
     tasks: (tasks || []).map((t, i) => ({
       id: `${id}-t${i + 1}`,

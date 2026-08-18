@@ -221,7 +221,13 @@ router.post("/rotation/run-now", (req, res) => {
     if (!saved || Date.now() - saved.created_at > RUN_NOW_PLAN_TTL_MS) {
       return res.status(400).json({ ok: false, error: "Kế hoạch đã hết hạn hoặc chưa preview. Hãy bấm Xem lịch chạy ngay lại." });
     }
-    const plan = saved.plan;
+    // Rebuild từ body hiện tại (tick mới nhất) — tránh chạy plan preview cũ thiếu page
+    let plan;
+    try {
+      plan = buildRunNowPlan(body);
+    } catch (e) {
+      return res.status(400).json({ ok: false, error: e.message });
+    }
     if (!plan.summary?.can_run || plan.blockers?.length) {
       return res.status(400).json({
         ok: false,
@@ -240,6 +246,23 @@ router.post("/rotation/run-now", (req, res) => {
               `Thường do: hết quota hôm nay, max bài/ngày = 0, hoặc nhóm rotation trống. ` +
               `Bấm «Xem lịch đăng trực tiếp» lại sau khi tăng max / đợi ngày mới / tick lại Page.`
             : "Không có task để chạy (tổng task 0) dù đã chọn Page. Bấm «Xem lịch» lại — kiểm tra quota max bài/ngày và page đã tick.",
+        plan,
+      });
+    }
+    if (
+      body.page_target_mode !== "all" &&
+      Number(plan.summary?.pages_missing || 0) > 0
+    ) {
+      const names = (plan.summary.pages_missing_list || [])
+        .map((p) => p.page_name)
+        .slice(0, 6)
+        .join(", ");
+      return res.status(400).json({
+        ok: false,
+        error:
+          `Đã tick ${plan.summary.pages_requested} page nhưng lịch chỉ có ${plan.summary.pages_planned} page` +
+          (names ? ` · thiếu: ${names}` : "") +
+          `. Bấm «Xem lịch» lại — không chạy khi còn page bị bỏ.`,
         plan,
       });
     }
@@ -264,10 +287,12 @@ router.post("/rotation/run-now", (req, res) => {
     const job = startJob({
       type: "rotation_run_now",
       title:
-        `Đăng trực tiếp local · ${plan.summary.posts_per_page_per_day} bài/page · ${plan.summary.accounts} admin` +
+        `Đăng trực tiếp local · ${plan.summary.posts_per_page_per_day} bài/page · ${plan.summary.pages_planned || plan.summary.accounts} page · ${plan.summary.accounts} admin` +
         (continuous ? " · CHẠY LIÊN TỤC" : "") +
         (plan.summary?.plan_day ? ` · ngày ${plan.summary.plan_day}` : ""),
       tasks,
+      pages_expected: plan.summary?.pages_requested ?? null,
+      pages_planned: plan.summary?.pages_planned ?? null,
       continuous,
       continuous_settings: continuous
         ? {

@@ -4056,9 +4056,19 @@ Tối | 18:00 | 21:30 | 2</textarea>
       let html = `<b>${isRun ? "Đã tạo job hẹn giờ" : "Preview rotation"}</b><br/>`;
       html += `Admin ${sum.accounts || "?"} · Nhóm ${sum.groups || "?"} · max page/admin ${sum.max_pages || "?"} · `;
       html += `bài/page/ngày ${sum.posts_per_page_per_day || "?"} · slot hợp lệ <b>${sum.total_final ?? (r.slots || []).length}</b>`;
+      if (sum.pages_requested != null) {
+        html += ` · page <b class="${Number(sum.pages_missing) ? "fail" : "ok"}">${sum.pages_planned ?? "?"}/${sum.pages_requested}</b>`;
+      }
       if (sum.anti_spam_trimmed) html += ` · <span class="fail">anti-spam đã cắt bulk</span>`;
       html += `<br/><span class="muted">${esc(sum.order_logic || "")}</span><br/>`;
       html += `<span class="muted">${esc(sum.wait_logic || "")}</span><br/>`;
+      if (Number(sum.pages_missing || 0) > 0) {
+        const missNames = (sum.pages_missing_list || [])
+          .map((p) => p.page_name || `#${p.page_row_id}`)
+          .slice(0, 10)
+          .join(", ");
+        html += `<div class="fail" style="margin:.4rem 0">Thiếu page trong lịch: ${esc(missNames)}. Tăng anti-spam bulk_max_pages hoặc preset Nới lỏng.</div>`;
+      }
       if (r.job?.id) {
         html += `<div class="ok" style="margin:.4rem 0">Job <b>${esc(r.job.id)}</b> · ${esc(r.job.title || "")} · theo dõi progress ở App console</div>`;
       }
@@ -4073,7 +4083,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         html += `</div>`;
       }
       if (r.skipped?.length) {
-        html += `<div class="fail" style="margin-top:.4rem">Skipped: ${r.skipped.length} (vd: ${esc(r.skipped[0]?.reason || "")})</div>`;
+        html += `<div class="fail" style="margin-top:.4rem">Skipped: ${r.skipped.length} (vd: ${esc(r.skipped[0]?.reason || r.skipped[0]?.page_name || "")})</div>`;
       }
       box.innerHTML = html;
     }
@@ -4082,9 +4092,24 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const sum = r.summary || {};
       let html = `<b>${isRun ? "ĐÃ BẮT ĐẦU JOB DIRECT LOCAL" : "LỊCH ĐĂNG TRỰC TIẾP · GIỜ VIỆT NAM"}</b><br/>`;
       html += `Admin ${sum.accounts || 0} · cấu hình <b>${sum.configured_posts_per_page || sum.posts_per_page_per_day || 0}</b> bài/Page/ngày · tổng task <b class="${(sum.total_final || 0) < 1 ? "fail" : "ok"}">${sum.total_final || 0}</b>`;
+      if (sum.pages_requested != null) {
+        const miss = Number(sum.pages_missing || 0);
+        html += ` · page <b class="${miss ? "fail" : "ok"}">${sum.pages_planned ?? "?"}/${sum.pages_requested}</b> trong lịch`;
+      }
       if (sum.plan_day) html += ` · ngày plan <b>${esc(sum.plan_day)}</b>`;
       if (sum.continuous || r.continuous) html += ` · <span class="ok">CHẠY LIÊN TỤC</span>`;
       html += `<br/>`;
+      if (Number(sum.pages_missing || 0) > 0) {
+        const missNames = (sum.pages_missing_list || [])
+          .map((p) => p.page_name || `#${p.page_row_id}`)
+          .slice(0, 10)
+          .join(", ");
+        html += `<div class="fail" style="margin:.4rem 0;padding:.5rem .65rem;border-radius:8px;border:1px solid rgba(255,113,132,.4)">` +
+          `<b>Thiếu ${sum.pages_missing} page đã tick trong lịch:</b> ${esc(missNames)}` +
+          (sum.pages_missing > 10 ? "…" : "") +
+          `<br/>Tiến trình sẽ không hiện các page này nếu vẫn chạy — sửa rồi «Xem lịch» lại.` +
+          `</div>`;
+      }
       if ((sum.total_final || 0) < 1) {
         html += `<div class="fail" style="margin:.4rem 0;padding:.5rem .65rem;border-radius:8px;border:1px solid rgba(255,113,132,.4)">` +
           `<b>Tổng task = 0 → không chạy được.</b> Đã chọn Page chưa đủ để tạo slot (hết quota hôm nay, max bài/ngày, hoặc nhóm rotation). ` +

@@ -778,7 +778,8 @@ export function buildRotationPlan(inputSettings = {}) {
     valid.push(s);
   }
 
-  // Anti-spam bulk caps: group by page then enforce, keep interleave order
+  // Anti-spam bulk caps: group by page then enforce — PHẢI dùng limited.plan
+  // (trước đây trim rồi lại slice `valid` → vẫn mất page im lặng / cap sai)
   const byPage = new Map();
   for (const s of valid) {
     if (!byPage.has(s.page_row_id)) {
@@ -786,19 +787,58 @@ export function buildRotationPlan(inputSettings = {}) {
         page_row_id: s.page_row_id,
         page_name: s.page_name,
         slots: [],
+        _slotsFull: [],
       });
     }
     byPage.get(s.page_row_id).slots.push(s.scheduled_at);
+    byPage.get(s.page_row_id)._slotsFull.push(s);
   }
   const limited = enforceBulkLimits([...byPage.values()], {});
-  const capTotal = limited.caps?.bulk_max_total || 40;
   let finalSlots = valid;
-  if (limited.trimmed || valid.length > capTotal) {
-    finalSlots = valid.slice(0, capTotal);
+  const droppedByCap = [];
+  if (limited.trimmed) {
+    const keepIds = new Set(
+      (limited.plan || [])
+        .filter((p) => (p.slots || []).length > 0)
+        .map((p) => Number(p.page_row_id))
+    );
+    const kept = [];
+    const slotBudget = Number(limited.caps?.bulk_max_total) || valid.length;
+    for (const s of valid) {
+      if (!keepIds.has(Number(s.page_row_id))) {
+        droppedByCap.push({
+          page_row_id: s.page_row_id,
+          page_name: s.page_name,
+          reason: `anti-spam bulk_max_pages=${limited.caps?.bulk_max_pages}`,
+        });
+        continue;
+      }
+      if (kept.length >= slotBudget) {
+        droppedByCap.push({
+          page_row_id: s.page_row_id,
+          page_name: s.page_name,
+          reason: `anti-spam bulk_max_total=${slotBudget}`,
+        });
+        continue;
+      }
+      kept.push(s);
+    }
+    finalSlots = kept;
   }
 
   // Re-number order
   finalSlots = finalSlots.map((s, i) => ({ ...s, order: i + 1 }));
+
+  const uniqueRequested = [...byPage.keys()].map(Number);
+  const uniqueFinal = [
+    ...new Set(finalSlots.map((s) => Number(s.page_row_id))),
+  ];
+  const missingAfterCap = uniqueRequested
+    .filter((id) => !uniqueFinal.includes(id))
+    .map((id) => ({
+      page_row_id: id,
+      page_name: byPage.get(id)?.page_name || `#${id}`,
+    }));
 
   return {
     settings: {
@@ -832,7 +872,11 @@ export function buildRotationPlan(inputSettings = {}) {
       total_planned: slots.length,
       total_valid: valid.length,
       total_final: finalSlots.length,
-      skipped: skipped.length,
+      skipped: skipped.length + droppedByCap.length,
+      pages_requested: uniqueRequested.length,
+      pages_planned: uniqueFinal.length,
+      pages_missing: missingAfterCap.length,
+      pages_missing_list: missingAfterCap.slice(0, 30),
       anti_spam_trimmed: !!limited.trimmed,
       anti_spam_caps: limited.caps,
       order_logic: settings.app_rotation_mode === "per_app"
@@ -859,11 +903,18 @@ export function buildRotationPlan(inputSettings = {}) {
       local_label: s.local_label,
       iso: s.scheduled_at.toISOString(),
     })),
-    skipped: skipped.slice(0, 30).map((s) => ({
-      page_name: s.page_name,
-      local_label: s.local_label,
-      reason: s.skip_reason,
-    })),
+    skipped: [
+      ...skipped.slice(0, 20).map((s) => ({
+        page_name: s.page_name,
+        local_label: s.local_label,
+        reason: s.skip_reason,
+      })),
+      ...missingAfterCap.slice(0, 20).map((p) => ({
+        page_name: p.page_name,
+        local_label: "—",
+        reason: "bị cắt anti-spam bulk (tăng bulk_max_pages / chuyển preset Nới lỏng)",
+      })),
+    ],
     preview_order: finalSlots.slice(0, 24).map((s) => ({
       order: s.order,
       label: `${s.group_name} · ${s.account_name} · P${s.page_index} · bài${s.post_round} · ${s.local_label}`,
@@ -1074,6 +1125,7 @@ export function buildRunNowPlan(inputSettings = {}) {
   let order = 0;
   let previousRoundStartMs = null;
   let previousRoundEndMs = null;
+  const preferredFallbackWarned = new Set();
   const quotaDay = planDay; // always follow planDay (may be shifted to tomorrow)
   /** 07:30 VN on planDay — khi plan không phải hôm nay */
   function planDayStartMs() {
@@ -1106,16 +1158,33 @@ export function buildRunNowPlan(inputSettings = {}) {
       if (round >= pageRounds) return;
       const plannedPostType = resolvePlannedPostType(settings, cfg, round);
       let when;
+      let timeModeUsed = usePreferred
+        ? "preferred"
+        : useWindows
+          ? "windows"
+          : "gap_chain";
       if (usePreferred) {
         const prefSlots = preferredTimesByPage.get(page.page_row_id) || [];
-        if (!prefSlots[round]) return;
-        const baseMs = prefSlots[round].getTime();
-        const stagger = (order + 1) * 1500;
-        when = new Date(baseMs + stagger);
-        if (when.getTime() < Date.now() + 1500) {
-          when = new Date(Date.now() + 2000 + stagger);
+        if (prefSlots[round]) {
+          const baseMs = prefSlots[round].getTime();
+          const stagger = (order + 1) * 1500;
+          when = new Date(baseMs + stagger);
+          if (when.getTime() < Date.now() + 1500) {
+            when = new Date(Date.now() + 2000 + stagger);
+          }
+          cursorMs = when.getTime();
+        } else {
+          // TRƯỚC: return im lặng → tick 10 page nhưng chỉ 7–8 có slot (thiếu giờ ưa thích)
+          // SAU: fallback gap_chain để mọi page đã tick vẫn có task
+          when = new Date(cursorMs);
+          timeModeUsed = "gap_chain_fallback";
+          if (!preferredFallbackWarned.has(page.page_row_id)) {
+            preferredFallbackWarned.add(page.page_row_id);
+            warnings.push(
+              `Page «${page.page_name || page.page_row_id}» thiếu giờ ưa thích đủ slot → dùng giờ liên tục/gap (không bỏ page).`
+            );
+          }
         }
-        cursorMs = when.getTime();
       } else if (useWindows && dayWindowTimes[round]) {
         const baseMs = dayWindowTimes[round].getTime();
         const stagger = (order + 1) * 1500;
@@ -1145,10 +1214,10 @@ export function buildRunNowPlan(inputSettings = {}) {
         iso: when.toISOString(),
         local_label: formatLocal(when, tz),
         plan_day: planDay,
-        time_mode: usePreferred ? "preferred" : useWindows ? "windows" : "gap_chain",
+        time_mode: timeModeUsed,
       });
       lastSlotMs = when.getTime();
-      if (!useWindows && !usePreferred) {
+      if (timeModeUsed === "gap_chain" || timeModeUsed === "gap_chain_fallback") {
         // gap 0 → giữ cùng timestamp (đăng 1 lúc nhiều page)
         if (taskGapMaxMs > 0 || taskGapMinMs > 0) {
           cursorMs += randBetween(taskGapMinMs, Math.max(taskGapMinMs, taskGapMaxMs));
@@ -1304,6 +1373,36 @@ export function buildRunNowPlan(inputSettings = {}) {
     ? addDaysYmd(finalSlots[finalSlots.length - 1].plan_day || planDay, 1)
     : addDaysYmd(planDay || todayVn, 1);
 
+  // Coverage: mọi page đã tick phải có ≥1 task — nếu thiếu thì cảnh báo rõ (không nuốt im)
+  const requestedPageIds = [];
+  const requestedPageNames = new Map();
+  for (const account of matrix) {
+    for (const page of account.pages) {
+      const id = Number(page.page_row_id);
+      requestedPageIds.push(id);
+      requestedPageNames.set(id, page.page_name || `#${id}`);
+    }
+  }
+  const plannedPageIds = [
+    ...new Set(finalSlots.map((s) => Number(s.page_row_id)).filter((n) => n > 0)),
+  ];
+  const plannedSet = new Set(plannedPageIds);
+  const missingPages = requestedPageIds
+    .filter((id) => !plannedSet.has(id))
+    .map((id) => ({
+      page_row_id: id,
+      page_name: requestedPageNames.get(id) || `#${id}`,
+    }));
+  if (missingPages.length) {
+    warnings.push(
+      `⚠ Đã chọn ${requestedPageIds.length} page nhưng lịch chỉ có ${plannedPageIds.length} page. ` +
+        `Thiếu: ${missingPages
+          .slice(0, 8)
+          .map((p) => p.page_name)
+          .join(", ")}${missingPages.length > 8 ? "…" : ""}.`
+    );
+  }
+
   return {
     settings: {
       posts_per_page_per_day: rounds,
@@ -1322,6 +1421,7 @@ export function buildRunNowPlan(inputSettings = {}) {
       app_rotation_mode: settings.app_rotation_mode,
       between_tasks_gap_minutes_min: settings.between_tasks_gap_minutes_min,
       between_tasks_gap_minutes_max: settings.between_tasks_gap_minutes_max,
+      page_row_ids: settings.page_row_ids,
     },
     summary: {
       accounts: matrix.length,
@@ -1330,6 +1430,10 @@ export function buildRunNowPlan(inputSettings = {}) {
       configured_posts_per_page: rounds,
       total_planned: slots.length,
       total_final: finalSlots.length,
+      pages_requested: requestedPageIds.length,
+      pages_planned: plannedPageIds.length,
+      pages_missing: missingPages.length,
+      pages_missing_list: missingPages.slice(0, 30),
       anti_spam_trimmed: false,
       plan_day: planDay,
       today_vn: todayVn,
