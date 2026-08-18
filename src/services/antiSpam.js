@@ -882,17 +882,34 @@ export function applyJitterToDate(date) {
 export function enforceBulkLimits(plan, body = {}) {
   const s = getAntiSpamSettings();
   if (!s.enabled) {
-    return { plan, trimmed: false, settings: s };
+    return { plan, trimmed: false, settings: s, dropped_pages: [] };
   }
   // strictTiming: hẹn giờ cố định — tôn trọng đúng giờ người dùng nhập,
   // KHÔNG cộng jitter ngẫu nhiên (nếu không mỗi lần xem kế hoạch ra giờ khác).
   const strictTiming = !!body.strict_timing;
-  let pages = Array.isArray(plan) ? [...plan] : [];
+  const allPages = Array.isArray(plan) ? [...plan] : [];
   let trimmed = false;
-  if (pages.length > s.bulk_max_pages) {
-    pages = pages.slice(0, s.bulk_max_pages);
+  const dropped_pages = [];
+  // User đã tick page tường minh → KHÔNG được cắt bớt page (chỉ cắt số slot).
+  // Trước đây bulk_max_pages=8 (preset Nghiêm) → tick 10 chỉ còn 8, progress mất 2 page.
+  const honorSelection = body.honor_page_selection !== false;
+
+  let pages = allPages;
+  if (!honorSelection && allPages.length > s.bulk_max_pages) {
     trimmed = true;
+    pages = allPages.slice(0, s.bulk_max_pages);
+    for (const p of allPages.slice(s.bulk_max_pages)) {
+      dropped_pages.push({
+        page_row_id: p.page_row_id,
+        page_name: p.page_name,
+        reason: `Anti-spam bulk_max_pages=${s.bulk_max_pages} (đang tick ${allPages.length} page)`,
+      });
+    }
+  } else if (honorSelection && allPages.length > s.bulk_max_pages) {
+    // Giữ đủ page đã tick — không đánh dấu trimmed chỉ vì vượt bulk_max_pages
+    // (tránh UI báo «đã cắt» trong khi vẫn đủ page)
   }
+
   let total = 0;
   pages = pages.map((p) => {
     let slots = Array.isArray(p.slots) ? [...p.slots] : [];
@@ -922,7 +939,14 @@ export function enforceBulkLimits(plan, body = {}) {
       out.push({
         ...p,
         slots: [],
-        error: p.error || `Anti-spam bulk: đủ total ${s.bulk_max_total} slot/lần`,
+        error:
+          p.error ||
+          `Anti-spam bulk: đủ total ${s.bulk_max_total} slot/lần — page này bị cắt`,
+      });
+      dropped_pages.push({
+        page_row_id: p.page_row_id,
+        page_name: p.page_name,
+        reason: `Anti-spam bulk_max_total=${s.bulk_max_total}`,
       });
       continue;
     }
@@ -935,10 +959,26 @@ export function enforceBulkLimits(plan, body = {}) {
     out.push({ ...p, slots });
   }
 
+  // Page bị cắt vì bulk_max_pages — vẫn trả về trong plan kèm error (progress/UI thấy được)
+  for (const d of dropped_pages) {
+    if (out.some((p) => Number(p.page_row_id) === Number(d.page_row_id))) continue;
+    const src = allPages.find(
+      (p) => Number(p.page_row_id) === Number(d.page_row_id)
+    );
+    out.push({
+      ...(src || {}),
+      page_row_id: d.page_row_id,
+      page_name: d.page_name || src?.page_name || "?",
+      slots: [],
+      error: d.reason,
+    });
+  }
+
   return {
     plan: out,
     trimmed,
     settings: s,
+    dropped_pages,
     caps: {
       bulk_max_pages: s.bulk_max_pages,
       bulk_max_slots_per_page: s.bulk_max_slots_per_page,

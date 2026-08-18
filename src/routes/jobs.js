@@ -369,9 +369,17 @@ router.post("/bulk-schedule", async (req, res) => {
     }
     const planned = await scheduleBulk({ ...body, dry_run: true });
     const slots = [];
+    const skippedPages = [];
     for (const p of planned.plan || []) {
-      if (p.error || !p.slots?.length) continue;
       if (!allowedIds.has(Number(p.page_row_id))) continue;
+      if (p.error || !p.slots?.length) {
+        skippedPages.push({
+          page_row_id: p.page_row_id,
+          page_name: p.page_name,
+          error: p.error || "không có slot hợp lệ",
+        });
+        continue;
+      }
       const meta = pagesMeta([p.page_row_id])[0] || {};
       for (const s of p.slots) {
         slots.push({
@@ -383,6 +391,27 @@ router.post("/bulk-schedule", async (req, res) => {
           post_type: body.post_type === "auto" ? undefined : body.post_type,
         });
       }
+    }
+    // Tick 10 nhưng chỉ 7–8 có slot → TRƯỚC bỏ im lặng; SAU chặn + nêu tên page
+    if (skippedPages.length && !body.allow_partial_pages) {
+      const names = skippedPages
+        .slice(0, 8)
+        .map((p) => `${p.page_name}: ${p.error}`)
+        .join(" · ");
+      return res.status(400).json({
+        ok: false,
+        error:
+          `Đã tick ${allowedIds.size} page nhưng chỉ ${allowedIds.size - skippedPages.length} page có slot hẹn. ` +
+          `Page bị bỏ: ${names}${skippedPages.length > 8 ? "…" : ""}. ` +
+          `Xem kế hoạch (dry-run) — sửa quota/giờ/anti-spam rồi hẹn lại (hoặc allow_partial_pages).`,
+        code: "PAGES_MISSING_SLOTS",
+        pages_requested: allowedIds.size,
+        pages_planned: allowedIds.size - skippedPages.length,
+        pages_missing: skippedPages.length,
+        pages_missing_list: skippedPages,
+        plan: planned,
+        media_check: planned.media_check || null,
+      });
     }
     if (!slots.length) {
       // Đẩy lý do CỤ THỂ của page đầu tiên lên UI. Message chung
@@ -419,14 +448,23 @@ router.post("/bulk-schedule", async (req, res) => {
       });
     }
 
+    const uniquePages = [
+      ...new Set(slots.map((s) => Number(s.page_row_id)).filter((n) => n > 0)),
+    ];
     const job = startBulkScheduleJob({
       slots,
-      title: `Hẹn giờ · ${slots.length} slot · ${planned.mode}`,
+      title: `Hẹn giờ · ${slots.length} slot · ${uniquePages.length} page · ${planned.mode}`,
+      pages_expected: allowedIds.size,
+      pages_planned: uniquePages.length,
     });
     res.json({
       ok: true,
       job,
       plan_preview: planned,
+      pages_requested: allowedIds.size,
+      pages_planned: uniquePages.length,
+      pages_missing: skippedPages.length,
+      pages_missing_list: skippedPages,
       media_check: planned.media_check || null,
       media_ok: planned.media_ok !== false,
       reports: getReportPaths(),

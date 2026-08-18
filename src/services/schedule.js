@@ -1031,8 +1031,29 @@ export async function scheduleBulk(body = {}) {
   }
 
   // Anti-spam: hard bulk caps + jitter (skipped entirely when anti-spam OFF)
-  const limited = enforceBulkLimits(plan, { ...body, strict_timing: strictTiming });
+  // honor_page_selection: page user tick không bị cắt im lặng bởi bulk_max_pages
+  const limited = enforceBulkLimits(plan, {
+    ...body,
+    strict_timing: strictTiming,
+    honor_page_selection: true,
+  });
   const finalPlan = limited.plan;
+
+  const pagesWithSlots = finalPlan.filter((p) => (p.slots || []).length > 0);
+  const pagesMissing = finalPlan.filter(
+    (p) => !(p.slots || []).length || p.error
+  );
+  const coverage = {
+    pages_requested: pageIds.length,
+    pages_planned: pagesWithSlots.length,
+    pages_missing: pagesMissing.length,
+    pages_missing_list: pagesMissing.slice(0, 40).map((p) => ({
+      page_row_id: p.page_row_id,
+      page_name: p.page_name,
+      error: p.error || "không có slot hợp lệ",
+    })),
+    dropped_by_anti_spam: limited.dropped_pages || [],
+  };
 
   const timingSource =
     body.timing_source ||
@@ -1059,6 +1080,7 @@ export async function scheduleBulk(body = {}) {
       anti_spam_enabled: antiOn,
       anti_spam_trimmed: limited.trimmed,
       anti_spam_caps: limited.caps || null,
+      ...coverage,
       page_stagger_step_minutes: staggerStep,
       page_gap_minutes_min: pageGapMin,
       page_gap_minutes_max: pageGapMax,
@@ -1151,6 +1173,7 @@ export async function scheduleBulk(body = {}) {
     anti_spam_enabled: antiOn,
     anti_spam_trimmed: limited.trimmed,
     anti_spam_caps: limited.caps || null,
+    ...coverage,
     page_stagger_step_minutes: staggerStep,
     page_gap_minutes_min: pageGapMin,
     page_gap_minutes_max: pageGapMax,

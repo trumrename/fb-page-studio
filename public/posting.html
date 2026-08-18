@@ -3167,7 +3167,9 @@ Tối | 18:00 | 21:30 | 2</textarea>
 
       if (r.dry_run) {
         const totalSlots = (r.plan || []).reduce((n, p) => n + (p.slots?.length || 0), 0);
-        const errN = (r.plan || []).filter((p) => p.error).length;
+        const errN = (r.plan || []).filter((p) => p.error || !(p.slots || []).length).length;
+        const reqN = r.pages_requested ?? (r.plan || []).length;
+        const okN = r.pages_planned ?? (r.plan || []).filter((p) => (p.slots || []).length > 0).length;
         const srcHint =
           r.timing_source === "list_times" || (r.plan || []).some((p) => p.active?.source === "fixed" && p.active?.list_times)
             ? "List thời điểm (mốc bạn viết + gap page)"
@@ -3204,12 +3206,22 @@ Tối | 18:00 | 21:30 | 2</textarea>
               : "") +
             `</div>`
           : "";
+        const missList = (r.pages_missing_list || [])
+          .slice(0, 10)
+          .map((p) => `${p.page_name}: ${p.error || "không slot"}`)
+          .join(" · ");
         box.innerHTML =
-          `<b>Dry-run · ${esc(r.mode)}</b> · ${(r.plan || []).length} page · ${totalSlots} slot` +
-          (errN ? ` · <span class="fail">${errN} lỗi</span>` : "") +
+          `<b>Dry-run · ${esc(r.mode)}</b> · page <b class="${errN || okN < reqN ? "fail" : "ok"}">${okN}/${reqN}</b> · ${totalSlots} slot` +
+          (errN ? ` · <span class="fail">${errN} page lỗi/thiếu slot</span>` : "") +
           (mc && !mc.ok ? ` · <span class="fail">thiếu media</span>` : mc?.ok ? ` · <span class="ok">đủ media</span>` : "") +
           antiLine +
           mediaLine +
+          (okN < reqN
+            ? `<div class="fail" style="margin:0 0 .55rem;padding:.5rem .65rem;border-radius:8px;border:1px solid rgba(255,113,132,.45)">` +
+              `<b>⚠ Thiếu ${reqN - okN} page đã tick trong lịch hẹn</b>` +
+              (missList ? `<br/>${esc(missList)}` : "") +
+              `<br/><span class="muted" style="color:inherit">Job sẽ bị chặn đến khi mọi page tick đều có slot (hoặc bỏ tick page lỗi).</span></div>`
+            : "") +
           `<div style="margin:0 0 .45rem;font-size:.82rem;padding:.4rem .55rem;border-radius:8px;background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.3)">` +
           `<b>Loại hẹn đang dùng:</b> ${srcHint}` +
           (r.timing_source ? ` · <code>${esc(r.timing_source)}</code>` : "") +
@@ -3219,8 +3231,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
             ? `<div class="muted" style="margin:0 0 .45rem;font-size:.78rem">Nguồn giờ: preferred từng page / preset VN. Jitter + min-gap theo anti · gap page A→B.</div>`
             : "") +
           (r.plan || []).map((p) => {
-            if (p.error) {
-              return `<div class="fail" style="margin:.35rem 0">· <b>${esc(p.page_name)}</b>: ${esc(p.error)}</div>`;
+            if (p.error || !(p.slots || []).length) {
+              return `<div class="fail" style="margin:.35rem 0">· <b>${esc(p.page_name)}</b>: ${esc(p.error || "không có slot")}</div>`;
             }
             const src = p.active?.source || "";
             const srcLabel =

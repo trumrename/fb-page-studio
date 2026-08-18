@@ -1146,7 +1146,12 @@ export function startBulkPostJob({
  * Build schedule job from flat list of slots.
  * slots: [{ page_row_id, page_name, page_id, unix, post_type? }]
  */
-export function startBulkScheduleJob({ slots, title } = {}) {
+export function startBulkScheduleJob({
+  slots,
+  title,
+  pages_expected = null,
+  pages_planned = null,
+} = {}) {
   // kind=schedule → hẹn giờ Facebook (Graph). Ảnh/video/text đều qua path này.
   // Mode «chờ giờ đăng trực tiếp» là kind=post + run_at (job khác / rotation), không gộp vào đây.
   const tasks = (slots || []).map((s, i) => ({
@@ -1160,9 +1165,14 @@ export function startBulkScheduleJob({ slots, title } = {}) {
       post_type: s.post_type,
     },
   }));
+  const uniquePages = [
+    ...new Set(tasks.map((t) => Number(t.page_row_id)).filter((n) => n > 0)),
+  ];
   return startJob({
     type: "bulk_schedule",
-    title: title || `Hẹn giờ FB · ${tasks.length} slot`,
+    title: title || `Hẹn giờ FB · ${tasks.length} slot · ${uniquePages.length} page`,
     tasks,
+    pages_expected: pages_expected != null ? pages_expected : uniquePages.length,
+    pages_planned: pages_planned != null ? pages_planned : uniquePages.length,
   });
 }
