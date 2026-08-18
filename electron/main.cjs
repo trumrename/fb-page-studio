@@ -1370,13 +1370,21 @@ function startBackend() {
     app.isQuitting = true;
     setTimeout(() => {
       try {
-        // Prefer PowerShell (no cmd find.exe hang). Fallback: bat launcher.
+        // CRITICAL: must fully detach from Electron Job Object.
+        // Plain spawn(detached) often dies with the app → update runs, EXE
+        // replaced, but "start new app" never happens (user: tắt app không mở lại).
+        // `cmd /c start "" ...` creates an independent console process group.
         const workDir = path.dirname(scriptPath);
         const isPs1 = /\.ps1$/i.test(scriptPath);
         if (isPs1) {
           spawn(
-            "powershell.exe",
+            "cmd.exe",
             [
+              "/c",
+              "start",
+              "",
+              "/min",
+              "powershell.exe",
               "-NoProfile",
               "-ExecutionPolicy",
               "Bypass",
@@ -1390,17 +1398,23 @@ function startBackend() {
               stdio: "ignore",
               cwd: workDir,
               windowsHide: true,
+              shell: false,
             }
           ).unref();
-          log("Update PS1 started", scriptPath);
+          log("Update PS1 started via cmd start", scriptPath);
         } else {
-          spawn("cmd.exe", ["/c", scriptPath], {
-            detached: true,
-            stdio: "ignore",
-            cwd: workDir,
-            windowsHide: true,
-          }).unref();
-          log("Update BAT started", scriptPath);
+          spawn(
+            "cmd.exe",
+            ["/c", "start", "", "/min", "cmd.exe", "/c", scriptPath],
+            {
+              detached: true,
+              stdio: "ignore",
+              cwd: workDir,
+              windowsHide: true,
+              shell: false,
+            }
+          ).unref();
+          log("Update BAT started via cmd start", scriptPath);
         }
       } catch (e) {
         log("Update script spawn error", e.message);
@@ -1408,40 +1422,43 @@ function startBackend() {
         app.isQuitting = false;
         return;
       }
-      try {
-        shutdownBackend();
-      } catch {
-        /* ignore */
-      }
-      try {
-        if (tray) {
-          tray.destroy();
-          tray = null;
-        }
-      } catch {
-        /* ignore */
-      }
-      try {
-        for (const win of BrowserWindow.getAllWindows()) {
-          try {
-            win.removeAllListeners("close");
-            win.destroy();
-          } catch {
-            /* ignore */
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-      // Hard exit so Windows unlocks FB Page Studio.exe for Setup / ren
+      // Give Windows time to fully spawn the orphaned updater before we die
       setTimeout(() => {
         try {
-          app.exit(0);
+          shutdownBackend();
         } catch {
-          process.exit(0);
+          /* ignore */
         }
-      }, 400);
-    }, 600);
+        try {
+          if (tray) {
+            tray.destroy();
+            tray = null;
+          }
+        } catch {
+          /* ignore */
+        }
+        try {
+          for (const win of BrowserWindow.getAllWindows()) {
+            try {
+              win.removeAllListeners("close");
+              win.destroy();
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+        // Hard exit so Windows unlocks FB Page Studio.exe for Setup / ren
+        setTimeout(() => {
+          try {
+            app.exit(0);
+          } catch {
+            process.exit(0);
+          }
+        }, 500);
+      }, 1200);
+    }, 400);
   });
 
   return waitForServer(PORT);

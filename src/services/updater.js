@@ -476,26 +476,54 @@ Get-Process -ErrorAction SilentlyContinue | Where-Object {
   $_.ProcessName -like 'FB-Page-Studio-Setup*' -or $_.Path -like '*FB-Page-Studio-Setup*'
 } | Stop-Process -Force -ErrorAction SilentlyContinue
 
-Start-Sleep -Seconds 1
+Start-Sleep -Seconds 2
 Set-Status "Dang mo ban moi..."
+# Wait a bit more for Setup to finish writing files
+Start-Sleep -Seconds 2
 $appNow = @(Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue).Count -gt 0
 if (-not $appNow) {
   $launched = $false
-  foreach ($exe in $launch) {
+  $pf86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+  $extra = @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\\FB Page Studio\\FB Page Studio.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\\fb-page-studio\\FB Page Studio.exe'),
+    (Join-Path $env:ProgramFiles 'FB Page Studio\\FB Page Studio.exe'),
+    (Join-Path $pf86 'FB Page Studio\\FB Page Studio.exe')
+  )
+  $tryLaunch = @($launch) + $extra | Where-Object { $_ } | Select-Object -Unique
+  foreach ($exe in $tryLaunch) {
     if ($exe -and (Test-Path -LiteralPath $exe)) {
       try {
-        Start-Process -FilePath $exe
+        Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)
         Log ("Launched " + $exe)
         $launched = $true
-        break
+        Start-Sleep -Seconds 2
+        if (@(Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue).Count -gt 0) { break }
+        Log 'Process not seen yet — try next candidate'
+        $launched = $false
       } catch { Log ("Launch fail " + $exe + " " + $_.Exception.Message) }
     }
   }
   if (-not $launched) {
-    $lnk = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\FB Page Studio.lnk'
-    if (Test-Path -LiteralPath $lnk) {
-      try { Start-Process -FilePath $lnk; Log 'Launched Start Menu shortcut' } catch {}
+    foreach ($lnkName in @('FB Page Studio.lnk', 'FB-Page-Studio.lnk')) {
+      $lnk = Join-Path $env:APPDATA ("Microsoft\\Windows\\Start Menu\\Programs\\" + $lnkName)
+      $lnkDesk = Join-Path $env:USERPROFILE ("Desktop\\" + $lnkName)
+      foreach ($p in @($lnk, $lnkDesk)) {
+        if (Test-Path -LiteralPath $p) {
+          try {
+            Start-Process -FilePath $p
+            Log ("Launched shortcut " + $p)
+            $launched = $true
+            break
+          } catch { Log ("Shortcut fail " + $p) }
+        }
+      }
+      if ($launched) { break }
     }
+  }
+  if (-not $launched) {
+    Set-Content -LiteralPath $errFile -Value 'LOI: da cai nhung khong mo duoc app. Mo Start Menu → FB Page Studio.' -Encoding UTF8
+    Log 'FAILED to relaunch app after Setup'
   }
 } else {
   Log 'App already running — skip second launch'
@@ -1059,19 +1087,27 @@ export async function applyUpdate() {
     `  del /f /q "Luu-Tru-Ban-Cu\\FB-Page-Studio-Desktop*.exe" 2>nul`,
     `  del /f /q "Luu-Tru-Ban-Cu\\FB-Page-Studio-Desktop*.exe.sha256.txt" 2>nul`,
     `)`,
-    `start "" "${finalName}"`,
+    // Full path + delay — avoid start failing when bat is hidden / cwd odd
+    batDelaySeconds(2),
+    `if exist "${finalName}" (`,
+    `  start "" /D "${exeDir}" "${path.join(exeDir, finalName)}"`,
+    `) else (`,
+    `  echo LOI: khong thay ${finalName} sau khi doi ten > "_update-error.txt"`,
+    `  exit /b 1`,
+    `)`,
+    batDelaySeconds(2),
     `del /f /q "%~f0"`,
     "endlocal",
     "exit /b 0",
     `:replace_failed`,
     `if exist "${bakBase}" ren "${bakBase}" "${currentName}" 2>nul`,
     `echo LOI: khong the thay EXE moi, da rollback ban cu > "_update-error.txt"`,
-    `if exist "${currentName}" start "" "${currentName}"`,
-    `if exist "${finalName}" start "" "${finalName}"`,
+    `if exist "${currentName}" start "" /D "${exeDir}" "${path.join(exeDir, currentName)}"`,
+    `if exist "${finalName}" start "" /D "${exeDir}" "${path.join(exeDir, finalName)}"`,
     `exit /b 1`,
     `:locked`,
     `echo LOI: EXE van dang bi khoa sau 30 giay > "_update-error.txt"`,
-    `if exist "${currentName}" start "" "${currentName}"`,
+    `if exist "${currentName}" start "" /D "${exeDir}" "${path.join(exeDir, currentName)}"`,
     `exit /b 1`,
     "",
   ].join("\r\n");
@@ -1135,35 +1171,52 @@ export function startUpdate() {
   return { started: true, already_running: false, progress: getUpdateProgress(), promise: activeUpdate };
 }
 
-/** Spawn update script (bat/ps1) and exit process shortly after. */
+/** Spawn update script (bat/ps1) fully detached, then exit. */
 export function scheduleRestart(scriptPath, cwd) {
   const resolved = path.resolve(String(scriptPath || ""));
   const dir = cwd || path.dirname(resolved) || getExeDir();
   const isPs1 = /\.ps1$/i.test(resolved);
+  // cmd /c start → independent of this Node/Electron job (survives process.exit)
   try {
     if (isPs1) {
       spawn(
-        "powershell.exe",
-        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", resolved],
+        "cmd.exe",
+        [
+          "/c",
+          "start",
+          "",
+          "/min",
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-WindowStyle",
+          "Hidden",
+          "-File",
+          resolved,
+        ],
         { detached: true, stdio: "ignore", cwd: dir, windowsHide: true }
       ).unref();
     } else {
+      spawn(
+        "cmd.exe",
+        ["/c", "start", "", "/min", "cmd.exe", "/c", resolved],
+        { detached: true, stdio: "ignore", cwd: dir, windowsHide: true }
+      ).unref();
+    }
+  } catch {
+    try {
       spawn("cmd.exe", ["/c", resolved], {
         detached: true,
         stdio: "ignore",
         cwd: dir,
-        windowsHide: true,
+        windowsHide: false,
       }).unref();
+    } catch {
+      /* last resort */
     }
-  } catch {
-    spawn("cmd.exe", ["/c", resolved], {
-      detached: true,
-      stdio: "ignore",
-      cwd: dir,
-      windowsHide: false,
-    }).unref();
   }
-  setTimeout(() => process.exit(0), 800);
+  setTimeout(() => process.exit(0), 1800);
 }
 
 /** Ask Electron parent to exit first; plain Node keeps a safe fallback. */
