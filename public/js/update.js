@@ -573,9 +573,9 @@
         `Cập nhật TẠI CHỖ?\n\n` +
           `v${check.current_version} → v${check.latest_version}\n` +
           `File: ${check.asset.name} (~${Math.round((check.asset.size || 0) / 1024 / 1024)} MB)\n\n` +
-          `• Tải từ GitHub → thay EXE → app tự mở lại\n` +
-          `• EXE bản cũ cùng thư mục sẽ bị xóa\n` +
-          `• License + data giữ nguyên\n\n` +
+          `• Tải Setup → cài ĐÈ đúng thư mục đang chạy → mở bản mới\n` +
+          `• Nếu app ở Program Files: Windows hỏi UAC — bấm Yes\n` +
+          `• License + data trong AppData giữ nguyên\n\n` +
           `Nếu mạng chặn GitHub: Cancel rồi bấm Tải tay (Setup).`
       );
       if (!ok) return;

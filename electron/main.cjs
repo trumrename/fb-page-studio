@@ -1422,7 +1422,8 @@ function startBackend() {
         app.isQuitting = false;
         return;
       }
-      // Give Windows time to fully spawn the orphaned updater before we die
+      // Give Windows time to fully spawn the orphaned updater before we die.
+      // Program Files updates need the PS1 alive to show UAC + Wait for Setup.
       setTimeout(() => {
         try {
           shutdownBackend();
@@ -1456,9 +1457,9 @@ function startBackend() {
           } catch {
             process.exit(0);
           }
-        }, 500);
-      }, 1200);
-    }, 400);
+        }, 800);
+      }, 2500);
+    }, 600);
   });
 
   return waitForServer(PORT);

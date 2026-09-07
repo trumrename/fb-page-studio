@@ -1370,16 +1370,42 @@ router.get("/update/progress", (_req, res) => {
 
 // Surface a failed replacement instead of silently staying on the old version.
 router.get("/update/last-error", (_req, res) => {
-  const file = path.join(getExeDir(), "_update-error.txt");
+  const candidates = [
+    process.env.FB_USER_DIR && path.join(process.env.FB_USER_DIR, "_update-error.txt"),
+    path.join(getExeDir(), "_update-error.txt"),
+    path.join(path.dirname(getExeDir()), "_update-error.txt"),
+  ].filter(Boolean);
   let error = null;
-  try { if (fs.existsSync(file)) error = fs.readFileSync(file, "utf8").trim() || "Cập nhật EXE thất bại"; }
-  catch { /* best effort diagnostic */ }
-  res.json({ ok: true, has_error: Boolean(error), error });
+  let file = null;
+  for (const f of candidates) {
+    try {
+      if (fs.existsSync(f)) {
+        const text = fs.readFileSync(f, "utf8").trim();
+        if (text) {
+          error = text;
+          file = f;
+          break;
+        }
+      }
+    } catch {
+      /* best effort */
+    }
+  }
+  res.json({ ok: true, has_error: Boolean(error), error, file });
 });
 
 router.post("/update/last-error/clear", (_req, res) => {
-  const file = path.join(getExeDir(), "_update-error.txt");
-  try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch { /* keep app usable */ }
+  const candidates = [
+    process.env.FB_USER_DIR && path.join(process.env.FB_USER_DIR, "_update-error.txt"),
+    path.join(getExeDir(), "_update-error.txt"),
+  ].filter(Boolean);
+  for (const file of candidates) {
+    try {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    } catch {
+      /* keep app usable */
+    }
+  }
   res.json({ ok: true });
 });
 

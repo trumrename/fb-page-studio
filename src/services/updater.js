@@ -378,8 +378,13 @@ export function backupUserDataBeforeUpdate(userDir, label = "pre-update") {
 }
 
 /**
- * Write PowerShell apply script — NO cmd find/tasklist pipes (user hung on "find").
- * Preserves %APPDATA%\fb-page-studio (never deletes data/).
+ * Write PowerShell apply script for NSIS Setup.
+ * Critical fixes (v1.4.17+):
+ * - ASCII-only + UTF-8 BOM (Windows PowerShell 5.1 mis-parses UTF-8 without BOM)
+ * - Install to the SAME folder as the running EXE via /D= (overwrite, not side install)
+ * - Elevate with RunAs when target is Program Files (silent /S alone cannot overwrite)
+ * - Only launch an EXE whose FileVersion matches the new version (never reopen old)
+ * - Never delete %APPDATA%\\fb-page-studio data
  */
 function writeNsisUpdateScript({
   userWritable,
@@ -390,26 +395,61 @@ function writeNsisUpdateScript({
 }) {
   const psPath = path.join(userWritable, "_apply_update.ps1");
   const launchList = nsisAppLaunchCandidates(currentExe);
+  const installDir = path.dirname(path.resolve(String(currentExe || "")));
   const setupEsc = setupPath.replace(/'/g, "''");
   const userEsc = userWritable.replace(/'/g, "''");
-  const ps = `# FB Page Studio auto-update (PowerShell) — do not use cmd find.exe
+  const installEsc = installDir.replace(/'/g, "''");
+  const currentEsc = String(currentExe || "").replace(/'/g, "''");
+  const fromEsc = String(fromVersion || "").replace(/'/g, "''");
+  const toEsc = String(toVersion || "").replace(/'/g, "''");
+  const launchLiteral = launchList
+    .map((p) => `'${String(p).replace(/'/g, "''")}'`)
+    .join(",");
+
+  // Keep script ASCII-only (no em-dash / Vietnamese diacritics) for PS 5.1 parse safety.
+  const ps = `# FB Page Studio NSIS auto-update (ASCII). Do not edit while running.
 $ErrorActionPreference = 'Continue'
 $userDir = '${userEsc}'
 $setup = '${setupEsc}'
+$installDir = '${installEsc}'
+$currentExe = '${currentEsc}'
+$fromVersion = '${fromEsc}'
+$toVersion = '${toEsc}'
 $log = Join-Path $userDir '_update-log.txt'
 $status = Join-Path $userDir '_update-status.txt'
 $errFile = Join-Path $userDir '_update-error.txt'
-$launch = @(${launchList.map((p) => `'${String(p).replace(/'/g, "''")}'`).join(",")})
+$launch = @(${launchLiteral})
+
 function Log([string]$m) {
-  try { Add-Content -LiteralPath $log -Value ("{0} {1}" -f (Get-Date -Format o), $m) -Encoding UTF8 } catch {}
+  $line = "{0} {1}" -f (Get-Date -Format o), $m
+  try { Add-Content -LiteralPath $log -Value $line -Encoding UTF8 } catch {}
+  try { Write-Output $line | Out-Null } catch {}
 }
 function Set-Status([string]$m) {
   try { Set-Content -LiteralPath $status -Value $m -Encoding UTF8 } catch {}
   Log $m
 }
+function Fail([string]$m) {
+  try { Set-Content -LiteralPath $errFile -Value $m -Encoding UTF8 } catch {}
+  Log ("FAIL: " + $m)
+  exit 1
+}
+function Get-ExeVersion([string]$exe) {
+  try {
+    if (-not (Test-Path -LiteralPath $exe)) { return '' }
+    $vi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+    $v = $vi.ProductVersion; if (-not $v) { $v = $vi.FileVersion }
+    if (-not $v) { return '' }
+    $parts = ([string]$v).Split('.')
+    if ($parts.Count -ge 3) { return ($parts[0] + '.' + $parts[1] + '.' + $parts[2]) }
+    return [string]$v
+  } catch { return '' }
+}
+
 try { Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue } catch {}
-Set-Status "Backup data truoc khi cap nhat..."
-# --- NEVER wipe AppData: only copy snapshot ---
+try { Set-Content -LiteralPath $log -Value ("{0} update script start from={1} to={2}" -f (Get-Date -Format o), $fromVersion, $toVersion) -Encoding UTF8 } catch {}
+
+Set-Status "Backup data before update..."
 try {
   $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
   $bak = Join-Path $userDir ("data\\backups\\pre-update-" + $stamp)
@@ -423,9 +463,8 @@ try {
   Log ("Backup OK " + $bak)
 } catch { Log ("Backup warn: " + $_.Exception.Message) }
 
-Set-Status "Dang tat app cu (giu nguyen data)..."
-# Soft then hard stop — by process name only, never delete data folders
-for ($i = 0; $i -lt 8; $i++) {
+Set-Status "Stopping old app (keep data)..."
+for ($i = 0; $i -lt 10; $i++) {
   Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | ForEach-Object {
     try { $_.CloseMainWindow() | Out-Null } catch {}
   }
@@ -434,110 +473,135 @@ for ($i = 0; $i -lt 8; $i++) {
 Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 1
+# Also stop leftover updater/setup helpers that lock files
+Get-Process -ErrorAction SilentlyContinue | Where-Object {
+  $_.ProcessName -like 'FB-Page-Studio-Setup*' -or $_.ProcessName -like 'FB Page Studio Setup*'
+} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
 
-if (-not (Test-Path -LiteralPath $setup)) {
-  Set-Content -LiteralPath $errFile -Value 'LOI: thieu Setup' -Encoding UTF8
-  exit 1
-}
+if (-not (Test-Path -LiteralPath $setup)) { Fail 'LOI: thieu file Setup (download that bai).' }
+if (-not $installDir) { $installDir = Split-Path -Parent $currentExe }
+if (-not $installDir) { Fail 'LOI: khong xac dinh thu muc cai dat.' }
 
-Set-Status "Dang cai Setup silent (khong xoa AppData)..."
-# Run Setup WITHOUT -Wait forever. NSIS runAfterFinish keeps setup alive if we Wait.
-$p = $null
+$needElevate = $false
+$low = $installDir.ToLowerInvariant()
+if ($low -like '*\\program files\\*' -or $low -like '*\\program files (x86)\\*') { $needElevate = $true }
 try {
-  $p = Start-Process -FilePath $setup -ArgumentList '/S' -PassThru -WindowStyle Minimized
+  $probe = Join-Path $installDir ('_fbps_write_' + $PID + '.tmp')
+  [IO.File]::WriteAllText($probe, 'ok')
+  Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+} catch { $needElevate = $true }
+
+# NSIS: /S silent, /D= MUST be last and UNQUOTED (even with spaces)
+$setupArgs = "/S /D=$installDir"
+Log ("InstallDir=$installDir elevate=$needElevate args=$setupArgs")
+Set-Status "Installing Setup silent into same folder (UAC may appear)..."
+
+$exitCode = -1
+try {
+  if ($needElevate) {
+    # Visible enough for UAC; Wait until Setup finishes writing Program Files
+    $p = Start-Process -FilePath $setup -ArgumentList $setupArgs -Verb RunAs -PassThru -Wait
+    if ($p) { $exitCode = $p.ExitCode }
+  } else {
+    $p = Start-Process -FilePath $setup -ArgumentList $setupArgs -PassThru -Wait -WindowStyle Minimized
+    if ($p) { $exitCode = $p.ExitCode }
+  }
+  Log ("Setup finished exitCode=$exitCode")
 } catch {
   Log ("Start-Process fail: " + $_.Exception.Message)
-  try { Start-Process -FilePath $setup } catch {}
-  exit 1
+  Fail ("LOI: khong chay duoc Setup. Can bam Yes o UAC (quyen Admin) khi cai vao Program Files. Chi tiet: " + $_.Exception.Message)
 }
 
-$deadline = (Get-Date).AddSeconds(150)
-$startedApp = $false
-while ((Get-Date) -lt $deadline) {
-  Start-Sleep -Seconds 2
-  if ($p -and $p.HasExited) { Log ("Setup exited code=" + $p.ExitCode); break }
-  $appRunning = @(Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue).Count -gt 0
-  if ($appRunning) {
-    $startedApp = $true
-    # App relaunched by NSIS — Setup may stay open; kill Setup so we never hang
-    if ($p -and -not $p.HasExited -and ((Get-Date) - $p.StartTime).TotalSeconds -gt 12) {
-      Log 'App already running — stopping Setup remnant'
-      try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
-      break
-    }
-  }
-}
-if ($p -and -not $p.HasExited) {
-  Log 'Setup still running after timeout — force stop Setup only'
-  try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
-}
-# Kill leftover setup image names (never touch user data)
+# Give filesystem a moment after installer unlocks files
+Start-Sleep -Seconds 3
+# Stop Setup remnants only AFTER Wait returned (never touch user data)
 Get-Process -ErrorAction SilentlyContinue | Where-Object {
-  $_.ProcessName -like 'FB-Page-Studio-Setup*' -or $_.Path -like '*FB-Page-Studio-Setup*'
+  $_.ProcessName -like 'FB-Page-Studio-Setup*'
 } | Stop-Process -Force -ErrorAction SilentlyContinue
 
-Start-Sleep -Seconds 2
-Set-Status "Dang mo ban moi..."
-# Wait a bit more for Setup to finish writing files
-Start-Sleep -Seconds 2
-$appNow = @(Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue).Count -gt 0
-if (-not $appNow) {
-  $launched = $false
+function Find-UpdatedExe {
   $pf86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
-  $extra = @(
+  $cands = @(
+    (Join-Path $installDir 'FB Page Studio.exe'),
+    $currentExe
+  ) + @($launch) + @(
     (Join-Path $env:LOCALAPPDATA 'Programs\\FB Page Studio\\FB Page Studio.exe'),
     (Join-Path $env:LOCALAPPDATA 'Programs\\fb-page-studio\\FB Page Studio.exe'),
     (Join-Path $env:ProgramFiles 'FB Page Studio\\FB Page Studio.exe'),
     (Join-Path $pf86 'FB Page Studio\\FB Page Studio.exe')
-  )
-  $tryLaunch = @($launch) + $extra | Where-Object { $_ } | Select-Object -Unique
-  foreach ($exe in $tryLaunch) {
-    if ($exe -and (Test-Path -LiteralPath $exe)) {
-      try {
-        Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)
-        Log ("Launched " + $exe)
-        $launched = $true
-        Start-Sleep -Seconds 2
-        if (@(Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue).Count -gt 0) { break }
-        Log 'Process not seen yet — try next candidate'
-        $launched = $false
-      } catch { Log ("Launch fail " + $exe + " " + $_.Exception.Message) }
+  ) | Where-Object { $_ } | Select-Object -Unique
+
+  $matched = @()
+  foreach ($exe in $cands) {
+    if (-not (Test-Path -LiteralPath $exe)) { continue }
+    $ver = Get-ExeVersion $exe
+    Log ("Candidate $exe version=$ver")
+    if ($toVersion -and $ver -and ($ver -eq $toVersion -or $ver.StartsWith($toVersion + '.') -or $toVersion.StartsWith($ver))) {
+      $matched += $exe
     }
   }
-  if (-not $launched) {
-    foreach ($lnkName in @('FB Page Studio.lnk', 'FB-Page-Studio.lnk')) {
-      $lnk = Join-Path $env:APPDATA ("Microsoft\\Windows\\Start Menu\\Programs\\" + $lnkName)
-      $lnkDesk = Join-Path $env:USERPROFILE ("Desktop\\" + $lnkName)
-      foreach ($p in @($lnk, $lnkDesk)) {
-        if (Test-Path -LiteralPath $p) {
-          try {
-            Start-Process -FilePath $p
-            Log ("Launched shortcut " + $p)
-            $launched = $true
-            break
-          } catch { Log ("Shortcut fail " + $p) }
-        }
+  if ($matched.Count -gt 0) {
+    # Prefer the installDir copy when versions match
+    $prefer = $matched | Where-Object { $_.ToLowerInvariant().StartsWith($installDir.ToLowerInvariant()) } | Select-Object -First 1
+    if ($prefer) { return $prefer }
+    return $matched[0]
+  }
+  return $null
+}
+
+Set-Status "Checking installed version..."
+$newExe = Find-UpdatedExe
+if (-not $newExe) {
+  $oldVer = Get-ExeVersion (Join-Path $installDir 'FB Page Studio.exe')
+  Fail ("LOI: Setup chay xong nhung EXE van la ban cu (version=$oldVer, can=$toVersion). Thu: chuot phai Setup -> Run as administrator, cai de len '$installDir'. Log: $log")
+}
+
+Log ("Updated EXE OK: $newExe")
+Set-Status "Starting new version..."
+
+# Close anything Setup's runAfterFinish may have started (could be race)
+Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+
+try {
+  Start-Process -FilePath $newExe -WorkingDirectory (Split-Path -Parent $newExe)
+  Log ("Launched " + $newExe)
+} catch {
+  Fail ("LOI: da cai v$toVersion nhung khong mo duoc app: " + $_.Exception.Message)
+}
+
+Start-Sleep -Seconds 3
+if (@(Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue).Count -lt 1) {
+  # Fallback: Start Menu shortcut
+  $launched = $false
+  foreach ($lnkName in @('FB Page Studio.lnk', 'FB-Page-Studio.lnk')) {
+    foreach ($root in @(
+      (Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs'),
+      (Join-Path $env:ProgramData 'Microsoft\\Windows\\Start Menu\\Programs'),
+      (Join-Path $env:USERPROFILE 'Desktop'),
+      (Join-Path $env:PUBLIC 'Desktop')
+    )) {
+      $p = Join-Path $root $lnkName
+      if (Test-Path -LiteralPath $p) {
+        try { Start-Process -FilePath $p; Log ("Launched shortcut " + $p); $launched = $true; break } catch {}
       }
-      if ($launched) { break }
     }
+    if ($launched) { break }
   }
   if (-not $launched) {
-    Set-Content -LiteralPath $errFile -Value 'LOI: da cai nhung khong mo duoc app. Mo Start Menu → FB Page Studio.' -Encoding UTF8
-    Log 'FAILED to relaunch app after Setup'
+    Fail "LOI: da cai v$toVersion nhung process khong chay. Mo Start Menu -> FB Page Studio."
   }
-} else {
-  Log 'App already running — skip second launch'
 }
 
 try { Remove-Item -LiteralPath $status -Force -ErrorAction SilentlyContinue } catch {}
-Log "Update script done from=${fromVersion} to=${toVersion} (data dir kept: $userDir)"
-# Self-delete
+Log "Update script SUCCESS from=$fromVersion to=$toVersion exe=$newExe data=$userDir"
 try { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue } catch {}
 exit 0
 `;
-  fs.writeFileSync(psPath, ps, "utf8");
-  // Tiny launcher .bat only starts PowerShell (no find/tasklist loops)
+
+  // UTF-8 BOM so Windows PowerShell 5.1 parses correctly
+  fs.writeFileSync(psPath, "\uFEFF" + ps, "utf8");
   const batPath = path.join(userWritable, "_apply_update.bat");
   const bat = [
     "@echo off",
@@ -548,7 +612,7 @@ exit 0
     "",
   ].join("\r\n");
   fs.writeFileSync(batPath, bat, "utf8");
-  return { batPath, psPath, launchList };
+  return { batPath, psPath, launchList, installDir };
 }
 
 function downloadFileOnce(url, dest, onProgress, maxRedirects = 8) {
@@ -940,7 +1004,7 @@ export async function applyUpdate() {
       preserves: ["%APPDATA%\\fb-page-studio\\data", ".env", "license"],
       message:
         `Đã tải Setup v${check.latest_version}.\n` +
-        `App sẽ TẮT → cài đè EXE → mở lại.\n` +
+        `App sẽ TẮT → UAC (nếu Program Files) → cài ĐÈ đúng thư mục đang chạy → mở bản mới.\n` +
         `Data/license/token giữ nguyên trong %APPDATA%\\fb-page-studio (không xóa).\n` +
         (dataBackup?.dir ? `Backup: ${dataBackup.dir}` : ""),
       ...check,
