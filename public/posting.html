@@ -183,7 +183,7 @@
       <a class="nav-item" href="/app.html"><span class="ico">3</span> Tiến trình vận hành</a>
       <a class="nav-item" href="/antispam.html"><span class="ico">4</span> Giới hạn Anti-spam</a>
       <div class="nav-label">Exports</div>
-      <a class="nav-item" href="/app.html#logs"><span class="ico">5</span> Kết quả & log</a>
+      <a class="nav-item" href="/app.html#logsSection"><span class="ico">5</span> Kết quả & log</a>
       <a class="nav-item" href="/history.html"><span class="ico">6</span> Lịch sử đăng (theo ngày)</a>
       <a class="nav-item" href="#" data-dl="/api/posting/logs/csv" data-name="post_logs.csv"><span class="ico">7</span> Tải báo cáo CSV</a>
       <div class="nav-label">System</div>
@@ -1859,6 +1859,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const nextHash = workspaceHashes[activeWorkspaceView];
       if (nextHash && location.hash !== nextHash) {
         history.replaceState({}, "", `${location.pathname}${location.search}${nextHash}`);
+        // replaceState does not fire hashchange — keep sidebar chrome in sync
+        if (typeof window.__fbShellApplyView === "function") {
+          window.__fbShellApplyView({ scroll: false });
+        }
       }
       if (save) queueWorkspaceSave();
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -4182,9 +4186,45 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const el = $(id);
       if (el) el.innerHTML = html == null ? "" : String(html);
     }
+    let lastLiveRenderKey = "";
+    let liveRenderRaf = 0;
+    let pendingLiveJob = null;
+
+    function liveJobRenderKey(job) {
+      const p = job.progress || {};
+      const n0 = job.notifications?.[0]?.id || "";
+      return [
+        job.id,
+        job.status,
+        p.percent,
+        p.done,
+        p.ok,
+        p.fail,
+        p.current_task_id || "",
+        p.current_label || "",
+        (job.tasks || []).length,
+        (job.failed_tasks || []).length,
+        n0,
+        job.resources?.updated_at || "",
+      ].join("|");
+    }
+
+    function scheduleRenderLiveJob(job) {
+      pendingLiveJob = job;
+      if (liveRenderRaf) return;
+      liveRenderRaf = requestAnimationFrame(() => {
+        liveRenderRaf = 0;
+        if (pendingLiveJob) renderLiveJob(pendingLiveJob);
+      });
+    }
+
     function renderLiveJob(job) {
       if (!job) return;
       try {
+      const key = liveJobRenderKey(job);
+      if (key === lastLiveRenderKey) return;
+      lastLiveRenderKey = key;
+
       const p = job.progress || {};
       const panel = $("liveJobPanel");
       if (panel) panel.style.display = "block";
@@ -4345,17 +4385,18 @@ Tối | 18:00 | 21:30 | 2</textarea>
     async function watchLiveJob(id) {
       liveJobId = id;
       liveSeenNotifs = new Set();
+      lastLiveRenderKey = "";
       clearInterval(liveJobTimer);
       const pull = async () => {
         try {
           const r = await api(`/api/jobs/${id}`);
-          renderLiveJob(r.job);
+          scheduleRenderLiveJob(r.job);
         } catch (e) {
           flash(`Không đọc được tiến trình: ${e.message}`, false);
         }
       };
       await pull();
-      liveJobTimer = setInterval(pull, 800);
+      liveJobTimer = setInterval(pull, 1200);
     }
 
     async function loadRotation() {
@@ -5100,6 +5141,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
     });
 
     async function initPostingWorkspace() {
+      // Bind tabs FIRST so clicks work while pages/APIs still loading (anti-"đơ tab")
+      bindPersistentWorkspaceEvents();
+      setWorkspaceView(workspaceViewFromHash() || activeWorkspaceView, { save: false });
+
       await loadWorkspaceState();
       await loadDeployAndMediaUpload();
       await loadPages();
@@ -5120,8 +5165,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
         $("rotWindows").value = "Sáng | 07:30 | 11:30 | 1\nTối | 18:00 | 21:30 | 1";
       }
       syncRunNowMediaUi();
-      bindPersistentWorkspaceEvents();
       if (selectedId) await loadConfig(selectedId);
+      // Re-apply hash view after data load (controls may have changed)
       setWorkspaceView(workspaceViewFromHash() || activeWorkspaceView, { save: false });
       renderSelectionSummary();
     }
@@ -5129,6 +5174,13 @@ Tối | 18:00 | 21:30 | 2</textarea>
     initPostingWorkspace().catch((e) => {
       setConfigSaveState("Không tải được", "error");
       flash(e.message, false);
+      // Keep tabs usable even if data load fails
+      try {
+        bindPersistentWorkspaceEvents();
+        setWorkspaceView(workspaceViewFromHash() || activeWorkspaceView, { save: false });
+      } catch {
+        /* ignore */
+      }
     });
   </script>
 </body>

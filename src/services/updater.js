@@ -352,6 +352,7 @@ export function backupUserDataBeforeUpdate(userDir, label = "pre-update") {
     path.join("data", "app.db-wal"),
     path.join("data", "app.db-shm"),
     path.join("data", "jobs-state.json"),
+    path.join("data", "jobs-history.jsonl"),
   ]) {
     if (copyOne(rel)) copied.push(rel);
   }
@@ -413,7 +414,7 @@ try {
   $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
   $bak = Join-Path $userDir ("data\\backups\\pre-update-" + $stamp)
   New-Item -ItemType Directory -Force -Path $bak | Out-Null
-  foreach ($rel in @('.env','license.backup.json','data\\license.json','data\\app.db','data\\app.db-wal','data\\app.db-shm','data\\jobs-state.json')) {
+  foreach ($rel in @('.env','license.backup.json','data\\license.json','data\\app.db','data\\app.db-wal','data\\app.db-shm','data\\jobs-state.json','data\\jobs-history.jsonl')) {
     $src = Join-Path $userDir $rel
     if (Test-Path -LiteralPath $src) {
       Copy-Item -LiteralPath $src -Destination (Join-Path $bak (Split-Path $rel -Leaf)) -Force -ErrorAction SilentlyContinue

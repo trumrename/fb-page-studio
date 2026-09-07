@@ -1,9 +1,20 @@
 # TIẾN ĐỘ / GHI NHỚ ĐÃ LÀM
 
-> **Snapshot mới nhất:** `TRANG-THAI-HIEN-TAI.md` · **v1.2.72** · 2026-07-30  
-> **Source:** `C:\Users\NCpc\fb-page-poster\` · **Setup build:** `F:\FB-Page-Studio\dist-desktop-oauth\`  
-> **GitHub:** `trumrename/fb-page-studio` · **Docs:** `DOC-INDEX.md`  
-> Phần dưới giữ **lịch sử**; mốc R là bổ sung gần nhất.
+> **Snapshot mới nhất:** `.grok/memory/fb-page-studio-context.md` · **v1.4.16** · 2026-09-07  
+> **Source:** `C:\Users\NCpc\fb-page-poster\` · **GitHub:** `trumrename/fb-page-studio`  
+> Phần dưới giữ **lịch sử**; mốc mới nhất ở đầu.
+
+---
+
+## S. 2026-09-07 — UI không đơ + lịch sử tiến trình (v1.4.16)
+
+- [x] `shell.js`: bỏ `hashchange → location.reload()`; đổi tab cùng trang bằng `dataset.view` + nav active
+- [x] Job persist throttle ~1.5s (force khi job xong) — giảm đơ disk
+- [x] `data/jobs-history.jsonl` + `GET /api/jobs/history` (+ `/:id`)
+- [x] UI `#jobSection`: danh sách lịch sử, ghim lần chạy, «Theo dõi live», filter page OK/FAIL/tìm tên
+- [x] Bộ nhớ dài hạn: `.grok/memory/fb-page-studio-context.md`
+- [x] Ship Setup 1.4.16 lên GH (Playwright E2E 27/27 PASS trước khi ship)
+- Trước đó: 1.4.15 updater relaunch; 1.4.14 honor page selection; 1.4.13 preferred hours
 
 ---
 

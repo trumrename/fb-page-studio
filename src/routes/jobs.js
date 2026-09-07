@@ -7,6 +7,8 @@ import {
   startJob,
   listJobs,
   getJob,
+  listJobHistory,
+  getJobHistory,
   subscribeJob,
   stopJob,
   pauseJob,
@@ -55,6 +57,22 @@ function pagesMeta(ids) {
 /** GET /api/jobs */
 router.get("/", (_req, res) => {
   res.json({ jobs: listJobs(30), reports: getReportPaths() });
+});
+
+/**
+ * GET /api/jobs/history?limit=50
+ * Archived finished jobs (jsonl) — newest first. Must be before /:id.
+ */
+router.get("/history", (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+  res.json({ jobs: listJobHistory(limit) });
+});
+
+/** GET /api/jobs/history/:id — one archived job with page list */
+router.get("/history/:id", (req, res) => {
+  const job = getJobHistory(req.params.id);
+  if (!job) return res.status(404).json({ error: "Không tìm thấy job trong lịch sử" });
+  res.json({ job });
 });
 
 /** Reports — before /:id */

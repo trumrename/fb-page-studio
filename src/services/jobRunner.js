@@ -33,16 +33,207 @@ bus.setMaxListeners(50);
 const jobs = new Map();
 const MAX_JOBS = 40;
 const JOB_STATE_FILE = path.join(path.dirname(config.databasePath), "jobs-state.json");
+const JOB_HISTORY_FILE = path.join(path.dirname(config.databasePath), "jobs-history.jsonl");
+const MAX_HISTORY = 200;
+const HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const PERSIST_THROTTLE_MS = 1500;
+const TERMINAL_STATUSES = new Set(["ok", "fail", "partial", "stopped", "interrupted"]);
 
-function persistJobs() {
+let persistTimer = null;
+let persistDirty = false;
+/** @type {Set<string>|null} */
+let historyIdCache = null;
+
+function persistJobsNow() {
   try {
     const list = [...jobs.values()]
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-      .slice(0, MAX_JOBS);
+      .slice(0, MAX_JOBS)
+      .map((j) => {
+        // Strip internal flags from disk snapshot
+        const { _resume, _history_saved, ...rest } = j;
+        return rest;
+      });
     fs.writeFileSync(JOB_STATE_FILE, JSON.stringify(list, null, 2), "utf8");
+    persistDirty = false;
   } catch (e) {
     console.warn("[jobs persist]", e.message);
   }
+}
+
+/** Throttle disk writes during live progress; force=true on terminal / shutdown. */
+function persistJobs(force = false) {
+  if (force) {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    persistJobsNow();
+    return;
+  }
+  persistDirty = true;
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    if (persistDirty) persistJobsNow();
+  }, PERSIST_THROTTLE_MS);
+}
+
+function ensureHistoryIds() {
+  if (historyIdCache) return historyIdCache;
+  historyIdCache = new Set();
+  try {
+    if (!fs.existsSync(JOB_HISTORY_FILE)) return historyIdCache;
+    const lines = fs.readFileSync(JOB_HISTORY_FILE, "utf8").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row?.id) historyIdCache.add(String(row.id));
+      } catch {
+        /* skip bad line */
+      }
+    }
+  } catch (e) {
+    console.warn("[jobs history load]", e.message);
+  }
+  return historyIdCache;
+}
+
+function historySummary(job) {
+  return {
+    id: job.id,
+    title: job.title || job.id,
+    type: job.type || "batch",
+    status: job.status,
+    created_at: job.created_at,
+    started_at: job.started_at,
+    finished_at: job.finished_at,
+    pages_expected: job.pages_expected ?? null,
+    pages_planned: job.pages_planned ?? null,
+    progress: job.progress
+      ? {
+          total: job.progress.total,
+          done: job.progress.done,
+          ok: job.progress.ok,
+          fail: job.progress.fail,
+          skipped: job.progress.skipped,
+          percent: job.progress.percent,
+        }
+      : null,
+    outcome: job.outcome || null,
+    pages: (job.pages || []).map((p) => ({
+      page_row_id: p.page_row_id,
+      page_name: p.page_name,
+      page_id: p.page_id,
+      total: p.total,
+      done: p.done,
+      ok: p.ok,
+      fail: p.fail,
+      percent: p.percent,
+      status: p.status,
+      last_error: p.last_error || null,
+    })),
+    failed_tasks: (job.failed_tasks || []).map((t) => ({
+      id: t.id,
+      index: t.index,
+      kind: t.kind,
+      page_row_id: t.page_row_id,
+      page_name: t.page_name,
+      page_id: t.page_id,
+      label: t.label,
+      error: t.error || t.message || "Thất bại",
+      message: t.message || null,
+    })),
+    archived_at: nowIso(),
+  };
+}
+
+function trimHistoryFile(records) {
+  const cutoff = Date.now() - HISTORY_MAX_AGE_MS;
+  const filtered = records.filter((r) => {
+    const t = new Date(r.finished_at || r.archived_at || r.created_at || 0).getTime();
+    return Number.isFinite(t) ? t >= cutoff : true;
+  });
+  // Keep newest MAX_HISTORY (file is append-order; newest at end)
+  return filtered.length > MAX_HISTORY ? filtered.slice(-MAX_HISTORY) : filtered;
+}
+
+function archiveJobHistory(job) {
+  if (!job?.id || !TERMINAL_STATUSES.has(job.status)) return;
+  if (job._history_saved) return;
+  const ids = ensureHistoryIds();
+  if (ids.has(String(job.id))) {
+    job._history_saved = true;
+    return;
+  }
+  try {
+    const dir = path.dirname(JOB_HISTORY_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const row = historySummary(job);
+    fs.appendFileSync(JOB_HISTORY_FILE, JSON.stringify(row) + "\n", "utf8");
+    ids.add(String(job.id));
+    job._history_saved = true;
+
+    // Occasional trim when file grows
+    if (ids.size > MAX_HISTORY + 20) {
+      const all = readHistoryRaw();
+      const trimmed = trimHistoryFile(all);
+      fs.writeFileSync(
+        JOB_HISTORY_FILE,
+        trimmed.map((r) => JSON.stringify(r)).join("\n") + (trimmed.length ? "\n" : ""),
+        "utf8"
+      );
+      historyIdCache = new Set(trimmed.map((r) => String(r.id)));
+    }
+  } catch (e) {
+    console.warn("[jobs history]", e.message);
+  }
+}
+
+function readHistoryRaw() {
+  try {
+    if (!fs.existsSync(JOB_HISTORY_FILE)) return [];
+    const lines = fs.readFileSync(JOB_HISTORY_FILE, "utf8").split(/\r?\n/);
+    const out = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        out.push(JSON.parse(line));
+      } catch {
+        /* skip */
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** List archived jobs (newest first). Summary only — no full task opts. */
+export function listJobHistory(limit = 50) {
+  const all = readHistoryRaw();
+  const byId = new Map();
+  for (const row of all) {
+    if (row?.id) byId.set(String(row.id), row);
+  }
+  return [...byId.values()]
+    .sort(
+      (a, b) =>
+        new Date(b.finished_at || b.archived_at || b.created_at) -
+        new Date(a.finished_at || a.archived_at || a.created_at)
+    )
+    .slice(0, Math.max(1, Math.min(200, Number(limit) || 50)));
+}
+
+export function getJobHistory(id) {
+  if (!id) return null;
+  const want = String(id);
+  const all = readHistoryRaw();
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (String(all[i]?.id) === want) return all[i];
+  }
+  return null;
 }
 
 function restoreJobs() {
@@ -90,12 +281,15 @@ function restoreJobs() {
       }
       recompute(job);
       jobs.set(job.id, job);
+      if (TERMINAL_STATUSES.has(job.status)) {
+        archiveJobHistory(job);
+      }
       if (job._resume) {
         delete job._resume;
         setImmediate(() => runJob(job.id).catch((e) => console.error("[job resume]", e)));
       }
     }
-    persistJobs();
+    persistJobs(true);
   } catch (e) {
     console.warn("[jobs restore]", e.message);
   }
@@ -118,7 +312,9 @@ function trimJobs() {
 }
 
 function emit(job) {
-  persistJobs();
+  const terminal = TERMINAL_STATUSES.has(job.status);
+  if (terminal) archiveJobHistory(job);
+  persistJobs(terminal);
   bus.emit("job", job);
   bus.emit(`job:${job.id}`, job);
 }
@@ -294,11 +490,37 @@ export function subscribeJob(id, fn) {
   return () => bus.off(`job:${id}`, fn);
 }
 
+/**
+ * Lightweight list for discover/poll — avoid cloning full tasks/opts every 1–2s.
+ * Use getJob(id) when UI needs full detail.
+ */
 export function listJobs(limit = 20) {
   return [...jobs.values()]
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
     .slice(0, limit)
-    .map((j) => publicJob(j));
+    .map((j) => ({
+      id: j.id,
+      type: j.type,
+      title: j.title,
+      status: j.status,
+      created_at: j.created_at,
+      started_at: j.started_at,
+      finished_at: j.finished_at,
+      pages_expected: j.pages_expected ?? null,
+      pages_planned: j.pages_planned ?? null,
+      progress: j.progress
+        ? {
+            total: j.progress.total,
+            done: j.progress.done,
+            ok: j.progress.ok,
+            fail: j.progress.fail,
+            skipped: j.progress.skipped,
+            percent: j.progress.percent,
+            current_label: j.progress.current_label,
+          }
+        : null,
+      page_count: Array.isArray(j.pages) ? j.pages.length : 0,
+    }));
 }
 
 export function getJob(id) {
@@ -317,6 +539,15 @@ function publicJob(j) {
 }
 
 restoreJobs();
+
+// Flush throttled persist on process exit so last progress isn't lost
+process.once("exit", () => {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  if (persistDirty) persistJobsNow();
+});
 
 /**
  * Create job from task defs then run async.

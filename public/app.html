@@ -212,7 +212,22 @@
               <span class="hint" id="jobTitle">Chưa chạy</span>
             </h2>
             <div class="panel-body">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:.5rem">
+              <div class="job-history-box" id="jobHistoryBox">
+                <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.45rem">
+                  <div>
+                    <b style="font-size:.85rem">Lịch sử mỗi lần chạy</b>
+                    <div class="muted" style="font-size:.72rem;margin-top:.1rem">Lưu danh sách page OK/FAIL · chọn lần cũ để xem lại</div>
+                  </div>
+                  <div class="actions" style="margin:0;gap:.35rem">
+                    <button type="button" class="btn-ghost btn-sm" id="btnRefreshHistory" title="Làm mới lịch sử">↻</button>
+                    <button type="button" class="btn-ok btn-sm" id="btnFollowLive" style="display:none">● Theo dõi live</button>
+                  </div>
+                </div>
+                <div id="jobHistoryList" class="job-history-list"><p class="muted" style="margin:0;font-size:.8rem">Chưa có lịch sử job.</p></div>
+                <div id="jobHistoryPinHint" class="muted" style="display:none;margin-top:.4rem;font-size:.75rem;color:#e8c96a">📌 Đang xem job đã ghim — không bị job mới cướp màn hình. Bấm «Theo dõi live» để về job đang chạy.</div>
+              </div>
+
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:.5rem;margin-top:.85rem">
                 <div>
                   <span class="pct" id="jobPct">0%</span>
                   <span class="muted" id="jobStats"> · 0/0</span>
@@ -239,7 +254,19 @@
                 <div id="failRetryList" style="margin-top:.55rem;max-height:220px;overflow:auto"></div>
               </div>
 
-              <h3 style="font-size:.85rem;margin:1rem 0 .5rem;color:var(--muted)">Theo page</h3>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap;margin:1rem 0 .5rem">
+                <h3 style="font-size:.85rem;margin:0;color:var(--muted)">Theo page <span id="pageProgressBadge" class="badge" style="margin-left:.35rem">0</span></h3>
+                <div class="actions" style="margin:0;gap:.35rem">
+                  <input type="search" id="pageProgressFilter" placeholder="Tìm page…" style="max-width:140px;padding:.25rem .45rem;font-size:.78rem" />
+                  <select id="pageProgressStatusFilter" style="padding:.25rem .4rem;font-size:.78rem">
+                    <option value="all">Tất cả</option>
+                    <option value="ok">OK</option>
+                    <option value="fail">FAIL / partial</option>
+                    <option value="running">Đang chạy</option>
+                    <option value="pending">Chờ</option>
+                  </select>
+                </div>
+              </div>
               <div id="pageProgress"><p class="muted">Chọn page và bấm chạy.</p></div>
 
               <h3 style="font-size:.85rem;margin:1rem 0 .5rem;color:var(--muted)">Từng nhiệm vụ</h3>
@@ -318,10 +345,19 @@
     let currentJobId = null;
     let pollTimer = null;
     let jobsTimer = null;
+    let historyTimer = null;
     let seenNotifs = new Set();
     const hydratedNotificationJobs = new Set();
     let lastJobErrorToastAt = 0;
     let lastJobErrorMsg = "";
+    /** When set, discoverJobs will not steal focus to a newer live job. */
+    let pinnedJobId = null;
+    let followLive = true;
+    let lastRenderKey = "";
+    let lastRenderedJob = null;
+    let pageFilterQ = "";
+    let pageFilterStatus = "all";
+    let renderRaf = 0;
 
     async function api(path, opts) {
       const res = await fetch(path, {
@@ -601,86 +637,75 @@
       }
     });
 
-    function renderJob(job) {
-      if (!job) return;
-      try {
+    function jobRenderKey(job) {
       const p = job.progress || {};
-      setText("jobTitle", job.title || job.id);
-      setText("jobPct", (p.percent || 0) + "%");
-      const pageN = (job.pages || []).length;
-      const pageExp = job.pages_expected != null ? Number(job.pages_expected) : pageN;
-      const pageLine =
-        pageExp > 0
-          ? ` · Page ${pageN}/${pageExp}${pageN < pageExp ? " ⚠ thiếu page" : ""}`
-          : "";
-      setText(
-        "jobStats",
-        ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}${pageLine}`
-      );
-      setText("jobStatus", statusLabel(job.status));
-      setClass("jobStatus", "badge " + (job.status === "ok" ? "on" : ["fail", "stopped", "interrupted"].includes(job.status) ? "err" : "live"));
-      setStyle("jobBarFill", "width", (p.percent || 0) + "%");
-      setClass("jobBar", "progress-big " + (job.status === "ok" ? "ok" : ["fail", "stopped", "interrupted"].includes(job.status) ? "fail" : ""));
-      setText("jobCurrent", p.current_label || (job.status === "paused" ? "⏸ Đang tạm dừng…" : "—"));
-      const finished = ["ok", "fail", "partial", "stopped", "interrupted"].includes(job.status);
-      const failedList = job.failed_tasks || (job.tasks || []).filter((t) => t.status === "fail");
-      const canRetry = finished && failedList.length > 0;
-      const ctl = $("jobControls");
-      if (ctl) {
-        const active = ["running", "paused", "queued"].includes(job.status);
-        ctl.style.display = active || job.status === "stopped" || canRetry ? "flex" : "none";
-        const pause = $("btnJobPause");
-        const resume = $("btnJobResume");
-        const stop = $("btnJobStop");
-        const retryAll = $("btnRetryAllFailed");
-        if (pause) pause.style.display = job.status === "running" ? "inline-block" : "none";
-        if (resume) resume.style.display = job.status === "paused" ? "inline-block" : "none";
-        if (stop) stop.style.display = active ? "inline-block" : "none";
-        if (retryAll) retryAll.style.display = canRetry ? "inline-block" : "none";
-      }
+      const pagesKey = (job.pages || [])
+        .map((pg) => `${pg.page_row_id}:${pg.status}:${pg.ok}:${pg.fail}:${pg.percent}`)
+        .join(",");
+      const notif0 = (job.notifications && job.notifications[0] && job.notifications[0].id) || "";
+      return [
+        job.id,
+        job.status,
+        p.percent,
+        p.done,
+        p.ok,
+        p.fail,
+        p.current_task_id || "",
+        p.current_label || "",
+        (job.pages || []).length,
+        (job.failed_tasks || []).length,
+        (job.tasks || []).length,
+        notif0,
+        pagesKey,
+        pageFilterQ,
+        pageFilterStatus,
+      ].join("|");
+    }
 
-      // fail panel
-      const failPanel = $("failRetryPanel");
-      if (failPanel) {
-        if (!canRetry) {
-          failPanel.style.display = "none";
-        } else {
-          failPanel.style.display = "block";
-          setText("failRetrySummary", `${failedList.length} nhiệm vụ lỗi · bấm Đăng lại để chạy lại đúng task đó`);
-          const list = $("failRetryList");
-          if (list) {
-            list.innerHTML = failedList.map((t) => {
-              const err = t.error || t.message || "Thất bại";
-              return `<div style="display:grid;grid-template-columns:1fr auto;gap:.5rem;align-items:start;padding:.45rem 0;border-bottom:1px solid rgba(255,107,122,.2)">
-                <div>
-                  <b>${esc(t.page_name || "—")}</b>
-                  <div class="muted" style="font-size:.75rem">${esc(t.label || t.kind || "")}</div>
-                  <div class="task-error">⚠ ${esc(err)}</div>
-                </div>
-                <button type="button" class="btn-primary btn-sm btn-retry-one" data-task-id="${esc(t.id)}" data-job-id="${esc(job.id)}">↻ Đăng lại</button>
-              </div>`;
-            }).join("");
-            list.querySelectorAll(".btn-retry-one").forEach((btn) => {
-              btn.onclick = () => retryFailedTasks(btn.dataset.jobId, { task_ids: [btn.dataset.taskId] });
-            });
-          }
-        }
+    function filteredPages(job) {
+      let list = job.pages || [];
+      const q = pageFilterQ.trim().toLowerCase();
+      if (q) {
+        list = list.filter((pg) => String(pg.page_name || "").toLowerCase().includes(q));
       }
+      if (pageFilterStatus === "ok") list = list.filter((pg) => pg.status === "ok");
+      else if (pageFilterStatus === "fail") {
+        list = list.filter((pg) => pg.status === "fail" || pg.status === "partial" || Number(pg.fail) > 0);
+      } else if (pageFilterStatus === "running") list = list.filter((pg) => pg.status === "running");
+      else if (pageFilterStatus === "pending") list = list.filter((pg) => pg.status === "pending");
+      return list;
+    }
 
-      // pages
+    function renderPageProgress(job, finished) {
       const pp = $("pageProgress");
-      if (pp) {
-        if (!job.pages?.length) pp.innerHTML = "<p class='muted'>—</p>";
-        else {
-          pp.innerHTML = job.pages.map((pg) => {
-            const errBlock = pg.last_error
-              ? `<div class="task-error" style="margin-top:.35rem">⚠ ${esc(pg.last_error)}</div>`
+      const badge = $("pageProgressBadge");
+      if (!pp) return;
+      const all = job.pages || [];
+      const list = filteredPages(job);
+      if (badge) {
+        badge.textContent =
+          pageFilterQ || pageFilterStatus !== "all"
+            ? `${list.length}/${all.length}`
+            : String(all.length);
+      }
+      if (!all.length) {
+        pp.innerHTML = "<p class='muted'>—</p>";
+        return;
+      }
+      if (!list.length) {
+        pp.innerHTML = "<p class='muted'>Không có page khớp bộ lọc.</p>";
+        return;
+      }
+      pp.innerHTML = list
+        .map((pg) => {
+          const errBlock = pg.last_error
+            ? `<div class="task-error" style="margin-top:.35rem">⚠ ${esc(pg.last_error)}</div>`
+            : "";
+          const retryBtn =
+            finished && pg.fail > 0 && pg.page_row_id && job.tasks
+              ? `<button type="button" class="btn-primary btn-sm btn-retry-page" data-page-id="${Number(pg.page_row_id)}" data-job-id="${esc(job.id)}" style="margin-top:.4rem">↻ Đăng lại page này (${pg.fail} lỗi)</button>`
               : "";
-            const retryBtn =
-              finished && pg.fail > 0 && pg.page_row_id
-                ? `<button type="button" class="btn-primary btn-sm btn-retry-page" data-page-id="${Number(pg.page_row_id)}" data-job-id="${esc(job.id)}" style="margin-top:.4rem">↻ Đăng lại page này (${pg.fail} lỗi)</button>`
-                : "";
-            return `
+          return `
             <div class="page-card ${esc(pg.status)}">
               <div style="display:flex;justify-content:space-between;gap:.5rem">
                 <b>${esc(pg.page_name)}</b>
@@ -691,34 +716,149 @@
               ${errBlock}
               ${retryBtn}
             </div>`;
-          }).join("");
-          pp.querySelectorAll(".btn-retry-page").forEach((btn) => {
-            btn.onclick = () =>
-              retryFailedTasks(btn.dataset.jobId, {
-                page_row_ids: [Number(btn.dataset.pageId)],
-              });
+        })
+        .join("");
+      pp.querySelectorAll(".btn-retry-page").forEach((btn) => {
+        btn.onclick = () =>
+          retryFailedTasks(btn.dataset.jobId, {
+            page_row_ids: [Number(btn.dataset.pageId)],
           });
-        }
-      }
+      });
+    }
 
-      // tasks
-      const tl = $("taskList");
-      if (tl) {
-        tl.innerHTML = (job.tasks || []).map((t) => {
-          const isFail = t.status === "fail";
-          const err = isFail ? (t.error || t.message || "Thất bại") : "";
-          const retryBtn =
-            finished && isFail
-              ? `<button type="button" class="btn-primary btn-sm btn-retry-task" data-task-id="${esc(t.id)}" data-job-id="${esc(job.id)}" style="margin-top:.35rem">↻ Đăng lại</button>`
-              : "";
-          return `
+    function scheduleRenderJob(job) {
+      lastRenderedJob = job;
+      if (renderRaf) return;
+      renderRaf = requestAnimationFrame(() => {
+        renderRaf = 0;
+        if (lastRenderedJob) renderJob(lastRenderedJob, { force: false });
+      });
+    }
+
+    function renderJob(job, { force = false } = {}) {
+      if (!job) return;
+      try {
+        const key = jobRenderKey(job);
+        if (!force && key === lastRenderKey) return;
+        lastRenderKey = key;
+        lastRenderedJob = job;
+
+        const p = job.progress || {};
+        setText("jobTitle", job.title || job.id);
+        setText("jobPct", (p.percent || 0) + "%");
+        const pageN = (job.pages || []).length;
+        const pageExp = job.pages_expected != null ? Number(job.pages_expected) : pageN;
+        const pageLine =
+          pageExp > 0
+            ? ` · Page ${pageN}/${pageExp}${pageN < pageExp ? " ⚠ thiếu page" : ""}`
+            : "";
+        setText(
+          "jobStats",
+          ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}${pageLine}`
+        );
+        setText("jobStatus", statusLabel(job.status));
+        setClass(
+          "jobStatus",
+          "badge " +
+            (job.status === "ok"
+              ? "on"
+              : ["fail", "stopped", "interrupted"].includes(job.status)
+                ? "err"
+                : "live")
+        );
+        setStyle("jobBarFill", "width", (p.percent || 0) + "%");
+        setClass(
+          "jobBar",
+          "progress-big " +
+            (job.status === "ok"
+              ? "ok"
+              : ["fail", "stopped", "interrupted"].includes(job.status)
+                ? "fail"
+                : "")
+        );
+        setText(
+          "jobCurrent",
+          p.current_label || (job.status === "paused" ? "⏸ Đang tạm dừng…" : "—")
+        );
+        const finished = ["ok", "fail", "partial", "stopped", "interrupted"].includes(job.status);
+        const failedList =
+          job.failed_tasks || (job.tasks || []).filter((t) => t.status === "fail");
+        const canRetry = finished && failedList.length > 0 && Array.isArray(job.tasks);
+        const ctl = $("jobControls");
+        if (ctl) {
+          const active = ["running", "paused", "queued"].includes(job.status);
+          ctl.style.display = active || job.status === "stopped" || canRetry ? "flex" : "none";
+          const pause = $("btnJobPause");
+          const resume = $("btnJobResume");
+          const stop = $("btnJobStop");
+          const retryAll = $("btnRetryAllFailed");
+          if (pause) pause.style.display = job.status === "running" ? "inline-block" : "none";
+          if (resume) resume.style.display = job.status === "paused" ? "inline-block" : "none";
+          if (stop) stop.style.display = active ? "inline-block" : "none";
+          if (retryAll) retryAll.style.display = canRetry ? "inline-block" : "none";
+        }
+
+        const failPanel = $("failRetryPanel");
+        if (failPanel) {
+          if (!canRetry) {
+            failPanel.style.display = "none";
+          } else {
+            failPanel.style.display = "block";
+            setText(
+              "failRetrySummary",
+              `${failedList.length} nhiệm vụ lỗi · bấm Đăng lại để chạy lại đúng task đó`
+            );
+            const list = $("failRetryList");
+            if (list) {
+              list.innerHTML = failedList
+                .map((t) => {
+                  const err = t.error || t.message || "Thất bại";
+                  return `<div style="display:grid;grid-template-columns:1fr auto;gap:.5rem;align-items:start;padding:.45rem 0;border-bottom:1px solid rgba(255,107,122,.2)">
+                <div>
+                  <b>${esc(t.page_name || "—")}</b>
+                  <div class="muted" style="font-size:.75rem">${esc(t.label || t.kind || "")}</div>
+                  <div class="task-error">⚠ ${esc(err)}</div>
+                </div>
+                <button type="button" class="btn-primary btn-sm btn-retry-one" data-task-id="${esc(t.id)}" data-job-id="${esc(job.id)}">↻ Đăng lại</button>
+              </div>`;
+                })
+                .join("");
+              list.querySelectorAll(".btn-retry-one").forEach((btn) => {
+                btn.onclick = () =>
+                  retryFailedTasks(btn.dataset.jobId, { task_ids: [btn.dataset.taskId] });
+              });
+            }
+          }
+        }
+
+        renderPageProgress(job, finished);
+
+        const tl = $("taskList");
+        if (tl) {
+          const tasks = job.tasks || [];
+          if (!tasks.length) {
+            tl.innerHTML = finished
+              ? "<p class='muted'>Bản lịch sử không lưu từng task chi tiết — xem danh sách page phía trên.</p>"
+              : "<p class='muted'>—</p>";
+          } else {
+            tl.innerHTML = tasks
+              .map((t) => {
+                const isFail = t.status === "fail";
+                const err = isFail ? t.error || t.message || "Thất bại" : "";
+                const retryBtn =
+                  finished && isFail
+                    ? `<button type="button" class="btn-primary btn-sm btn-retry-task" data-task-id="${esc(t.id)}" data-job-id="${esc(job.id)}" style="margin-top:.35rem">↻ Đăng lại</button>`
+                    : "";
+                return `
           <div class="task-row ${isFail ? "fail-row" : ""}">
             <div>
               <b>${esc(t.page_name)}</b>
               <div class="muted">${esc(t.label || "")}</div>
-              ${isFail
-                ? `<div class="task-error">⚠ ${esc(err)}</div>${retryBtn}`
-                : `<div class="muted" style="margin-top:.15rem">${esc(t.message || "")}</div>`}
+              ${
+                isFail
+                  ? `<div class="task-error">⚠ ${esc(err)}</div>${retryBtn}`
+                  : `<div class="muted" style="margin-top:.15rem">${esc(t.message || "")}</div>`
+              }
             </div>
             <div class="${t.status === "ok" ? "ok" : isFail ? "fail" : "muted"}">${esc(statusLabel(t.status))}</div>
             <div>
@@ -726,65 +866,164 @@
               <div class="muted" style="font-size:.7rem;margin-top:.15rem">${t.percent || 0}%</div>
             </div>
           </div>`;
-        }).join("");
-        tl.querySelectorAll(".btn-retry-task").forEach((btn) => {
-          btn.onclick = () => retryFailedTasks(btn.dataset.jobId, { task_ids: [btn.dataset.taskId] });
-        });
-      }
-
-      // Detailed notifications stay in the panel. Popups only show genuinely
-      // new updates, are batched, capped at 3 and never replay old history.
-      const notifications = job.notifications || [];
-      if (!hydratedNotificationJobs.has(job.id)) {
-        notifications.forEach((n) => seenNotifs.add(n.id));
-        hydratedNotificationJobs.add(job.id);
-      } else {
-        const fresh = notifications.filter((n) => !seenNotifs.has(n.id));
-        fresh.forEach((n) => seenNotifs.add(n.id));
-        if (fresh.length > 3) {
-          const errors = fresh.filter((n) => n.level === "error").length;
-          const successes = fresh.filter((n) => n.level === "success").length;
-          toast(
-            errors ? "error" : "success",
-            `${fresh.length} cập nhật mới`,
-            `OK ${successes} · FAIL ${errors}. Xem chi tiết trong bảng Thông báo bên dưới.`
-          );
-        } else {
-          for (const n of fresh.slice(0, 3).reverse()) {
-            toast(n.level === "error" ? "error" : n.level === "warn" ? "warn" : "success", n.title, n.body);
+              })
+              .join("");
+            tl.querySelectorAll(".btn-retry-task").forEach((btn) => {
+              btn.onclick = () =>
+                retryFailedTasks(btn.dataset.jobId, { task_ids: [btn.dataset.taskId] });
+            });
           }
         }
-      }
 
-      const box = $("notifs");
-      if (box) {
-        if (!notifications.length) box.innerHTML = "<p class='muted'>—</p>";
-        else {
-          box.innerHTML = notifications.map((n) => `
+        const notifications = job.notifications || [];
+        if (!hydratedNotificationJobs.has(job.id)) {
+          notifications.forEach((n) => seenNotifs.add(n.id));
+          hydratedNotificationJobs.add(job.id);
+        } else {
+          const fresh = notifications.filter((n) => !seenNotifs.has(n.id));
+          fresh.forEach((n) => seenNotifs.add(n.id));
+          if (fresh.length > 3) {
+            const errors = fresh.filter((n) => n.level === "error").length;
+            const successes = fresh.filter((n) => n.level === "success").length;
+            toast(
+              errors ? "error" : "success",
+              `${fresh.length} cập nhật mới`,
+              `OK ${successes} · FAIL ${errors}. Xem chi tiết trong bảng Thông báo bên dưới.`
+            );
+          } else {
+            for (const n of fresh.slice(0, 3).reverse()) {
+              toast(
+                n.level === "error" ? "error" : n.level === "warn" ? "warn" : "success",
+                n.title,
+                n.body
+              );
+            }
+          }
+        }
+
+        const box = $("notifs");
+        if (box) {
+          if (!notifications.length) box.innerHTML = "<p class='muted'>—</p>";
+          else {
+            box.innerHTML = notifications
+              .map(
+                (n) => `
             <div style="padding:.45rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
               <span class="${n.level === "error" ? "fail" : n.level === "success" ? "ok" : "muted"}">[${esc(n.level)}]</span>
               <b>${esc(n.title)}</b>
               <div class="muted">${esc(n.body)} · ${esc(fmtVn(n.at))} giờ VN</div>
             </div>
-          `).join("");
+          `
+              )
+              .join("");
+          }
         }
-      }
 
-      if (job.report_files?.length) {
-        setText("reportPath", "Đã ghi: " + job.report_files.map((f) => f.split(/[/\\]/).pop()).join(", "));
-      }
+        if (job.report_files?.length) {
+          setText(
+            "reportPath",
+            "Đã ghi: " + job.report_files.map((f) => f.split(/[/\\]/).pop()).join(", ")
+          );
+        }
 
-      if (["ok", "fail", "partial", "stopped", "interrupted"].includes(job.status)) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        loadLogs();
-      }
-      const active = ["running", "paused", "queued"].includes(job.status);
-      setText("opsState", active ? (job.status === "paused" ? "Tạm dừng" : "Đang chạy") : "Sẵn sàng");
+        if (["ok", "fail", "partial", "stopped", "interrupted"].includes(job.status)) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          loadLogs();
+          loadJobHistory();
+        }
+        const active = ["running", "paused", "queued"].includes(job.status);
+        setText("opsState", active ? (job.status === "paused" ? "Tạm dừng" : "Đang chạy") : "Sẵn sàng");
+        updateHistoryPinUi();
       } catch (e) {
         console.warn("[renderJob]", e);
         toastJobError(e.message || String(e));
       }
+    }
+
+    function updateHistoryPinUi() {
+      const btn = $("btnFollowLive");
+      const hint = $("jobHistoryPinHint");
+      const pinned = !followLive && !!pinnedJobId;
+      if (btn) btn.style.display = pinned ? "inline-block" : "none";
+      if (hint) hint.style.display = pinned ? "block" : "none";
+      document.querySelectorAll(".job-history-item").forEach((el) => {
+        el.classList.toggle("active", el.dataset.jobId === String(currentJobId || ""));
+        el.classList.toggle("pinned", pinned && el.dataset.jobId === String(pinnedJobId || ""));
+      });
+    }
+
+    async function loadJobHistory() {
+      const box = $("jobHistoryList");
+      if (!box) return;
+      try {
+        const data = await api("/api/jobs/history?limit=40");
+        const list = data.jobs || [];
+        if (!list.length) {
+          box.innerHTML = "<p class='muted' style='margin:0;font-size:.8rem'>Chưa có lịch sử — chạy 1 job rồi quay lại đây.</p>";
+          return;
+        }
+        box.innerHTML = list
+          .map((j) => {
+            const p = j.progress || {};
+            const pageN = (j.pages || []).length;
+            const when = fmtVn(j.finished_at || j.created_at);
+            const st = statusLabel(j.status);
+            return `<button type="button" class="job-history-item" data-job-id="${esc(j.id)}" title="${esc(j.title || "")}">
+              <span class="jh-title">${esc(j.title || j.id)}</span>
+              <span class="jh-meta">${esc(st)} · OK ${p.ok || 0}/${p.total || 0} · ${pageN} page · ${esc(when)}</span>
+            </button>`;
+          })
+          .join("");
+        box.querySelectorAll(".job-history-item").forEach((btn) => {
+          btn.onclick = () => pinAndShowJob(btn.dataset.jobId);
+        });
+        updateHistoryPinUi();
+      } catch (e) {
+        box.innerHTML = `<p class="muted" style="margin:0;font-size:.8rem">Không tải lịch sử: ${esc(e.message)}</p>`;
+      }
+    }
+
+    async function pinAndShowJob(id) {
+      if (!id) return;
+      pinnedJobId = id;
+      followLive = false;
+      clearInterval(pollTimer);
+      pollTimer = null;
+      currentJobId = id;
+      lastRenderKey = "";
+      try {
+        const live = await api("/api/jobs/" + id).catch(() => null);
+        if (live?.job) {
+          renderJob(live.job, { force: true });
+          if (["running", "paused", "queued"].includes(live.job.status)) {
+            pollTimer = setInterval(async () => {
+              try {
+                const data = await api("/api/jobs/" + id);
+                scheduleRenderJob(data.job);
+              } catch (e) {
+                toastJobError(e.message);
+              }
+            }, 1200);
+          }
+        } else {
+          const hist = await api("/api/jobs/history/" + id);
+          renderJob(hist.job, { force: true });
+        }
+        toast("info", "Đã ghim job", "Đang xem lần chạy đã chọn");
+      } catch (e) {
+        toast("error", "Không mở được job", e.message);
+      }
+      updateHistoryPinUi();
+    }
+
+    function enableFollowLive() {
+      pinnedJobId = null;
+      followLive = true;
+      lastRenderKey = "";
+      updateHistoryPinUi();
+      discoverJobs({ quiet: true });
+      toast("success", "Theo dõi live", "Sẽ theo job đang chạy / mới nhất");
     }
 
     async function retryFailedTasks(jobId, filters = {}) {
@@ -801,7 +1040,11 @@
           body: JSON.stringify(filters),
         });
         toast("success", "Đăng lại", r.job?.title || "Đã tạo job retry");
-        if (r.job?.id) watchJob(r.job.id);
+        if (r.job?.id) {
+          followLive = true;
+          pinnedJobId = null;
+          watchJob(r.job.id);
+        }
       } catch (e) {
         toast("error", "Đăng lại thất bại", e.message);
       }
@@ -809,16 +1052,27 @@
 
     $("btnRetryAllFailed")?.addEventListener("click", () => retryFailedTasks(currentJobId, {}));
     $("btnRetryAllFailed2")?.addEventListener("click", () => retryFailedTasks(currentJobId, {}));
+    $("btnRefreshHistory")?.addEventListener("click", () => loadJobHistory());
+    $("btnFollowLive")?.addEventListener("click", () => enableFollowLive());
+    $("pageProgressFilter")?.addEventListener("input", (e) => {
+      pageFilterQ = e.target.value || "";
+      if (lastRenderedJob) renderJob(lastRenderedJob, { force: true });
+    });
+    $("pageProgressStatusFilter")?.addEventListener("change", (e) => {
+      pageFilterStatus = e.target.value || "all";
+      if (lastRenderedJob) renderJob(lastRenderedJob, { force: true });
+    });
 
     async function watchJob(id) {
       if (!id) return;
       if (currentJobId === id && pollTimer) return;
       currentJobId = id;
+      lastRenderKey = "";
       clearInterval(pollTimer);
       const pull = async () => {
         try {
           const data = await api("/api/jobs/" + id);
-          renderJob(data.job);
+          scheduleRenderJob(data.job);
           if (data.reports) {
             setText(
               "reportPath",
@@ -833,10 +1087,11 @@
         }
       };
       await pull();
-      pollTimer = setInterval(pull, 800);
+      pollTimer = setInterval(pull, 1200);
     }
 
-    async function discoverJobs() {
+    async function discoverJobs({ quiet = false } = {}) {
+      if (!followLive) return;
       try {
         const data = await api("/api/jobs");
         const list = data.jobs || [];
@@ -844,14 +1099,25 @@
         const target = active || list[0];
         if (target && target.id !== currentJobId) {
           await watchJob(target.id);
-          toast(active ? "info" : "success", active ? "Đã phát hiện job đang chạy" : "Đã tải job gần nhất", target.title || target.id);
+          if (!quiet) {
+            toast(
+              active ? "info" : "success",
+              active ? "Đã phát hiện job đang chạy" : "Đã tải job gần nhất",
+              target.title || target.id
+            );
+          }
+        } else if (target && target.id === currentJobId && !pollTimer) {
+          await watchJob(target.id);
         } else if (!target && !currentJobId) {
           setText("opsState", "Sẵn sàng");
-          setText("jobCurrent", "Không có job trong bộ nhớ. Hoạt động gần đây vẫn hiển thị ở báo cáo bên dưới.");
+          setText(
+            "jobCurrent",
+            "Không có job trong bộ nhớ. Chọn một lần chạy trong lịch sử bên trên hoặc tạo job mới."
+          );
         }
       } catch (e) {
         setText("opsState", "Mất kết nối");
-        toast("error", "Không đọc được tiến trình", e.message);
+        if (!quiet) toast("error", "Không đọc được tiến trình", e.message);
       }
     }
 
@@ -977,8 +1243,15 @@
       setText("reportPath", r.dir || "data/exports");
     }).catch(() => {});
 
-    loadPages().then(loadLogs).then(discoverJobs).then(loadRuntime).then(loadRotationSummary).catch((e) => toast("error", "Lỗi dashboard", e.message));
-    jobsTimer = setInterval(discoverJobs, 1500);
+    loadPages()
+      .then(loadLogs)
+      .then(() => discoverJobs({ quiet: true }))
+      .then(loadJobHistory)
+      .then(loadRuntime)
+      .then(loadRotationSummary)
+      .catch((e) => toast("error", "Lỗi dashboard", e.message));
+    jobsTimer = setInterval(() => discoverJobs({ quiet: true }), 2500);
+    historyTimer = setInterval(loadJobHistory, 12000);
     setInterval(loadLogs, 10000);
     setInterval(loadRuntime, 3000);
   </script>
