@@ -15,6 +15,7 @@ import {
   resumeJob,
   retryFailedJob,
 } from "../services/jobRunner.js";
+import { reconcileJobWithFacebook } from "../services/jobFbCheck.js";
 import { scheduleBulk } from "../services/schedule.js";
 import { getReportPaths } from "../services/reportExport.js";
 import {
@@ -73,6 +74,16 @@ router.get("/history/:id", (req, res) => {
   const job = getJobHistory(req.params.id);
   if (!job) return res.status(404).json({ error: "Không tìm thấy job trong lịch sử" });
   res.json({ job });
+});
+
+/** POST /api/jobs/:id/fb-check — đối soát từng task với Graph API */
+router.post("/:id/fb-check", async (req, res) => {
+  try {
+    const r = await reconcileJobWithFacebook(req.params.id);
+    res.json(r);
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
 });
 
 /** Reports — before /:id */
@@ -232,7 +243,17 @@ router.post("/rotation/run-now", (req, res) => {
       }
       const plan = buildRunNowPlan(body);
       const planId = saveRunNowPlan(plan);
-      return res.json({ ok: true, dry_run: true, plan_id: planId, ...plan });
+      const delivery = String(body.delivery || body.delivery_mode || "direct");
+      return res.json({
+        ok: true,
+        dry_run: true,
+        plan_id: planId,
+        delivery:
+          delivery === "fb_scheduled" || delivery === "facebook" || delivery === "schedule"
+            ? "fb_scheduled"
+            : "direct",
+        ...plan,
+      });
     }
     const planId = String(body.plan_id || "");
     const saved = runNowPlans.get(planId);
@@ -285,6 +306,54 @@ router.post("/rotation/run-now", (req, res) => {
       });
     }
     const continuous = !!(body.continuous ?? plan.settings?.run_now_continuous);
+    const delivery = String(body.delivery || body.delivery_mode || "direct");
+    const wantFb =
+      delivery === "fb_scheduled" ||
+      delivery === "facebook" ||
+      delivery === "schedule";
+
+    if (wantFb) {
+      const minUnix = Math.floor(Date.now() / 1000) + 10 * 60;
+      const burstGapSec = 15;
+      const lastByPage = new Map();
+      const slots = [];
+      for (const s of plan.slots || []) {
+        let unix = Number(s.unix) || 0;
+        if (unix < minUnix) unix = minUnix;
+        const prev = lastByPage.get(s.page_row_id) || 0;
+        if (unix <= prev) unix = prev + burstGapSec;
+        lastByPage.set(s.page_row_id, unix);
+        slots.push({
+          page_row_id: s.page_row_id,
+          page_name: s.page_name,
+          page_id: s.page_id,
+          unix,
+          local_label: `${s.order || ""}. ${s.window_name || s.group_name || ""} · ${s.page_name} · bài${s.post_round || 1} · ${s.local_label || unix}`,
+          post_type: s.planned_post_type || body.post_type || "video",
+        });
+      }
+      if (!slots.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "Không có slot để hẹn Facebook (lịch trống).",
+          plan,
+        });
+      }
+      const job = startBulkScheduleJob({
+        slots,
+        title: `Chuẩn mới · Hẹn FB · ${slots.length} slot · ${plan.summary?.pages_planned || 0} page`,
+        pages_expected: plan.summary?.pages_requested ?? null,
+        pages_planned: plan.summary?.pages_planned ?? null,
+      });
+      return res.json({
+        ok: true,
+        delivery: "fb_scheduled",
+        job,
+        plan_summary: plan.summary,
+        reports: getReportPaths(),
+      });
+    }
+
     const tasks = plan.slots.map((s) => ({
       kind: "post",
       page_row_id: s.page_row_id,
@@ -298,6 +367,7 @@ router.post("/rotation/run-now", (req, res) => {
         // Direct Local: gap đã có trong lịch job — không chặn lại bằng quota/anti Page
         ignore_quota: true,
         ignore_interval: true,
+        burst: !!s.burst,
         post_type: s.planned_post_type,
         run_at: s.iso,
       },
@@ -331,6 +401,11 @@ router.post("/rotation/run-now", (req, res) => {
             between_tasks_gap_minutes_max:
               body.between_tasks_gap_minutes_max ?? plan.settings?.between_tasks_gap_minutes_max,
             run_now_continuous: true,
+            split_pages_across_windows:
+              body.split_pages_across_windows ??
+              plan.settings?.split_pages_across_windows,
+            burst_same_page:
+              body.burst_same_page ?? plan.settings?.burst_same_page,
           }
         : null,
       next_plan_day: continuous ? plan.summary?.next_plan_day || null : null,
@@ -561,9 +636,9 @@ router.post("/:id/retry-failed", (req, res) => {
 
 /** GET /api/jobs/:id */
 router.get("/:id", (req, res) => {
-  const job = getJob(req.params.id);
+  const job = getJob(req.params.id) || getJobHistory(req.params.id);
   if (!job) return res.status(404).json({ error: "Job not found" });
-  res.json({ job, reports: getReportPaths() });
+  res.json({ job, reports: getReportPaths(), from_history: !getJob(req.params.id) });
 });
 
 /** SSE progress */

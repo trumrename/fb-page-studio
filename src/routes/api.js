@@ -10,6 +10,7 @@ import {
   getUserToken,
   getPagePublic,
   diagnoseAccountPages,
+  importFromAccessToken,
 } from "../services/accounts.js";
 import {
   enrichPageById,
@@ -69,6 +70,7 @@ import { getNgrokStatus, startNgrok, stopNgrok } from "../services/ngrokManager.
 import {
   listMetaAppsPublic,
   resolveOauthRedirectUri,
+  assertMetaAppConfigured,
 } from "../services/metaApps.js";
 import {
   DEFAULT_FB_REDIRECT_URI,
@@ -1451,6 +1453,46 @@ router.post("/update/apply", async (req, res) => {
 /** GET /api/accounts — all connected Facebook users */
 router.get("/accounts", (_req, res) => {
   res.json({ accounts: listAccounts() });
+});
+
+/**
+ * POST /api/accounts/import-token
+ * Body: { access_token, label? }
+ * label = tên hiển thị trên máy (Token 1 / Token 2 / tên app BM). Không chọn App OAuth.
+ * Graph luôn dùng App 1 (appsecret_proof) — không map sang FB_APP_SECRET_2.
+ * System User / user token → list all BM-assigned Pages (no via).
+ * Page token(s) → store each Page token for Graph publish.
+ */
+router.post("/accounts/import-token", async (req, res) => {
+  try {
+    const accessToken = String(
+      req.body?.access_token || req.body?.token || ""
+    ).trim();
+    const label = String(req.body?.label || req.body?.name || "").trim();
+    const metaAppKey = "app1";
+    let app = {};
+    try {
+      app = assertMetaAppConfigured(metaAppKey);
+    } catch {
+      app = {
+        key: metaAppKey,
+        appId: process.env.FB_APP_ID || "",
+        appSecret: String(process.env.FB_APP_SECRET || "").trim(),
+      };
+    }
+    const result = await importFromAccessToken(accessToken, {
+      metaAppKey,
+      label,
+      app: {
+        appId: app.appId,
+        appSecret: app.appSecret,
+      },
+    });
+    res.json(result);
+  } catch (e) {
+    console.error("[import-token]", e);
+    res.status(400).json({ ok: false, error: e.message, fb: e.fb || null });
+  }
 });
 
 /** GET /api/accounts/:id */

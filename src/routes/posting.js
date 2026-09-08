@@ -38,6 +38,7 @@ import {
   deletePageGroup,
   resolveGroupToPageIds,
 } from "../services/selectionGroups.js";
+import { splitPagesByToken } from "../services/tokenSplit.js";
 
 const router = Router();
 const POSTING_WORKSPACE_KEY = "posting_workspace_v1";
@@ -198,6 +199,18 @@ router.post("/selection-groups/resolve", (req, res) => {
   try {
     const r = resolveGroupToPageIds(req.body || {});
     res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** POST /api/posting/split-by-token  { pages_per_token?: 15 } */
+router.post("/split-by-token", async (req, res) => {
+  try {
+    const r = await splitPagesByToken({
+      pages_per_token: req.body?.pages_per_token,
+    });
+    res.json(r);
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }

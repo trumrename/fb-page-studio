@@ -99,7 +99,14 @@ check("job runner waits locally then calls direct publish", jr.includes("waitUnt
 const pageLock = read("src/services/pageOperationLock.js");
 const poster = read("src/services/poster.js");
 const schedule = read("src/services/schedule.js");
-check("publishing serializes work per Page", pageLock.includes("withPageOperationLock") && poster.includes("withPageOperationLock(pageRowId") && schedule.includes("withPageOperationLock(pageRowId"));
+check(
+  "publishing serializes work per Page (burst up to 3)",
+  pageLock.includes("withPageOperationLock") &&
+    pageLock.includes("maxConcurrent") &&
+    poster.includes("withPageOperationLock") &&
+    poster.includes("opts.burst ? 3 : 1") &&
+    schedule.includes("withPageOperationLock(pageRowId")
+);
 check("no parallel Promise.all posts in runner", !/Promise\.all\([^)]*runOnePost/.test(jr));
 check("job runner live resource snapshot", jr.includes("refreshResources") && jr.includes("job.resources"));
 check("live resources deduplicate Media and Caption as separate shared pools", jr.includes("media_pools") && jr.includes("caption_pools") && read("public/posting.html").includes("mediaPools") && read("public/posting.html").includes("captionPools"));
@@ -294,6 +301,48 @@ check(
 );
 check(".env writes reject line injection and preserve literal dollar signs", apiRoutes.includes("không được chứa xuống dòng") && apiRoutes.includes("(_match, prefix)") && apiRoutes.includes("Authtoken Ngrok không đúng định dạng"));
 check("UI meta app badge on accounts", index.includes("meta_app") || index.includes("appLabel"));
+check(
+  "Import token BM uses nickname not OAuth App 1/2",
+  index.includes("importTokenLabel") &&
+    index.includes("Token 1") &&
+    !index.includes("importTokenApp") &&
+    index.includes("label: ($(\"importTokenLabel\")") &&
+    apiRoutes.includes("Body: { access_token, label? }") &&
+    apiRoutes.includes('const metaAppKey = "app1"') &&
+    acc.includes("sanitizeAccountLabel")
+);
+check(
+  "Direct Local default windows 06-08 and 18-20 VN, all pages both windows",
+  rot.includes('start: "06:00"') &&
+    rot.includes('end: "08:00"') &&
+    rot.includes('start: "18:00"') &&
+    rot.includes('end: "20:00"') &&
+    rot.includes("split_pages_across_windows: false") &&
+    posting.includes("rotSplitPagesWindows") &&
+    posting.includes("rotNowWindows")
+);
+check(
+  "Burst 3 videos same page parallel within 30s",
+  jr.includes("runBurstParallel") &&
+    rot.includes("burst_same_page") &&
+    rot.includes("buildSplitWindowBurstSlots")
+);
+check(
+  "UI bulk schedule 4th mode Chuẩn mới Sáng/Tối",
+  posting.includes("bulkModeStandard") &&
+    posting.includes("standard_burst") &&
+    posting.includes("runStandardBurstFromBulk") &&
+    posting.includes("bulkStdWindows") &&
+    posting.includes("Chuẩn mới")
+);
+check(
+  "Chuẩn mới can schedule Facebook or run Direct Local",
+  posting.includes("bulkStdDeliveryFb") &&
+    posting.includes("fb_scheduled") &&
+    posting.includes("bulkStdDeliveryDirect") &&
+    jobs.includes('delivery === "fb_scheduled"') &&
+    jobs.includes("startBulkScheduleJob")
+);
 check("UI exports Page information per App", index.includes("btnExportDailyPages") && index.includes("/api/reports/daily/pages"));
 check("manual Page report refreshes follower data", index.includes("refresh_followers"));
 
@@ -323,9 +372,9 @@ check(
 );
 check("fresh database Page config includes active/preferred hours", /CREATE TABLE IF NOT EXISTS page_post_config[\s\S]{0,1200}active_hours_json TEXT[\s\S]{0,300}preferred_hours_json TEXT/.test(read("src/db/index.js")));
 check("clean runtime smoke test is part of npm test", fs.existsSync(path.join(root, "scripts/test-clean-runtime.mjs")) && JSON.parse(read("package.json")).scripts.test.includes("test-clean-runtime.mjs"));
-check("navigation tabs map to distinct workspaces", shell.includes('dataset.view = view') && shell.includes('itemHash === hash') && css.includes('body[data-view="rotation"]') && css.includes('body[data-view="reports"]'));
+check("navigation tabs map to distinct workspaces", shell.includes("dataset.view = view") && shell.includes("itemHash === normHash") && css.includes('body[data-view="rotation"]') && css.includes('body[data-view="reports"]'));
 check("dashboard has unique logs target", (dashboard.match(/id="logs"/g) || []).length === 1 && dashboard.includes('id="logsSection"'));
-check("dashboard auto-discovers active jobs", dashboard.includes("discoverJobs") && dashboard.includes("setInterval(discoverJobs"));
+check("dashboard auto-discovers active jobs", dashboard.includes("discoverJobs") && dashboard.includes("setInterval(() => discoverJobs"));
 check("dashboard popups are closable, capped and do not replay history", dashboard.includes("toast-close") && dashboard.includes("wrap.children.length >= 3") && dashboard.includes("hydratedNotificationJobs") && dashboard.includes("fresh.length > 3"));
 check("dashboard shows live operation summary", ["opsState", "opsToday", "opsSuccess", "opsFail"].every((x) => dashboard.includes(x)));
 check("dashboard displays Vietnam time", dashboard.includes("fmtVn") && dashboard.includes("Asia/Ho_Chi_Minh"));

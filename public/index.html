@@ -160,6 +160,41 @@
           </div>
         </div>
 
+        <section class="panel" id="tokenImportPanel" style="margin-bottom:1rem;border-color:rgba(139,92,246,.35)">
+          <h2 class="panel-hd">Import token BM / Page <span class="badge">Không cần via</span></h2>
+          <div class="panel-body">
+            <p class="muted" style="margin-top:0">
+              Đăng bài bằng <b>Page token / System User token</b> — Graph API, không add Page vào nick via.
+              Một token System User trong Business Manager kéo được mọi Page đã gán <b>CREATE_CONTENT</b> cho user đó.
+            </p>
+            <ol class="muted" style="margin:.35rem 0 .85rem;padding-left:1.2rem;font-size:.84rem;line-height:1.55">
+              <li>Business Settings → <b>Users → System users</b> → tạo System User (Admin) nếu chưa có.</li>
+              <li>Assign assets → chọn Page (có thể chọn hàng loạt) → quyền <b>Content / Full control</b>.</li>
+              <li>Generate token trên <b>app Meta của bạn</b>: <code>pages_show_list</code>, <code>pages_manage_posts</code>, <code>pages_read_engagement</code>, <code>business_management</code>.</li>
+              <li>Dán token vào ô dưới → Import. Không dán token lấy từ web lạ.</li>
+            </ol>
+            <label style="display:block">Token (một System User, hoặc nhiều Page token — mỗi dòng một token)
+              <textarea id="importTokenText" rows="4" placeholder="EAAB… hoặc dán nhiều token, mỗi dòng một cái" style="width:100%;margin-top:.35rem;font-family:ui-monospace,monospace;font-size:.8rem;resize:vertical" autocomplete="off"></textarea>
+            </label>
+            <div class="toolbar" style="margin-top:.65rem;align-items:end">
+              <label style="flex:1;min-width:240px">Tên token (máy này)
+                <input id="importTokenLabel" type="text" list="importTokenLabelHints"
+                  placeholder="Token 1, Token 2, hoặc tên app trong BM" autocomplete="off" />
+                <datalist id="importTokenLabelHints">
+                  <option value="Token 1"></option>
+                  <option value="Token 2"></option>
+                </datalist>
+              </label>
+              <button class="btn-ok" id="btnImportToken" type="button">Import token → lấy Page</button>
+              <span id="importTokenStatus" class="muted" style="font-size:.84rem"></span>
+            </div>
+            <p class="muted" style="margin:.4rem 0 0;font-size:.78rem">
+              Chỉ đặt tên để phân biệt 2 token trên máy (vd. Token 1 / Token 2).
+              <b>Không</b> chọn App OAuth 1/2 — Graph luôn dùng App 1 đã lưu ở Bước 1.
+            </p>
+          </div>
+        </section>
+
         <section class="panel" id="domainSetup" style="margin-bottom:1rem">
           <h2 class="panel-hd">Bước 2 · OAuth domain &amp; Chrome <span class="badge">Setup</span></h2>
           <div class="panel-body">
@@ -1039,6 +1074,42 @@
       `;
       $("modalBg").classList.add("open");
     }
+
+    $("btnImportToken").onclick = async () => {
+      const token = $("importTokenText").value.trim();
+      const status = $("importTokenStatus");
+      if (!token) {
+        status.textContent = "Dán token trước.";
+        return;
+      }
+      $("btnImportToken").disabled = true;
+      status.textContent = "Đang gọi Graph /me + /me/accounts…";
+      try {
+        const r = await api("/api/accounts/import-token", {
+          method: "POST",
+          body: JSON.stringify({
+            access_token: token,
+            label: ($("importTokenLabel")?.value || "").trim(),
+          }),
+        });
+        const lines = (r.results || []).map((x) =>
+          `${x.kind === "page" ? "Page" : "System User/User"} «${x.name || x.fb_id}» → ${x.page_count} page`
+        );
+        status.textContent = `OK · ${r.imported} token · ${r.page_count} Page.`;
+        $("importTokenText").value = "";
+        alert(
+          `Đã import ${r.imported} token, ${r.page_count} Page.\n` +
+            (lines.join("\n") || "") +
+            "\n\nKhông cần add page vào via. Vào Publish để đăng."
+        );
+        await refreshAll();
+      } catch (e) {
+        status.textContent = e.message || "Import thất bại";
+        alert(e.message || "Import thất bại");
+      } finally {
+        $("btnImportToken").disabled = false;
+      }
+    };
 
     $("btnRefresh").onclick = () => refreshAll();
     $("search").oninput = () => {

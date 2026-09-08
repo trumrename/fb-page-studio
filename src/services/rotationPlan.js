@@ -59,8 +59,8 @@ export const DEFAULT_ROTATION = {
   /** windows mode: distribute posts into named ranges */
   mode: "windows", // windows | fixed_gap
   windows: [
-    { name: "Sáng", start: "07:30", end: "11:30", posts: 1 },
-    { name: "Tối", start: "18:00", end: "21:30", posts: 1 },
+    { name: "Sáng", start: "06:00", end: "08:00", posts: 3 },
+    { name: "Tối", start: "18:00", end: "20:00", posts: 3 },
   ],
   fixed_gap: {
     first_start: "08:00",
@@ -92,6 +92,17 @@ export const DEFAULT_ROTATION = {
    * preferred = giờ ưa thích từng page (cùng nguồn hẹn FB active_times)
    */
   run_now_time_mode: "gap_chain",
+  /**
+   * true = mỗi page chỉ 1 khung (nửa sáng / nửa tối).
+   * false = mọi page chạy cả 2 khung, rải đều trong 06–08 và 18–20.
+   */
+  split_pages_across_windows: false,
+  /** Trong 1 khung: N video liền nhau trên 1 page rồi mới sang page sau. */
+  burst_same_page: true,
+  burst_gap_sec_min: 10,
+  burst_gap_sec_max: 30,
+  page_burst_gap_sec_min: 15,
+  page_burst_gap_sec_max: 30,
   /**
    * fixed = post_type cố định (photo|video|text)
    * page_sequence = sequence từng page (post_type auto cũ)
@@ -319,6 +330,20 @@ export function normalizeSettings(s) {
     out.run_now_time_mode =
       m === "windows" || m === "preferred" ? m : "gap_chain";
   }
+  out.split_pages_across_windows = !!out.split_pages_across_windows;
+  out.burst_same_page = out.burst_same_page !== false;
+  out.burst_gap_sec_min = clamp(Number(out.burst_gap_sec_min) || 10, 5, 30);
+  out.burst_gap_sec_max = clamp(
+    Number(out.burst_gap_sec_max) || 30,
+    out.burst_gap_sec_min,
+    30
+  );
+  out.page_burst_gap_sec_min = clamp(Number(out.page_burst_gap_sec_min) || 15, 5, 180);
+  out.page_burst_gap_sec_max = clamp(
+    Number(out.page_burst_gap_sec_max) || 30,
+    out.page_burst_gap_sec_min,
+    300
+  );
   out.run_now_continuous = !!out.run_now_continuous;
   out.force_plan_day =
     out.force_plan_day && /^\d{4}-\d{2}-\d{2}$/.test(String(out.force_plan_day))
@@ -599,13 +624,14 @@ export function planTimesForPageDay(settings, dayYmd) {
     return times;
   }
 
-  // windows mode
+  // windows mode (end <= start = qua nửa đêm, vd 22:00 → 00:00)
   for (const w of settings.windows) {
     const posts = w.posts || 0;
     if (!posts) continue;
     const a = parseHm(w.start);
-    const b = parseHm(w.end);
-    if (a == null || b == null || b <= a) continue;
+    const b0 = parseHm(w.end);
+    if (a == null || b0 == null) continue;
+    const b = b0 <= a ? b0 + 1440 : b0;
     const span = b - a;
     const windowTimes = [];
     for (let i = 0; i < posts; i++) {
@@ -645,6 +671,237 @@ export function planTimesForPageDay(settings, dayYmd) {
     }
   }
   return times;
+}
+
+function windowRangeUtc(dayYmd, startHm, endHm, tz) {
+  const a = parseHm(startHm);
+  const b0 = parseHm(endHm);
+  if (a == null || b0 == null) return null;
+  const b = b0 <= a ? b0 + 1440 : b0;
+  return {
+    startMs: localMinutesToUtcDate(dayYmd, a, tz).getTime(),
+    endMs: localMinutesToUtcDate(dayYmd, b, tz).getTime(),
+  };
+}
+
+function collectUniquePagesFromMatrix(matrix) {
+  const out = [];
+  const seen = new Set();
+  for (const account of matrix) {
+    for (const page of account.pages || []) {
+      const id = Number(page.page_row_id);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push({
+        account_id: account.account_id,
+        account_name: account.account_name,
+        page_row_id: id,
+        page_id: page.page_id,
+        page_name: page.page_name,
+      });
+    }
+  }
+  return out;
+}
+
+function splitListRound(items, bucketCount) {
+  const n = Math.max(1, bucketCount);
+  const buckets = Array.from({ length: n }, () => []);
+  const base = Math.floor(items.length / n);
+  let rem = items.length % n;
+  let offset = 0;
+  for (let i = 0; i < n; i++) {
+    const size = base + (rem > 0 ? 1 : 0);
+    if (rem > 0) rem -= 1;
+    buckets[i] = items.slice(offset, offset + size);
+    offset += size;
+  }
+  return buckets;
+}
+
+/** Xen token: page token A, token B, A, B… — 2 token không đổ 20 page liền một cục. */
+function interleaveByAccount(pages) {
+  const buckets = new Map();
+  for (const p of pages) {
+    const k = String(p.account_id || "x");
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(p);
+  }
+  const lists = [...buckets.values()];
+  if (lists.length <= 1) return pages;
+  const out = [];
+  const max = Math.max(...lists.map((l) => l.length));
+  for (let i = 0; i < max; i++) {
+    for (const list of lists) {
+      if (list[i]) out.push(list[i]);
+    }
+  }
+  return out;
+}
+
+function enqueueBurstPage({
+  page,
+  cfg,
+  settings,
+  forceVideo,
+  startMs,
+  burst,
+  burstGap,
+  nowMs,
+  day,
+  w,
+  wi,
+  slots,
+  orderRef,
+}) {
+  for (let v = 0; v < burst; v++) {
+    const when = new Date(startMs + v * burstGap);
+    orderRef.n += 1;
+    const plannedPostType = forceVideo
+      ? "video"
+      : resolvePlannedPostType(settings, cfg, v);
+    slots.push({
+      order: orderRef.n,
+      immediate: when.getTime() <= nowMs + 8000,
+      post_round: v + 1,
+      page_index: v + 1,
+      group_id: `win-${wi + 1}`,
+      group_name: w.name,
+      account_id: page.account_id,
+      account_name: page.account_name,
+      page_row_id: page.page_row_id,
+      page_id: page.page_id,
+      page_name: page.page_name,
+      planned_post_type: plannedPostType,
+      unix: Math.floor(when.getTime() / 1000),
+      iso: when.toISOString(),
+      local_label: formatLocal(when, settings.tz_offset_minutes),
+      plan_day: day,
+      time_mode: "windows_split_burst",
+      window_name: w.name,
+      burst: true,
+    });
+  }
+}
+
+/**
+ * Direct Local: mỗi khung rải page đều trong 2 giờ.
+ * split=false (mặc định): 40 page chạy cả sáng lẫn tối.
+ * split=true: nửa list sáng, nửa tối.
+ */
+export function buildSplitWindowBurstSlots({
+  settings,
+  matrix,
+  pageConfigs,
+  tz,
+  todayVn,
+  nowMs = Date.now(),
+} = {}) {
+  const pages = interleaveByAccount(collectUniquePagesFromMatrix(matrix));
+  const windows = (settings.windows || []).filter(
+    (w) => parseHm(w.start) != null && parseHm(w.end) != null
+  );
+  if (!windows.length) {
+    throw new Error(
+      "Cần 2 khung giờ, ví dụ:\nSáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3"
+    );
+  }
+  const split = !!settings.split_pages_across_windows;
+  const buckets = split
+    ? splitListRound(pages, windows.length)
+    : windows.map(() => pages);
+  const slots = [];
+  const warnings = [];
+  const orderRef = { n: 0 };
+  let planDay = todayVn;
+  const forceVideo =
+    settings.burst_same_page !== false ||
+    String(settings.post_type || "").toLowerCase() === "video";
+
+  for (let wi = 0; wi < windows.length; wi++) {
+    const w = windows[wi];
+    const burst = clamp(Number(w.posts) || 3, 1, 12);
+    const group = buckets[wi] || [];
+    if (!group.length) continue;
+
+    let day = todayVn;
+    let range = windowRangeUtc(day, w.start, w.end, tz);
+    if (!range) continue;
+    if (nowMs >= range.endMs - 20 * 1000 && !settings.force_plan_day) {
+      day = addDaysYmd(day, 1);
+      range = windowRangeUtc(day, w.start, w.end, tz);
+      warnings.push(
+        `Khung «${w.name}» hôm nay đã hết → ${group.length} page sang ${day} ${w.start}–${w.end}.`
+      );
+    }
+    if (day > planDay) planDay = day;
+
+    const burstGap = clamp(
+      Number(settings.burst_gap_sec_max) || 15,
+      8,
+      30
+    ) * 1000;
+    const burstSpan = (burst - 1) * burstGap;
+    const winStart = Math.max(nowMs + 8000, range.startMs);
+    const winEnd = range.endMs - burstSpan - 5000;
+    if (winEnd <= winStart) {
+      day = addDaysYmd(day, 1);
+      range = windowRangeUtc(day, w.start, w.end, tz);
+      if (day > planDay) planDay = day;
+      warnings.push(`Khung «${w.name}» không còn chỗ hôm nay → ${day}.`);
+    }
+    const start0 = Math.max(nowMs + 8000, range.startMs);
+    const end0 = range.endMs - burstSpan - 3000;
+    const n = group.length;
+    const step =
+      n <= 1 ? 0 : Math.max(45 * 1000, Math.floor((end0 - start0) / (n - 1)));
+
+    warnings.push(
+      `Khung «${w.name}» ${w.start}–${w.end}: ${n} page × ${burst} video, rải ~${Math.round(step / 60000)} phút/page (2 token xen kẽ).`
+    );
+
+    for (let i = 0; i < group.length; i++) {
+      const page = group[i];
+      const cfg = pageConfigs?.get(page.page_row_id);
+      const startMs = start0 + i * step;
+      enqueueBurstPage({
+        page,
+        cfg,
+        settings,
+        forceVideo,
+        startMs,
+        burst,
+        burstGap,
+        nowMs,
+        day,
+        w,
+        wi,
+        slots,
+        orderRef,
+      });
+    }
+  }
+
+  slots.sort((a, b) => a.unix - b.unix || a.order - b.order);
+  const numbered = slots.map((s, i) => ({ ...s, order: i + 1 }));
+  const burstCount = Math.max(
+    1,
+    ...windows.map((w) => Number(w.posts) || 3),
+    3
+  );
+  return {
+    slots: numbered,
+    planDay,
+    warnings,
+    burstCount,
+    window_page_counts: windows.map((w, i) => ({
+      name: w.name,
+      start: w.start,
+      end: w.end,
+      pages: (buckets[i] || []).length,
+      videos_each: clamp(Number(w.posts) || 3, 1, 12),
+    })),
+  };
 }
 
 /**
@@ -983,6 +1240,10 @@ export function buildRunNowPlan(inputSettings = {}) {
       );
     }
     rounds = clamp(sum, 1, 12);
+    // Chia page theo khung: từng khung tự dời nếu hết giờ — không đẩy cả ngày.
+    if (settings.split_pages_across_windows) {
+      dayWindowTimes = [];
+    } else {
     // Nếu BẤT KỲ khung đã quá giờ → chuyển CẢ NGÀY sang ngày mai.
     let candidateDay = planDay;
     dayWindowTimes = planTimesForPageDay(winSettings, candidateDay);
@@ -1008,6 +1269,7 @@ export function buildRunNowPlan(inputSettings = {}) {
         dayWindowTimes = planTimesForPageDay(winSettings, planDay);
         planDayShifted = true;
       }
+    }
     }
   } else if (usePreferred) {
     const req = clamp(
@@ -1127,6 +1389,31 @@ export function buildRunNowPlan(inputSettings = {}) {
   let previousRoundEndMs = null;
   const preferredFallbackWarned = new Set();
   const quotaDay = planDay; // always follow planDay (may be shifted to tomorrow)
+  let usedBurstPlan = false;
+  let burstMeta = null;
+  if (useWindows && settings.burst_same_page !== false) {
+    burstMeta = buildSplitWindowBurstSlots({
+      settings,
+      matrix,
+      pageConfigs,
+      tz,
+      todayVn,
+      nowMs: Date.now(),
+    });
+    for (const s of burstMeta.slots) slots.push(s);
+    usedBurstPlan = true;
+    planDay = burstMeta.planDay || planDay;
+    rounds = burstMeta.burstCount || rounds;
+    for (const w of burstMeta.warnings || []) warnings.push(w);
+    const parts = (burstMeta.window_page_counts || [])
+      .map((x) => `${x.name} ${x.pages} page × ${x.videos_each} video`)
+      .join(" · ");
+    if (parts) {
+      warnings.push(
+        `Chia list page theo khung (mỗi page 1 khung, ${rounds} video liền nhau): ${parts}.`
+      );
+    }
+  }
   /** 07:30 VN on planDay — khi plan không phải hôm nay */
   function planDayStartMs() {
     if (!planDay || planDay <= todayVn) return Date.now() + 2000;
@@ -1136,7 +1423,7 @@ export function buildRunNowPlan(inputSettings = {}) {
     const at0730Vn = midnightUtc - tz * 60 * 1000 + 7.5 * 3600 * 1000;
     return Math.max(at0730Vn, Date.now() + 2000);
   }
-  for (let round = 0; round < rounds; round++) {
+  for (let round = 0; !usedBurstPlan && round < rounds; round++) {
     let cursorMs;
     if (round === 0) {
       cursorMs = planDayStartMs();
@@ -1350,7 +1637,7 @@ export function buildRunNowPlan(inputSettings = {}) {
     }
   }
 
-  if (anti.enabled) {
+  if (anti.enabled && !usedBurstPlan) {
     for (const rt of roundTimes) {
       const end = rt.toISOString();
       const hourStart = new Date(rt.getTime() - 3600 * 1000).toISOString();
@@ -1415,6 +1702,8 @@ export function buildRunNowPlan(inputSettings = {}) {
       page_target_mode: settings.page_target_mode,
       run_now_time_mode: settings.run_now_time_mode,
       run_now_continuous: !!settings.run_now_continuous,
+      split_pages_across_windows: !!settings.split_pages_across_windows,
+      burst_same_page: !!settings.burst_same_page,
       media_pattern_mode: settings.media_pattern_mode,
       media_pattern: settings.media_pattern,
       windows: settings.windows,
@@ -1441,6 +1730,8 @@ export function buildRunNowPlan(inputSettings = {}) {
       plan_day_shifted: planDayShifted,
       continuous: !!settings.run_now_continuous,
       next_plan_day: nextPlanDay,
+      split_windows: !!usedBurstPlan,
+      window_page_counts: burstMeta?.window_page_counts || [],
       page_scope: settings.page_target_mode === "all" ? "tất cả page active" : "chỉ page đã tick",
       media_logic:
         settings.media_pattern_mode === "pattern"

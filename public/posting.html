@@ -21,6 +21,21 @@
     }
     .bulk-mode-card b { display:block; font-size:.9rem; margin-bottom:.15rem; }
     .bulk-mode-card small { display:block; color:var(--muted,#9aa0a6); font-size:.75rem; line-height:1.35; }
+    .bulk-mode-card.is-rec {
+      border-color: rgba(251,191,36,.55);
+      background: rgba(251,191,36,.08);
+      order: -1;
+    }
+    .bulk-mode-card.is-rec:has(input:checked) {
+      border-color: rgba(251,191,36,.85);
+      background: rgba(251,191,36,.16);
+      box-shadow: 0 0 0 1px rgba(251,191,36,.35);
+    }
+    .bulk-mode-card .rec-badge {
+      display:inline-block; margin-left:.35rem; padding:.05rem .4rem; border-radius:999px;
+      font-size:.65rem; font-weight:800; letter-spacing:.02em;
+      background:#fbbf24; color:#1a1203; vertical-align:middle;
+    }
     .bulk-opt-panel {
       border:1px solid rgba(255,255,255,.1); border-radius:12px;
       padding:.75rem .85rem; margin-top:.55rem; background:rgba(0,0,0,.12);
@@ -220,8 +235,8 @@
 
         <div class="hero" style="cursor:default">
           <div>
-            <div class="hero-kicker">Graph schedule</div>
-            <div class="hero-title">Feed ngay · Hẹn giờ hàng loạt · Giờ ưa thích từng page</div>
+            <div class="hero-kicker">Graph schedule + Direct Local</div>
+            <div class="hero-title">Chuẩn mới Sáng/Tối · Hẹn giờ hàng loạt · Giờ ưa thích</div>
             <div class="hero-desc">
               Caption random từ .txt/.csv · media <b>CHUYỂN</b> (move) inbox → posted · Meta đã gỡ page_fans_online — “giờ tích cực” = giờ ưa thích / preset VN.
             </div>
@@ -255,10 +270,10 @@
             <span>1</span><b>Chọn Page & cấu hình</b><small>Chọn đúng Page, kho và số bài</small>
           </button>
           <button type="button" class="workflow-tab" data-workspace-view="run">
-            <span>2</span><b>Đăng trực tiếp theo giờ</b><small>Tool chờ local, đến giờ mới đăng</small>
+            <span>2</span><b>Đăng trực tiếp theo giờ</b><small>Chuẩn mới 06–08 / 18–20 · 3 video</small>
           </button>
           <button type="button" class="workflow-tab" data-workspace-view="schedule">
-            <span>3</span><b>Hẹn giờ hàng loạt</b><small>① Chỉ giờ · ② Theo ngày · ③ Tích cực</small>
+            <span>3</span><b>Hẹn giờ hàng loạt</b><small>④ Chuẩn mới · ①②③ hẹn Facebook</small>
           </button>
           <button type="button" class="workflow-tab" data-workspace-view="monitor">
             <span>4</span><b>Kết quả & lịch sử</b><small>Thành công, lỗi và giờ Facebook</small>
@@ -350,11 +365,12 @@
             <span class="hint">tab 3 · chọn 1 chế độ bên dưới</span>
           </h2>
           <div class="panel-body">
-            <div style="margin:0 0 .75rem;padding:.7rem .85rem;border-radius:12px;border:1px solid rgba(61,214,140,.4);background:rgba(61,214,140,.1);font-size:.86rem;line-height:1.5">
-              <b>3 cách hẹn (chọn 1 — cái kia mờ):</b><br/>
-              <b>① Chỉ nhập giờ</b> — viết <code>09:00</code> / <code>19:00</code> mỗi dòng (dễ nhất)<br/>
-              <b>② Theo ngày</b> — Start at + số ngày + số bài/ngày<br/>
-              <b>③ Giờ tích cực</b> — theo giờ ưa thích từng page × số ngày
+            <div style="margin:0 0 .75rem;padding:.7rem .85rem;border-radius:12px;border:1px solid rgba(251,191,36,.45);background:rgba(251,191,36,.1);font-size:.86rem;line-height:1.5">
+              <b>4 chế độ (chọn 1):</b><br/>
+              <b>④ Chuẩn mới</b> — Sáng 06:00–08:00 + Tối 18:00–20:00 · rải ~40 page / 2 giờ · mỗi page 3 video ≤30s · chọn <b>hẹn Facebook</b> hoặc treo tool<br/>
+              <b>① Chỉ nhập giờ</b> — viết <code>09:00</code> / <code>19:00</code> mỗi dòng · hẹn Facebook<br/>
+              <b>② Theo ngày</b> — Start at + số ngày + số bài/ngày · hẹn Facebook<br/>
+              <b>③ Giờ tích cực</b> — giờ ưa thích từng page × số ngày · hẹn Facebook
             </div>
             <div id="bulkAntiBar" class="muted" style="margin:.5rem 0 .65rem;padding:.55rem .75rem;border-radius:8px;border:1px solid rgba(255,255,255,.08);font-size:.82rem">
               Anti-spam: <b id="bulkAntiLabel">…</b>
@@ -363,27 +379,34 @@
               <a href="/antispam.html" class="muted" style="margin-left:.35rem;font-size:.78rem">Cấu hình chi tiết →</a>
             </div>
 
-            <!-- 3 chế độ ngang hàng, luôn hiện -->
+            <!-- 4 chế độ ngang hàng, luôn hiện — ④ Chuẩn mới đứng đầu -->
             <div class="bulk-mode-pick" role="radiogroup" aria-label="Chế độ hẹn giờ hàng loạt">
+              <label class="bulk-mode-card is-rec">
+                <input type="radio" name="bulkModeRadio" id="bulkModeStandard" value="standard_burst" checked />
+                <span>
+                  <b>④ Chuẩn mới · Sáng/Tối <span class="rec-badge">Khuyên dùng</span></b>
+                  <small>06:00–08:00 + 18:00–20:00 · rải 40 page / 2 giờ<br/>Mỗi page 3 video ≤30s · hẹn Facebook hoặc treo tool</small>
+                </span>
+              </label>
               <label class="bulk-mode-card">
-                <input type="radio" name="bulkModeRadio" id="bulkModeList" value="list_times" checked />
+                <input type="radio" name="bulkModeRadio" id="bulkModeList" value="list_times" />
                 <span>
                   <b>① Chỉ nhập giờ</b>
-                  <small>Mỗi dòng 1 mốc: <code>09:00</code> · <code>19:00</code><br/>Hoặc đủ ngày nếu cần</small>
+                  <small>Mỗi dòng 1 mốc: <code>09:00</code> · <code>19:00</code><br/>Hẹn Facebook</small>
                 </span>
               </label>
               <label class="bulk-mode-card">
                 <input type="radio" name="bulkModeRadio" id="bulkModeStart" value="start_at" />
                 <span>
                   <b>② Hẹn theo ngày</b>
-                  <small>Start at + số ngày + bài/page/ngày + khoảng cách bài</small>
+                  <small>Start at + số ngày + bài/page/ngày · hẹn Facebook</small>
                 </span>
               </label>
               <label class="bulk-mode-card">
                 <input type="radio" name="bulkModeRadio" id="bulkModeActive" value="active_times" />
                 <span>
                   <b>③ Giờ tích cực</b>
-                  <small>Giờ ưa thích từng page × nhiều ngày</small>
+                  <small>Giờ ưa thích từng page × nhiều ngày · hẹn Facebook</small>
                 </span>
               </label>
             </div>
@@ -392,7 +415,8 @@
               <option value="fixed">fixed</option>
               <option value="active_times">active_times</option>
             </select>
-            <input type="hidden" id="bulkFixedSubMode" value="list_times" />
+            <input type="hidden" id="bulkFixedSubMode" value="standard_burst" />
+            <input type="hidden" id="bulkStdDelivery" value="fb_scheduled" />
 
             <div class="row2">
               <div>
@@ -711,6 +735,45 @@ full album:
               </div>
             </div>
 
+            <div id="bulkStandardPanel" class="bulk-opt-panel is-dim" style="margin-top:.65rem;padding:0;border:none;background:transparent">
+              <div class="bulk-opt-hd" style="padding:0 .15rem">④ Chuẩn mới — đăng trực tiếp (giữ tool mở)</div>
+              <div class="sched-form" style="border-color:rgba(251,191,36,.55)">
+                <p class="muted" style="margin:0 0 .55rem;font-size:.82rem;line-height:1.5">
+                  Không tạo lịch hẹn Facebook. Tool chờ giờ VN rồi đăng Graph.
+                  Cả list page chạy <b>cả 2 khung</b>. Mỗi page 3 video liền nhau (cách ≤30s), các page rải đều trong 2 giờ.
+                </p>
+                <label class="sched-form-label" for="bulkStdWindows">
+                  Khung Sáng / Tối
+                  <span class="hint-inline">Tên | bắt đầu | kết thúc | số video</span>
+                </label>
+                <textarea id="bulkStdWindows" rows="3" placeholder="Sáng | 06:00 | 08:00 | 3&#10;Tối | 18:00 | 20:00 | 3">Sáng | 06:00 | 08:00 | 3
+Tối | 18:00 | 20:00 | 3</textarea>
+                <label class="checks" style="display:block;margin-top:.55rem">
+                  <input type="checkbox" id="bulkStdBurst" checked />
+                  3 video / page đăng 1 lúc (cách nhau ≤ 30 giây)
+                </label>
+                <label class="checks" style="display:block">
+                  <input type="checkbox" id="bulkStdSplit" />
+                  Chỉ chia nửa page sáng / nửa tối (tắt = cả list chạy cả 2 khung)
+                </label>
+                <div style="margin-top:.65rem;padding:.55rem .65rem;border:1px solid rgba(96,165,250,.4);border-radius:10px;background:rgba(96,165,250,.08)">
+                  <label style="font-weight:700;display:block;margin-bottom:.35rem">Cách đăng</label>
+                  <label class="checks" style="display:block">
+                    <input type="radio" name="bulkStdDelivery" id="bulkStdDeliveryFb" value="fb_scheduled" checked />
+                    <b>Hẹn giờ Facebook</b> — Graph nhận lịch, xong có thể tắt tool (giống ①②③)
+                  </label>
+                  <label class="checks" style="display:block">
+                    <input type="radio" name="bulkStdDelivery" id="bulkStdDeliveryDirect" value="direct" />
+                    <b>Đăng trực tiếp</b> — tool chờ đến giờ mới bấm Graph, phải giữ máy bật
+                  </label>
+                  <p class="muted" style="margin:.35rem 0 0;font-size:.76rem;line-height:1.4">
+                    Burst 3 video vẫn cách ≤30s trên cùng page. Hẹn FB: mốc đã qua hoặc &lt; 10 phút sẽ được đẩy lên tối thiểu +10 phút (luật Graph).
+                  </p>
+                </div>
+                <p class="muted" id="bulkStdWindowTotal" style="margin:.45rem 0 0;font-size:.82rem"></p>
+              </div>
+            </div>
+
             <div id="bulkTimingModeBadge" style="margin-top:.65rem;padding:.55rem .75rem;border-radius:10px;border:1px solid rgba(96,165,250,.4);background:rgba(96,165,250,.1);font-size:.84rem;line-height:1.45">
               <b>Đang dùng:</b> <span id="bulkTimingModeText">—</span>
             </div>
@@ -721,7 +784,7 @@ full album:
             <div id="bulkFixed" style="display:none"></div>
 
             <!-- Gap giữa các page — dùng cả mode giờ tích cực + cố định + list thời điểm -->
-            <div class="panel section-gap" style="margin-top:.75rem;border-color:rgba(96,165,250,.35)">
+            <div class="panel section-gap bulk-opt-panel" id="bulkPageGapPanel" style="margin-top:.75rem;border-color:rgba(96,165,250,.35)">
               <h2 class="panel-hd" style="font-size:.9rem">Cách giờ giữa các page (A → B → C…)</h2>
               <div class="panel-body">
                 <p class="muted" style="margin:.15rem 0 .5rem;font-size:.78rem;line-height:1.45">
@@ -898,31 +961,50 @@ Tối | 18:00 | 21:30 | 2</textarea>
                 </div>
                 <div>
                   <label style="font-weight:700">Giờ đăng TRỰC TIẾP (tool chờ → đăng API)</label>
-                  <label class="checks" style="display:block;margin-top:.35rem">
-                    <input type="radio" name="rotNowTimeMode" id="rotNowTimeGap" value="gap_chain" checked />
-                    Liên tục: bài 1 ngay · các bài sau + gap (interval page)
-                  </label>
-                  <label class="checks" style="display:block">
-                    <input type="radio" name="rotNowTimeMode" id="rotNowTimeWindows" value="windows" />
-                    Khung Sáng/Tối (tool chờ → đăng API)
-                  </label>
-                  <label class="checks" style="display:block">
-                    <input type="radio" name="rotNowTimeMode" id="rotNowTimePreferred" value="preferred" />
-                    <b>Giờ ưa thích từng page</b> (cùng hẹn FB active_times)
-                  </label>
+                  <div class="bulk-mode-pick" role="radiogroup" aria-label="Chế độ đăng trực tiếp" style="margin-top:.4rem">
+                    <label class="bulk-mode-card is-rec">
+                      <input type="radio" name="rotNowTimeMode" id="rotNowTimeWindows" value="windows" checked />
+                      <span>
+                        <b>Chuẩn mới · Sáng/Tối <span class="rec-badge">Khuyên dùng</span></b>
+                        <small>06:00–08:00 + 18:00–20:00 · 3 video/page ≤30s</small>
+                      </span>
+                    </label>
+                    <label class="bulk-mode-card">
+                      <input type="radio" name="rotNowTimeMode" id="rotNowTimeGap" value="gap_chain" />
+                      <span>
+                        <b>Liên tục + gap</b>
+                        <small>Bài 1 ngay · các bài sau + khoảng cách page</small>
+                      </span>
+                    </label>
+                    <label class="bulk-mode-card">
+                      <input type="radio" name="rotNowTimeMode" id="rotNowTimePreferred" value="preferred" />
+                      <span>
+                        <b>Giờ ưa thích từng page</b>
+                        <small>Cùng nguồn với hẹn FB ③</small>
+                      </span>
+                    </label>
+                  </div>
                   <p class="muted" style="margin:.35rem 0 0;font-size:.78rem" id="rotNowTimeHelp">
                     Không tạo scheduled FB — PC/tool bật. Gap/max/ngày = config Page + anti (khớp hẹn giờ).
                   </p>
                 </div>
               </div>
-              <div id="rotNowWindowsBox" style="display:none;margin-top:.65rem;padding:.75rem;border:1px dashed rgba(61,214,140,.5);border-radius:10px;background:rgba(0,0,0,.15)">
+              <div id="rotNowWindowsBox" style="margin-top:.65rem;padding:.75rem;border:1px dashed rgba(61,214,140,.5);border-radius:10px;background:rgba(0,0,0,.15)">
                 <label style="font-weight:700;display:block">Khung Sáng / Tối cho Direct Local</label>
                 <p class="muted" style="margin:.3rem 0 .45rem;font-size:.78rem">
-                  Mỗi dòng: <code>Tên | HH:mm bắt đầu | HH:mm kết thúc | số bài</code>.
-                  Ví dụ 1 sáng + 1 tối = 2 bài/page/ngày. Tool xếp giờ trong khung rồi <b>chờ local</b> đến đúng lúc đăng.
-                  (Khác hẹn FB: không đẩy <code>scheduled_publish_time</code> lên Meta.)
+                  Mỗi dòng: <code>Tên | HH:mm bắt đầu | HH:mm kết thúc | số video liền nhau</code>.
+                  Mặc định: <b>06:00–08:00</b> và <b>18:00–20:00</b>.
+                  40 page / máy (2 token × 20) rải đều trong 2 giờ — mỗi page <b>3 video ≤ 30 giây</b>, không nổ cùng lúc.
                 </p>
-                <textarea id="rotNowWindows" rows="3" placeholder="Sáng | 07:30 | 11:30 | 1&#10;Tối | 18:00 | 21:30 | 1"></textarea>
+                <textarea id="rotNowWindows" rows="3" placeholder="Sáng | 06:00 | 08:00 | 3&#10;Tối | 18:00 | 20:00 | 3"></textarea>
+                <label class="checks" style="display:block;margin-top:.5rem">
+                  <input type="checkbox" id="rotSplitPagesWindows" />
+                  Chỉ chia nửa page sáng / nửa tối (tắt = cả 40 page chạy cả 2 khung)
+                </label>
+                <label class="checks" style="display:block">
+                  <input type="checkbox" id="rotBurstThreeVideos" checked />
+                  3 video / page đăng 1 lúc (cách nhau ≤ 30 giây)
+                </label>
                 <p class="muted" id="rotNowWindowTotal" style="margin:.35rem 0 0;font-size:.82rem"></p>
               </div>
               <div class="row3" style="margin-top:.55rem">
@@ -1149,6 +1231,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkCommentModeSeq", "bulkCommentModeRnd",
       "bulkCommentWhenImmediate", "bulkCommentWhenPublish",
       "bulkCommentDelayMin", "bulkCommentMinLikes",
+      "bulkStdWindows", "bulkStdBurst", "bulkStdSplit", "bulkStdDelivery",
     ];
     const rotationWorkspaceControlIds = [
       "rotMode", "rotDays", "rotPostType", "rotAppStrategy", "rotNowPerDay",
@@ -1158,6 +1241,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "rotJitMax", "rotAutoMeta", "rotG1", "rotG2", "rotOnlyEnabled",
       "rotPageTargetSelected", "rotPageTargetAll", "rotNowTimeGap", "rotNowTimeWindows",
       "rotNowTimePreferred", "rotNowWindows",
+      "rotSplitPagesWindows", "rotBurstThreeVideos",
       "rotMediaFolder", "rotPostedFolder", "rotCaptionsFolder",
     ];
     const workspaceHashes = {
@@ -1435,13 +1519,28 @@ Tối | 18:00 | 21:30 | 2</textarea>
       });
     }
 
-    /** Returns list_times | start_at | active_times */
+    function standardDelivery() {
+      if ($("bulkStdDeliveryFb")?.checked) return "fb_scheduled";
+      if ($("bulkStdDeliveryDirect")?.checked) return "direct";
+      const v = String($("bulkStdDelivery")?.value || "fb_scheduled");
+      return v === "direct" ? "direct" : "fb_scheduled";
+    }
+
+    function syncStandardDeliveryUi() {
+      const d = standardDelivery();
+      if ($("bulkStdDelivery")) $("bulkStdDelivery").value = d;
+      if ($("bulkStdDeliveryFb")) $("bulkStdDeliveryFb").checked = d === "fb_scheduled";
+      if ($("bulkStdDeliveryDirect")) $("bulkStdDeliveryDirect").checked = d === "direct";
+    }
+
+    /** Returns standard_burst | list_times | start_at | active_times */
     function getBulkScheduleKind() {
+      if ($("bulkModeStandard")?.checked) return "standard_burst";
       if ($("bulkModeList")?.checked) return "list_times";
       if ($("bulkModeStart")?.checked) return "start_at";
       if ($("bulkModeActive")?.checked) return "active_times";
       const sub = $("bulkFixedSubMode")?.value;
-      if (sub === "list_times" || sub === "start_at") return sub;
+      if (sub === "standard_burst" || sub === "list_times" || sub === "start_at") return sub;
       const m = $("bulkMode")?.value;
       return m === "active_times" ? "active_times" : "list_times";
     }
@@ -1458,36 +1557,80 @@ Tối | 18:00 | 21:30 | 2</textarea>
     }
 
     /**
-     * 3 chế độ ngang: ① list giờ · ② theo ngày · ③ tích cực — 1 sáng, 2 mờ.
+     * 4 chế độ: ④ chuẩn mới · ① list giờ · ② theo ngày · ③ tích cực — 1 sáng, còn lại mờ.
      */
     function applyBulkExclusiveUi() {
       let kind = getBulkScheduleKind();
-      if (!["list_times", "start_at", "active_times"].includes(kind)) kind = "list_times";
+      if (!["standard_burst", "list_times", "start_at", "active_times"].includes(kind)) kind = "list_times";
 
+      if ($("bulkModeStandard")) $("bulkModeStandard").checked = kind === "standard_burst";
       if ($("bulkModeList")) $("bulkModeList").checked = kind === "list_times";
       if ($("bulkModeStart")) $("bulkModeStart").checked = kind === "start_at";
       if ($("bulkModeActive")) $("bulkModeActive").checked = kind === "active_times";
       if ($("bulkMode")) $("bulkMode").value = kind === "active_times" ? "active_times" : "fixed";
-      if ($("bulkFixedSubMode")) $("bulkFixedSubMode").value = kind === "list_times" ? "list_times" : kind === "start_at" ? "start_at" : ($("bulkFixedSubMode").value || "list_times");
+      if ($("bulkFixedSubMode")) {
+        $("bulkFixedSubMode").value =
+          kind === "standard_burst"
+            ? "standard_burst"
+            : kind === "list_times"
+              ? "list_times"
+              : kind === "start_at"
+                ? "start_at"
+                : ($("bulkFixedSubMode").value || "list_times");
+      }
       if ($("bulkFixedSubListRadio")) $("bulkFixedSubListRadio").checked = kind === "list_times";
       if ($("bulkFixedSubStartRadio")) $("bulkFixedSubStartRadio").checked = kind === "start_at";
 
-      // always show all three panels; dim inactive
       const listEl = $("bulkFixedSubList");
       const startEl = $("bulkFixedSubStart");
       const activeEl = $("bulkActive");
+      const stdEl = $("bulkStandardPanel");
       if (listEl) listEl.style.display = "";
       if (startEl) startEl.style.display = "";
       if (activeEl) activeEl.style.display = "";
+      if (stdEl) stdEl.style.display = "";
 
       setPanelDim(listEl, kind !== "list_times");
       setPanelDim(startEl, kind !== "start_at");
       setPanelDim(activeEl, kind !== "active_times");
+      setPanelDim(stdEl, kind !== "standard_burst");
+      const gapEl = $("bulkPageGapPanel");
+      if (gapEl) {
+        if (kind === "standard_burst") setPanelDim(gapEl, true);
+        else {
+          gapEl.classList.remove("is-dim", "is-active");
+          gapEl.querySelectorAll("input, textarea, select, button").forEach((node) => {
+            node.disabled = false;
+          });
+        }
+      }
 
-      // radios on cards always clickable
-      ["bulkModeList", "bulkModeStart", "bulkModeActive"].forEach((id) => {
+      ["bulkModeList", "bulkModeStart", "bulkModeActive", "bulkModeStandard"].forEach((id) => {
         if ($(id)) $(id).disabled = false;
       });
+
+      const isStd = kind === "standard_burst";
+      const stdFb = isStd && standardDelivery() === "fb_scheduled";
+      if ($("btnBulkSchedule")) {
+        $("btnBulkSchedule").textContent = isStd
+          ? stdFb
+            ? "Hẹn giờ Facebook"
+            : "▶ Bắt đầu treo tool"
+          : "Hẹn giờ hàng loạt";
+        $("btnBulkSchedule").classList.toggle("btn-ok", isStd && !stdFb);
+        $("btnBulkSchedule").classList.toggle("btn-warn", !isStd || stdFb);
+      }
+      if ($("btnDryRun")) $("btnDryRun").textContent = isStd ? "Xem lịch chuẩn mới" : "Xem kế hoạch";
+      if ($("btnActiveSelected")) $("btnActiveSelected").style.display = isStd ? "none" : "";
+
+      if (isStd) {
+        if ($("bulkStdWindows") && !$("bulkStdWindows").value.trim()) {
+          $("bulkStdWindows").value = "Sáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3";
+        }
+        syncStandardDeliveryUi();
+        syncStandardBurstFields({ fromBulk: true });
+        syncBulkStandardWindowTotal();
+      }
 
       updateBulkTimingModeBadge();
     }
@@ -1497,6 +1640,18 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const box = $("bulkTimingModeBadge");
       if (!el) return;
       const kind = getBulkScheduleKind();
+      if (kind === "standard_burst") {
+        const burst = $("bulkStdBurst")?.checked !== false;
+        const fb = standardDelivery() === "fb_scheduled";
+        el.innerHTML =
+          `<span class="ok">④ Chuẩn mới</span> · 06:00–08:00 + 18:00–20:00 · ` +
+          `rải đều 2 giờ · mỗi page ${burst ? "3 video ≤30s" : "theo số khung"} · ` +
+          (fb
+            ? `<b>hẹn Facebook</b> (tắt tool được sau khi Graph nhận lịch)`
+            : `<b>treo tool</b> đăng trực tiếp`);
+        if (box) box.style.borderColor = "rgba(251,191,36,.65)";
+        return;
+      }
       if (kind === "active_times") {
         el.innerHTML =
           `<span class="ok">③ Giờ tích cực</span> · ngày=<b>${esc($("bulkDays")?.value || "3")}</b> · bài/ngày=<b>${esc($("bulkPerDay")?.value || "2")}</b> · + gap page`;
@@ -1704,6 +1859,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const sub = $("bulkFixedSubMode")?.value || "list_times";
       if (m === "active_times") {
         if ($("bulkModeActive")) $("bulkModeActive").checked = true;
+      } else if (sub === "standard_burst") {
+        if ($("bulkModeStandard")) $("bulkModeStandard").checked = true;
       } else if (sub === "start_at") {
         if ($("bulkModeStart")) $("bulkModeStart").checked = true;
       } else {
@@ -1712,6 +1869,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       // Sync Ngày/Tháng/Năm form ↔ hidden bulkStart
       if ($("bulkStart")?.value) syncPartsFromBulkStart();
       else if ($("bulkStartDay2")?.value || $("bulkStartTime")?.value) syncBulkStartFromParts();
+      syncStandardDeliveryUi();
       applyBulkExclusiveUi();
       ensureBulkStartFuture({ silent: true });
       rotToggleMode();
@@ -3343,6 +3501,9 @@ Tối | 18:00 | 21:30 | 2</textarea>
     }
 
     async function runBulk(dry) {
+      if (getBulkScheduleKind() === "standard_burst") {
+        return runStandardBurstFromBulk(dry);
+      }
       const body = bulkBody(dry);
       if (!body.page_row_ids.length) {
         flash("Tick ít nhất 1 page", false);
@@ -3472,7 +3633,13 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const kind = getBulkScheduleKind();
       if ($("bulkFixedSubMode")) {
         $("bulkFixedSubMode").value =
-          kind === "list_times" ? "list_times" : kind === "start_at" ? "start_at" : "list_times";
+          kind === "standard_burst"
+            ? "standard_burst"
+            : kind === "list_times"
+              ? "list_times"
+              : kind === "start_at"
+                ? "start_at"
+                : "list_times";
       }
       applyBulkExclusiveUi();
       if (kind === "start_at") ensureBulkStartFuture({ silent: true });
@@ -3481,6 +3648,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
     $("bulkModeList")?.addEventListener("change", syncBulkModeFromRadios);
     $("bulkModeStart")?.addEventListener("change", syncBulkModeFromRadios);
     $("bulkModeActive")?.addEventListener("change", syncBulkModeFromRadios);
+    $("bulkModeStandard")?.addEventListener("change", syncBulkModeFromRadios);
     // clicking panel header selects that mode
     $("bulkFixedSubList")?.addEventListener("click", (e) => {
       if (e.target.closest("input,textarea,button,select,label")) return;
@@ -3502,6 +3670,40 @@ Tối | 18:00 | 21:30 | 2</textarea>
         $("bulkModeActive").checked = true;
         syncBulkModeFromRadios();
       }
+    });
+    $("bulkStandardPanel")?.addEventListener("click", (e) => {
+      if (e.target.closest("input,textarea,button,select,label")) return;
+      if ($("bulkModeStandard")) {
+        $("bulkModeStandard").checked = true;
+        syncBulkModeFromRadios();
+      }
+    });
+    ["bulkStdDeliveryFb", "bulkStdDeliveryDirect"].forEach((id) => {
+      $(id)?.addEventListener("change", () => {
+        syncStandardDeliveryUi();
+        runNowPlanId = null;
+        runNowPlanSignature = null;
+        applyBulkExclusiveUi();
+        queueWorkspaceSave(200);
+      });
+    });
+    ["bulkStdWindows", "bulkStdBurst", "bulkStdSplit"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener("change", () => {
+        syncStandardBurstFields({ fromBulk: true });
+        syncBulkStandardWindowTotal();
+        runNowPlanId = null;
+        runNowPlanSignature = null;
+        updateBulkTimingModeBadge();
+        queueWorkspaceSave(200);
+      });
+      el.addEventListener("input", () => {
+        syncStandardBurstFields({ fromBulk: true });
+        syncBulkStandardWindowTotal();
+        runNowPlanId = null;
+        runNowPlanSignature = null;
+      });
     });
     $("bulkMode").onchange = () => {
       const m = $("bulkMode").value;
@@ -3828,16 +4030,168 @@ Tối | 18:00 | 21:30 | 2</textarea>
       }
       return windows;
     }
+    const DEFAULT_STANDARD_WINDOWS = "Sáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3";
+
+    function syncStandardBurstFields({ fromBulk = false } = {}) {
+      const bulkWin = $("bulkStdWindows");
+      const rotWin = $("rotNowWindows");
+      if (fromBulk) {
+        if (bulkWin && rotWin && bulkWin.value.trim()) rotWin.value = bulkWin.value;
+        if ($("rotSplitPagesWindows")) $("rotSplitPagesWindows").checked = !!$("bulkStdSplit")?.checked;
+        if ($("rotBurstThreeVideos")) $("rotBurstThreeVideos").checked = $("bulkStdBurst")?.checked !== false;
+        if ($("rotNowTimeWindows")) $("rotNowTimeWindows").checked = true;
+        if ($("rotNowTimeGap")) $("rotNowTimeGap").checked = false;
+        if ($("rotNowTimePreferred")) $("rotNowTimePreferred").checked = false;
+      } else {
+        if (rotWin && bulkWin && rotWin.value.trim()) bulkWin.value = rotWin.value;
+        if ($("bulkStdSplit")) $("bulkStdSplit").checked = !!$("rotSplitPagesWindows")?.checked;
+        if ($("bulkStdBurst")) $("bulkStdBurst").checked = $("rotBurstThreeVideos")?.checked !== false;
+      }
+      if (rotWin && !rotWin.value.trim()) rotWin.value = DEFAULT_STANDARD_WINDOWS;
+      if (bulkWin && !bulkWin.value.trim()) bulkWin.value = DEFAULT_STANDARD_WINDOWS;
+    }
+
+    function syncBulkStandardWindowTotal() {
+      const box = $("bulkStdWindowTotal");
+      if (!box) return;
+      try {
+        const prev = $("rotNowWindows")?.value;
+        if ($("rotNowWindows") && $("bulkStdWindows")?.value.trim()) {
+          $("rotNowWindows").value = $("bulkStdWindows").value;
+        }
+        const windows = readDirectLocalWindowsStrict();
+        if (prev != null && $("rotNowWindows") && !$("bulkStdWindows")?.value.trim()) {
+          $("rotNowWindows").value = prev;
+        }
+        const burst = $("bulkStdBurst")?.checked !== false;
+        const split = !!$("bulkStdSplit")?.checked;
+        box.innerHTML = split
+          ? `→ Nửa page sáng / nửa tối · mỗi page <b>${windows[0]?.posts || 3} video</b>.`
+          : `→ Cả list chạy <b>cả 2 khung</b> · rải đều 2 giờ · mỗi page ${burst ? "3 video ≤30s" : (windows[0]?.posts || "") + " bài"} ` +
+            `(${windows.map((w) => esc(w.name) + " " + w.start + "–" + w.end).join(" · ")}).`;
+      } catch (e) {
+        box.innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+      }
+    }
+
+    async function runStandardBurstFromBulk(dry) {
+      const sum = selectedPageSummary(12);
+      if (!sum.ids.length && pageTargetMode() === "selected") {
+        flash("Tick ít nhất 1 page — hoặc sang tab 2 chọn «Tất cả page»", false);
+        return;
+      }
+      syncStandardBurstFields({ fromBulk: true });
+      let settingsBody;
+      try {
+        settingsBody = collectRunNowBody();
+      } catch (e) {
+        flash(e.message, false);
+        return;
+      }
+      if (settingsBody.page_target_mode === "selected") {
+        settingsBody.page_row_ids = sum.ids;
+      }
+      settingsBody.delivery = standardDelivery();
+      const fb = settingsBody.delivery === "fb_scheduled";
+      if (dry) {
+        $("bulkResult").innerHTML = "Đang tính lịch chuẩn mới (giờ VN)…";
+        try {
+          const r = await api("/api/jobs/rotation/run-now", {
+            method: "POST",
+            body: JSON.stringify({ ...settingsBody, dry_run: true }),
+          });
+          runNowPlanId = r.plan_id || null;
+          runNowPlanSignature = JSON.stringify(settingsBody);
+          if ($("rotResult")) renderRunNowResult(r, false);
+          $("bulkResult").innerHTML =
+            `<div style="margin:0 0 .5rem;padding:.55rem .7rem;border-radius:10px;border:1px solid rgba(251,191,36,.45);background:rgba(251,191,36,.1)">` +
+            `<b>④ Chuẩn mới · ${fb ? "Hẹn Facebook" : "Direct Local"}</b> — ` +
+            (fb
+              ? "Graph nhận lịch, xong tắt tool được."
+              : "không hẹn Facebook. Giữ tool/PC bật.") +
+            `<br/>Task: <b>${r.summary?.total_final || r.job?.progress?.total || 0}</b>` +
+            (r.summary?.window_page_counts
+              ? ` · ${(r.summary.window_page_counts || [])
+                  .map((w) =>
+                    typeof w === "string"
+                      ? esc(w)
+                      : `${esc(w.name || "")} ${w.pages ?? "?"} page × ${w.videos_each ?? 3}`
+                  )
+                  .join(" · ")}`
+              : "") +
+            `</div>` +
+            ($("rotResult")?.innerHTML || "");
+          flash(`Preview chuẩn mới · ${r.summary?.total_final || 0} task`, true);
+        } catch (e) {
+          $("bulkResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+        }
+        return;
+      }
+      if (!runNowPlanId || runNowPlanSignature !== JSON.stringify(settingsBody)) {
+        flash("Bấm «Xem lịch chuẩn mới» trước, rồi mới chạy.", false);
+        return;
+      }
+      if (
+        !confirm(
+          fb
+            ? `Hẹn Facebook CHUẨN MỚI?\n${sum.ids.length} page đã tick: ${sum.text}\nSáng 06:00–08:00 + Tối 18:00–20:00\nMỗi page 3 video ≤30s, rải đều 2 giờ.\n\nGraph nhận lịch xong có thể tắt tool.`
+            : `Bắt đầu CHUẨN MỚI (treo tool, đăng trực tiếp)?\n${sum.ids.length} page đã tick: ${sum.text}\nSáng 06:00–08:00 + Tối 18:00–20:00\nMỗi page 3 video ≤30s, rải đều trong 2 giờ.\n\nGiữ tool/PC bật.`
+        )
+      ) {
+        return;
+      }
+      $("bulkResult").innerHTML = fb ? "Đang gửi lịch hẹn Facebook…" : "Đang bắt đầu job chuẩn mới…";
+      try {
+        const r = await api("/api/jobs/rotation/run-now", {
+          method: "POST",
+          body: JSON.stringify({
+            plan_id: runNowPlanId,
+            continuous: !!settingsBody.run_now_continuous,
+            ...settingsBody,
+          }),
+        });
+        runNowPlanId = null;
+        runNowPlanSignature = null;
+        if ($("rotResult")) renderRunNowResult(r, true);
+        $("bulkResult").innerHTML =
+          (fb
+            ? `<b>Đã hẹn Facebook · chuẩn mới</b>`
+            : `<b>Đã treo tool · chuẩn mới</b>`) +
+          ` · ${r.job?.progress?.total || 0} tác vụ` +
+          (r.job?.id ? ` · job ${esc(r.job.id)}` : "");
+        flash(
+          fb
+            ? `Đã hẹn FB · ${r.job?.progress?.total || 0} slot`
+            : `Đã bắt đầu chuẩn mới · ${r.job?.progress?.total || 0} tác vụ`,
+          true
+        );
+        if (r.job?.id) {
+          watchLiveJob(r.job.id);
+          if ($("btnRotNowStop")) $("btnRotNowStop").style.display = "inline-block";
+        }
+      } catch (e) {
+        $("bulkResult").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+        flash(e.message, false);
+      }
+    }
+
     function syncDirectLocalWindowTotal() {
       const box = $("rotNowWindowTotal");
       if (!box) return;
       try {
         const windows = readDirectLocalWindowsStrict();
-        const total = windows.reduce((sum, item) => sum + item.posts, 0);
-        box.innerHTML =
-          `→ <b>${total} bài/Page/ngày</b> · tool <b>chờ đến giờ rồi đăng trực tiếp</b> ` +
-          `(${windows.map((item) => `${esc(item.name)}×${item.posts}`).join(" + ")}). ` +
-          `Không hẹn lịch trên Facebook.`;
+        const split = !!$("rotSplitPagesWindows")?.checked;
+        const burst = $("rotBurstThreeVideos")?.checked !== false;
+        if (split) {
+          box.innerHTML =
+            `→ Nửa page sáng / nửa tối · mỗi page <b>${windows[0]?.posts || 3} video</b> ` +
+            `(${windows.map((item) => esc(item.name) + " " + item.start + "–" + item.end).join(" · ")}).`;
+        } else {
+          box.innerHTML =
+            `→ Cả list (vd 40 page / 2 token) chạy <b>cả 2 khung</b>, rải đều 2 giờ · ` +
+            `mỗi page ${burst ? "3 video ≤30s" : (windows[0]?.posts || "") + " bài"}. ` +
+            `(${windows.map((item) => esc(item.name) + " " + item.start + "–" + item.end).join(" · ")}).`;
+        }
       } catch (e) {
         box.innerHTML = `<span class="fail">${esc(e.message)}</span>`;
       }
@@ -3854,7 +4208,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if ($("rotNowWindows") && !$("rotNowWindows").value.trim()) {
         $("rotNowWindows").value =
           ($("rotWindows")?.value || "").trim() ||
-          "Sáng | 07:30 | 11:30 | 1\nTối | 18:00 | 21:30 | 1";
+          "Sáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3";
       }
       if (timeMode === "windows") syncDirectLocalWindowTotal();
       const th = $("rotNowTimeHelp");
@@ -3863,7 +4217,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
           timeMode === "preferred"
             ? "Giờ ưa thích từng page (cùng hẹn FB) · max/interval page + anti · tool chờ → đăng API."
             : timeMode === "windows"
-              ? "Sáng/Tối: tool treo, đến giờ trong khung → đăng API ngay (không scheduled FB)."
+              ? "06:00–08:00 và 18:00–20:00: rải 40 page trong 2 giờ; mỗi page 3 video ≤30s."
               : "Liên tục: bài đầu ngay; các vòng sau + gap (interval page + anti).";
       }
       const help = $("rotNowMediaHelp");
@@ -3953,16 +4307,23 @@ Tối | 18:00 | 21:30 | 2</textarea>
         if (timeMode === "windows") throw e;
         windows = parseWindowsText($("rotNowWindows")?.value || $("rotWindows")?.value || "") || [];
       }
-      const fixedType = $("rotNowPostType")?.value || "photo";
+      const burst = $("rotBurstThreeVideos")?.checked !== false;
+      const split = !!$("rotSplitPagesWindows")?.checked;
+      if (burst && Array.isArray(windows)) {
+        windows = windows.map((w) => ({ ...w, posts: 3 }));
+      }
+      const fixedType = burst ? "video" : ($("rotNowPostType")?.value || "photo");
       return {
-        posts_per_page_per_day: Number($("rotNowPerDay").value) || 1,
-        post_type: mediaMode === "fixed" ? fixedType : mediaMode === "page_sequence" ? "auto" : fixedType,
+        posts_per_page_per_day: burst ? 3 : Number($("rotNowPerDay").value) || 1,
+        post_type: burst ? "video" : mediaMode === "fixed" ? fixedType : mediaMode === "page_sequence" ? "auto" : fixedType,
         page_target_mode: target,
         run_now_time_mode: timeMode,
-        media_pattern_mode: mediaMode,
+        media_pattern_mode: burst ? "fixed" : mediaMode,
         media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
         mode: timeMode === "windows" ? "windows" : "fixed_gap",
         windows,
+        split_pages_across_windows: split,
+        burst_same_page: burst,
         app_rotation_mode: $("rotAppStrategy")?.value || "interleave_apps",
         // Cho phép 0 (Number("")=0; không dùng || 15 vì 0 bị thay thành 15)
         between_tasks_gap_minutes_min: (() => {
@@ -4545,16 +4906,25 @@ Tối | 18:00 | 21:30 | 2</textarea>
       runNowPlanSignature = null;
     };
     ["rotNowMediaMode", "rotNowMediaPattern", "rotNowPostType", "rotNowTimeGap", "rotNowTimeWindows", "rotNowTimePreferred",
-      "rotPageTargetSelected", "rotPageTargetAll", "rotNowPerDay", "rotNowWindows"].forEach((id) => {
+      "rotPageTargetSelected", "rotPageTargetAll", "rotNowPerDay", "rotNowWindows",
+      "rotSplitPagesWindows", "rotBurstThreeVideos"].forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.addEventListener("change", () => {
         syncRunNowMediaUi();
+        if (id === "rotNowWindows" || id === "rotSplitPagesWindows" || id === "rotBurstThreeVideos") {
+          syncStandardBurstFields({ fromBulk: false });
+          syncBulkStandardWindowTotal();
+        }
         runNowPlanId = null;
         runNowPlanSignature = null;
       });
       el.addEventListener("input", () => {
-        if (id === "rotNowWindows") syncDirectLocalWindowTotal();
+        if (id === "rotNowWindows" || id === "rotSplitPagesWindows" || id === "rotBurstThreeVideos") {
+          syncDirectLocalWindowTotal();
+          syncStandardBurstFields({ fromBulk: false });
+          syncBulkStandardWindowTotal();
+        }
         runNowPlanId = null;
         runNowPlanSignature = null;
       });
@@ -5159,12 +5529,20 @@ Tối | 18:00 | 21:30 | 2</textarea>
         !$("rotNowTimeWindows")?.checked &&
         !$("rotNowTimePreferred")?.checked
       ) {
-        if ($("rotNowTimeGap")) $("rotNowTimeGap").checked = true;
+        if ($("rotNowTimeWindows")) $("rotNowTimeWindows").checked = true;
       }
       if ($("rotWindows") && !$("rotWindows").value.trim()) {
-        $("rotWindows").value = "Sáng | 07:30 | 11:30 | 1\nTối | 18:00 | 21:30 | 1";
+        $("rotWindows").value = "Sáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3";
       }
+      if ($("rotNowWindows") && !$("rotNowWindows").value.trim()) {
+        $("rotNowWindows").value = DEFAULT_STANDARD_WINDOWS;
+      }
+      if ($("bulkStdWindows") && !$("bulkStdWindows").value.trim()) {
+        $("bulkStdWindows").value = DEFAULT_STANDARD_WINDOWS;
+      }
+      syncStandardBurstFields({ fromBulk: false });
       syncRunNowMediaUi();
+      applyBulkExclusiveUi();
       if (selectedId) await loadConfig(selectedId);
       // Re-apply hash view after data load (controls may have changed)
       setWorkspaceView(workspaceViewFromHash() || activeWorkspaceView, { save: false });

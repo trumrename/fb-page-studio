@@ -100,7 +100,35 @@ function ensureHistoryIds() {
   return historyIdCache;
 }
 
+function compactHistoryTask(t) {
+  const r = t.result || {};
+  return {
+    id: t.id,
+    index: t.index,
+    kind: t.kind,
+    status: t.status,
+    percent: t.percent || 0,
+    page_row_id: t.page_row_id,
+    page_name: t.page_name,
+    page_id: t.page_id,
+    label: t.label,
+    message: t.message || null,
+    error: t.error || null,
+    run_at: t.run_at || t.opts?.run_at || null,
+    started_at: t.started_at || null,
+    finished_at: t.finished_at || null,
+    post_type: t.opts?.post_type || r.post_type || null,
+    fb_post_id: r.post_id || r.fb_post_id || r.log?.fb_post_id || null,
+    fb_post_url: r.post_url || r.fb_post_url || r.log?.fb_post_url || null,
+    burst: !!t.opts?.burst,
+    fb_check: t.fb_check || null,
+  };
+}
+
 function historySummary(job) {
+  const tasks = Array.isArray(job.tasks)
+    ? job.tasks.slice(0, 500).map(compactHistoryTask)
+    : [];
   return {
     id: job.id,
     title: job.title || job.id,
@@ -134,6 +162,7 @@ function historySummary(job) {
       status: p.status,
       last_error: p.last_error || null,
     })),
+    tasks,
     failed_tasks: (job.failed_tasks || []).map((t) => ({
       id: t.id,
       index: t.index,
@@ -814,6 +843,96 @@ async function waitUntilTaskDue(job, task) {
   return false;
 }
 
+function burstGroupFrom(job, task) {
+  if (!task?.opts?.burst) return [task];
+  const idx = job.tasks.indexOf(task);
+  if (idx < 0) return [task];
+  const pageId = Number(task.page_row_id);
+  const t0 = Date.parse(task.run_at || task.opts?.run_at || "") || 0;
+  const group = [task];
+  for (let i = idx + 1; i < job.tasks.length; i++) {
+    const t = job.tasks[i];
+    if (["ok", "fail", "skipped", "running"].includes(t.status)) break;
+    if (!t.opts?.burst || Number(t.page_row_id) !== pageId) break;
+    const t1 = Date.parse(t.run_at || t.opts?.run_at || "") || 0;
+    if (t0 && t1 && t1 - t0 > 31_000) break;
+    group.push(t);
+    if (group.length >= 3) break;
+  }
+  return group;
+}
+
+async function finishTaskResult(job, task, result) {
+  task.result = summarizeResult(result);
+  task.percent = 100;
+  if (result?.ok === false || result?.scheduled === false) {
+    task.status = "fail";
+    task.error = result.error || "Thất bại";
+    task.message = `Thất bại: ${task.error}`;
+    notify(job, "error", `FAIL · ${task.page_name}`, `${task.label}: ${task.error}`);
+  } else {
+    task.status = "ok";
+    task.message = successMessage(task, result);
+    if (result?.auto_retries) task.message += ` · tự retry ${result.auto_retries} lần`;
+    notify(job, "success", `OK · ${task.page_name}`, task.message);
+  }
+  const paths = getReportPaths();
+  job.report_files = uniqueFiles(job.report_files, {
+    csv: paths.csv_exists ? paths.csv : null,
+    xlsx: paths.xlsx_exists ? paths.xlsx : null,
+  });
+}
+
+async function runBurstParallel(job, group) {
+  const due = await waitUntilTaskDue(job, group[0]);
+  if (!due) {
+    for (const task of group) {
+      task.status = "skipped";
+      task.percent = 100;
+      task.message = "Đã dừng trong lúc chờ giờ đăng trực tiếp";
+      task.finished_at = nowIso();
+    }
+    recompute(job);
+    emit(job);
+    return;
+  }
+  const t0 = Date.parse(group[0].run_at || group[0].opts?.run_at || "") || Date.now();
+  await Promise.all(
+    group.map(async (task, i) => {
+      const t1 = Date.parse(task.run_at || task.opts?.run_at || "") || t0;
+      const delay = Math.max(0, Math.min(30_000, t1 - t0, i * 15_000));
+      if (delay > 0) await sleep(delay);
+      if (job.stop_requested) {
+        task.status = "skipped";
+        task.percent = 100;
+        task.message = "Đã dừng — bỏ qua";
+        task.finished_at = nowIso();
+        return;
+      }
+      task.status = "running";
+      task.percent = 40;
+      task.message = `Burst ${i + 1}/${group.length} · đăng song song (cách ≤30s)…`;
+      task.started_at = nowIso();
+      recompute(job);
+      emit(job);
+      try {
+        const result = await executeTaskWithRetry(job, task);
+        await finishTaskResult(job, task, result);
+      } catch (e) {
+        task.status = "fail";
+        task.percent = 100;
+        task.error = e.message;
+        task.message = `Thất bại: ${e.message}`;
+        notify(job, "error", `FAIL · ${task.page_name}`, e.message);
+      }
+      task.finished_at = nowIso();
+      refreshResources(job);
+      recompute(job);
+      emit(job);
+    })
+  );
+}
+
 async function runJob(jobId) {
   const job = jobs.get(jobId);
   if (!job) return;
@@ -823,10 +942,29 @@ async function runJob(jobId) {
   recompute(job);
   emit(job);
 
+  const consumed = new Set();
   for (const task of job.tasks) {
     // Resume-safe: task đã có kết quả cuối (ok/fail/skipped) thì KHÔNG chạy lại
     // — tránh đăng trùng khi job được re-arm sau khi mở lại app.
-    if (["ok", "fail", "skipped"].includes(task.status)) {
+    if (consumed.has(task) || ["ok", "fail", "skipped"].includes(task.status)) {
+      continue;
+    }
+    const burstGroup = burstGroupFrom(job, task);
+    if (burstGroup.length > 1) {
+      for (const t of burstGroup) consumed.add(t);
+      if (job.stop_requested) {
+        for (const t of burstGroup) {
+          if (t.status === "pending") {
+            t.status = "skipped";
+            t.percent = 100;
+            t.message = "Đã dừng — bỏ qua";
+            t.finished_at = nowIso();
+          }
+        }
+        continue;
+      }
+      await waitWhilePaused(job);
+      await runBurstParallel(job, burstGroup);
       continue;
     }
 
@@ -1051,6 +1189,7 @@ async function runJob(jobId) {
             // Direct Local continuous: cùng first batch — gap/quota do lịch, không chặn lại
             ignore_quota: true,
             ignore_interval: true,
+            burst: !!s.burst,
             post_type: s.planned_post_type,
             run_at: s.iso,
           },
@@ -1069,9 +1208,29 @@ async function runJob(jobId) {
       );
       emit(job);
 
+      const consumedDay = new Set();
       for (let i = base; i < job.tasks.length; i++) {
         if (job.stop_requested) break;
         const task = job.tasks[i];
+        if (consumedDay.has(task) || ["ok", "fail", "skipped"].includes(task.status)) continue;
+        const burstGroup = burstGroupFrom(job, task);
+        if (burstGroup.length > 1) {
+          for (const t of burstGroup) consumedDay.add(t);
+          await waitWhilePaused(job);
+          if (job.stop_requested) {
+            for (const t of burstGroup) {
+              if (t.status === "pending") {
+                t.status = "skipped";
+                t.percent = 100;
+                t.message = "Đã dừng — bỏ qua";
+                t.finished_at = nowIso();
+              }
+            }
+            continue;
+          }
+          await runBurstParallel(job, burstGroup);
+          continue;
+        }
         await waitWhilePaused(job);
         if (job.stop_requested) {
           if (task.status === "pending") {
@@ -1211,6 +1370,7 @@ async function executeTask(task, job = null) {
       force: true,
       ignore_quota: !!task.opts.ignore_quota,
       ignore_interval: !!task.opts.ignore_interval,
+      burst: !!task.opts.burst,
       post_type: task.opts.post_type,
       delivery_mode: deliveryMode,
     });

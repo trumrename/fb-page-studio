@@ -1,19 +1,24 @@
-/** Serialize media/caption selection and Graph publishing for each Page. */
-const tails = new Map();
+/** Per-page lock. Burst of 3 videos on one page may run in parallel (maxConcurrent). */
+const sem = new Map();
 
-export async function withPageOperationLock(pageRowId, fn) {
+export async function withPageOperationLock(pageRowId, fn, opts = {}) {
   const key = String(pageRowId || "unknown");
-  const previous = tails.get(key) || Promise.resolve();
-  let release;
-  const current = new Promise((resolve) => {
-    release = resolve;
-  });
-  tails.set(key, current);
-  await previous.catch(() => {});
+  const max = Math.max(1, Math.min(6, Number(opts.maxConcurrent) || 1));
+  let s = sem.get(key);
+  if (!s) {
+    s = { active: 0, q: [] };
+    sem.set(key, s);
+  }
+  if (s.active >= max) {
+    await new Promise((resolve) => s.q.push(resolve));
+  }
+  s.active += 1;
   try {
     return await fn();
   } finally {
-    release();
-    if (tails.get(key) === current) tails.delete(key);
+    s.active -= 1;
+    const next = s.q.shift();
+    if (next) next();
+    else if (s.active <= 0) sem.delete(key);
   }
 }

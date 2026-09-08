@@ -34,6 +34,7 @@ import {
   assertCanPublish,
   pickUnusedMedia,
   finalizeMediaAfterSuccess,
+  releaseInflightMedia,
   countUnusedMedia,
   noteGraphFailure,
   clampPageLimits,
@@ -442,6 +443,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       mediaPath,
       ignore_quota: !!opts.ignore_quota,
       ignore_interval: !!opts.ignore_interval,
+      burst: !!opts.burst,
     });
     if (gate.ok && caption) break;
     if (gate.ok && !caption) {
@@ -461,9 +463,11 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         "PAGE_COOLDOWN",
       ].includes(gate.code)
     ) {
+      releaseInflightMedia(mediaPath);
       throw new Error(gate.error);
     }
     if (!caption || attempt === maxCaptionAttempts - 1) {
+      releaseInflightMedia(mediaPath);
       if (gate.code === "CAPTION_DUP" || triedCaptions.length) {
         throw new Error(
           `Hết caption khả dụng trong kho (đã dùng / trùng trong cửa sổ anti-spam). ` +
@@ -474,6 +478,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       throw new Error(gate.error || "Không chọn được caption");
     }
     // CAPTION_DUP / MEDIA_DUP / KEYWORD → retry pick
+    releaseInflightMedia(mediaPath);
     mediaPath = null;
   }
 
@@ -653,6 +658,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       fb_post_id: result?.post_id,
       caption,
     });
+    releaseInflightMedia(mediaPath);
     movedPath = fin.movedPath;
 
     let commentText = null;
@@ -765,6 +771,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       /caption|media|inbox|kho|quota|interval|cooldown|anti-spam|hết caption|không có ảnh|không có video/i.test(
         String(e.message || "")
       );
+    releaseInflightMedia(mediaPath);
     if (isGraphFail && !isLocalValidation) {
       noteGraphFailure(e);
     }
@@ -795,8 +802,10 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
 }
 
 export async function runOnePost(pageRowId, opts = {}) {
-  return withPageOperationLock(pageRowId, () =>
-    runOnePostUnlocked(pageRowId, opts)
+  return withPageOperationLock(
+    pageRowId,
+    () => runOnePostUnlocked(pageRowId, opts),
+    { maxConcurrent: opts.burst ? 3 : 1 }
   );
 }
 

@@ -217,14 +217,20 @@ export async function exchangeLongLivedUserToken(shortLivedToken, appCreds = nul
   });
 }
 
-/** Profile of the connected user */
+/** Profile of the connected user / System User / Page (page token → Page node). */
 export async function getMe(userToken, opts = {}) {
-  return graphGet(
-    "/me",
-    userToken,
-    { fields: "id,name,email,picture.type(large)" },
-    { appSecret: opts.appSecret }
-  );
+  const graphOpts = { appSecret: opts.appSecret, metaAppKey: opts.metaAppKey };
+  try {
+    return await graphGet(
+      "/me",
+      userToken,
+      { fields: "id,name,email,picture.type(large)" },
+      graphOpts
+    );
+  } catch (e) {
+    // System User / Page token often has no email
+    return graphGet("/me", userToken, { fields: "id,name" }, graphOpts);
+  }
 }
 
 const PAGE_LIST_FIELDS =

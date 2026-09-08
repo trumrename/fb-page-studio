@@ -415,12 +415,37 @@ export function assertCanPublish({
   mediaPath,
   ignore_quota,
   ignore_interval,
+  burst = false,
   isSchedule = false,
   scheduledAtUnix,
 } = {}) {
   ensureAntiSpamTables();
   const s = getAntiSpamSettings();
   if (!s.enabled) return { ok: true, settings: s };
+
+  // 3 video liền nhau trên 1 page: không chặn cooldown/quota/interval
+  if (burst) {
+    const bo = getBackoffState();
+    if (bo.active) {
+      return {
+        ok: false,
+        code: "GRAPH_BACKOFF",
+        error: `Anti-spam backoff Graph ~${Math.ceil(bo.seconds_left / 60)} phút (lỗi trước: ${bo.last_error || "—"})`,
+      };
+    }
+    const usage = getLastUsage();
+    if (
+      usage?.call_count != null &&
+      Number(usage.call_count) >= s.pause_on_app_usage_pct
+    ) {
+      return {
+        ok: false,
+        code: "APP_USAGE_HIGH",
+        error: `Anti-spam: App API usage ${usage.call_count}% ≥ ${s.pause_on_app_usage_pct}% — tạm dừng publish.`,
+      };
+    }
+    return { ok: true, settings: s, burst: true };
+  }
 
   // Production locks
   if (ignore_quota && !s.allow_ignore_quota) {
@@ -666,12 +691,22 @@ export function finalizeMediaAfterSuccess({
   return { movedPath, hash, moveError };
 }
 
+/** Paths reserved by in-flight burst posts (same page 3 video parallel). */
+const inflightMedia = new Set();
+
+export function releaseInflightMedia(filePath) {
+  if (!filePath) return;
+  inflightMedia.delete(path.resolve(String(filePath)));
+}
+
 /**
  * Pick media skipping already-used hashes. Moves dups out of inbox → posted.
  */
 export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder) {
   const s = getAntiSpamSettings();
-  const files = listMediaFilesSync(folder, kind);
+  const files = listMediaFilesSync(folder, kind).filter(
+    (f) => !inflightMedia.has(path.resolve(f))
+  );
   if (!files.length) return { path: null, skipped: 0 };
 
   const protectUsed = Boolean(s.media_once_forever || (s.enabled && s.block_duplicate_media));
@@ -703,7 +738,9 @@ export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder)
     }
   }
   if (!usable.length) return { path: null, skipped };
-  return { path: pickRandomMediaSpaced(usable, folder, kind), skipped };
+  const picked = pickRandomMediaSpaced(usable, folder, kind);
+  if (picked) inflightMedia.add(path.resolve(picked));
+  return { path: picked, skipped };
 }
 
 function pickRandomMediaSpaced(files, folder, kind) {

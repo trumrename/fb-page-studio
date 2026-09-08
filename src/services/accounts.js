@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { getDb } from "../db/index.js";
 import { config } from "../config.js";
 import { encryptToken, decryptToken, maskToken } from "./crypto.js";
@@ -7,8 +8,12 @@ import {
   getMe,
   getAllPages,
   diagnoseUserPageAccess,
+  graphGetSoft,
 } from "./facebook.js";
 import { checkQuota } from "./license.js";
+
+/** Synthetic account for individually pasted Page tokens (not a Facebook user). */
+export const PAGE_TOKEN_IMPORT_UID = "__page_token_import__";
 
 function nowIso() {
   return new Date().toISOString();
@@ -17,6 +22,13 @@ function nowIso() {
 function expiresAtFromSeconds(expiresIn) {
   if (!expiresIn) return null;
   return new Date(Date.now() + Number(expiresIn) * 1000).toISOString();
+}
+
+/** Nickname for imported System User token (Token 1 / Token 2 / tên app BM). */
+function sanitizeAccountLabel(raw) {
+  const s = String(raw || "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  return s.slice(0, 80);
 }
 
 /**
@@ -82,13 +94,20 @@ export async function connectFromUserToken(userToken, opts = {}) {
     throw e;
   }
   const picture = me.picture?.data?.url || me.picture?.url || null;
+  const labelName = sanitizeAccountLabel(opts.label || opts.name);
 
   const db = getDb();
   const existing = db
     .prepare(
-      `SELECT id FROM fb_accounts WHERE fb_user_id = ? AND meta_app_key = ?`
+      `SELECT id, name FROM fb_accounts WHERE fb_user_id = ? AND meta_app_key = ?`
     )
     .get(me.id, metaAppKey);
+  const displayName =
+    labelName ||
+    (Object.hasOwn(opts, "label") && existing?.name) ||
+    me.name ||
+    existing?.name ||
+    null;
 
   if (!existing) {
     const n = db
@@ -113,7 +132,7 @@ export async function connectFromUserToken(userToken, opts = {}) {
         status = 'active', last_error = NULL, updated_at = datetime('now')
        WHERE id = ?`
     ).run(
-      me.name || null,
+      displayName,
       me.email || null,
       picture,
       encryptToken(token),
@@ -132,7 +151,7 @@ export async function connectFromUserToken(userToken, opts = {}) {
       )
       .run(
         me.id,
-        me.name || null,
+        displayName,
         me.email || null,
         picture,
         encryptToken(token),
@@ -167,6 +186,314 @@ export async function connectFromUserToken(userToken, opts = {}) {
     profile_enrich,
     meta_app_key: metaAppKey,
   };
+}
+
+function splitAccessTokens(raw) {
+  return String(raw || "")
+    .split(/[\r\n,;]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 20);
+}
+
+function isPageTokenAccountsError(err) {
+  const m = String(err || "").toLowerCase();
+  return (
+    m.includes("page access token") ||
+    m.includes("does not support this operation") ||
+    m.includes("cannot be loaded")
+  );
+}
+
+/**
+ * Classify a pasted Graph token: user / system user (lists pages) vs page token.
+ */
+async function classifyAccessToken(token, graphOpts) {
+  const me = await getMe(token, graphOpts);
+  if (!me?.id) throw new Error("Token không gọi được /me — token sai hoặc hết hạn");
+  const acc = await graphGetSoft(
+    "/me/accounts",
+    token,
+    { fields: "id", limit: 1 },
+    graphOpts
+  );
+  if (acc.ok) {
+    return { kind: "user", me };
+  }
+  if (isPageTokenAccountsError(acc.error)) {
+    return { kind: "page", me, accountsError: acc.error || null };
+  }
+  if (acc.code === 190) {
+    throw new Error(acc.error || "Token hết hạn (OAuthException #190)");
+  }
+  // User/System User thiếu /me/accounts (thiếu pages_show_list) — vẫn import, sync BM.
+  return { kind: "user", me, accountsError: acc.error || null };
+}
+
+/**
+ * Import System User / user token (all assigned Pages) or one-or-more Page tokens.
+ * Does not add Pages onto a personal via — Graph returns page tokens from BM assignment.
+ */
+export async function importFromAccessToken(rawToken, opts = {}) {
+  const tokens = splitAccessTokens(rawToken);
+  if (!tokens.length) {
+    throw new Error(
+      "Dán System User token (BM) hoặc Page token. Lấy trong Business Settings → System users → Generate token."
+    );
+  }
+
+  const metaAppKey = String(opts.metaAppKey || opts.meta_app_key || "app1");
+  const app = opts.app || {};
+  const baseLabel = sanitizeAccountLabel(opts.label || opts.name);
+  const graphOpts = {
+    appSecret: String(app.appSecret || "").trim() || undefined,
+    metaAppKey,
+  };
+
+  const results = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const label =
+      !baseLabel
+        ? ""
+        : tokens.length === 1
+          ? baseLabel
+          : `${baseLabel} · ${i + 1}`;
+    const classified = await classifyAccessToken(token, graphOpts);
+    if (classified.kind === "user") {
+      const connected = await importSystemUserToken(token, classified.me, {
+        metaAppKey,
+        app,
+        label,
+      });
+      results.push({
+        kind: "system_or_user",
+        extra_slot: Boolean(connected.extra_slot),
+        name: connected.account?.name || label || classified.me.name,
+        fb_id: classified.me.id,
+        account_id: connected.account?.id,
+        page_count: connected.pages?.length || 0,
+        sync_summary: connected.sync_summary || null,
+      });
+    } else {
+      const one = await importPageToken(token, classified.me, {
+        metaAppKey,
+        app,
+        label,
+      });
+      results.push({
+        kind: "page",
+        name: one.page?.name || classified.me.name,
+        fb_id: classified.me.id,
+        account_id: one.account_id,
+        page_count: 1,
+        page_id: one.page?.page_id,
+      });
+    }
+  }
+
+  const pageCount = results.reduce((n, r) => n + (r.page_count || 0), 0);
+  return {
+    ok: true,
+    imported: results.length,
+    page_count: pageCount,
+    results,
+  };
+}
+
+function tokenFingerprint(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex").slice(0, 10);
+}
+
+/**
+ * First System User token → sync all Pages.
+ * Extra tokens of the same SU (khác app / khác mã) → slot riêng, không đè token cũ, không kéo lại hết page.
+ */
+async function importSystemUserToken(token, me, opts = {}) {
+  const metaAppKey = String(opts.metaAppKey || "app1");
+  const app = opts.app || {};
+  const label = sanitizeAccountLabel(opts.label);
+  const db = getDb();
+  const primary = db
+    .prepare(
+      `SELECT id, user_token_enc FROM fb_accounts WHERE fb_user_id = ? AND meta_app_key = ?`
+    )
+    .get(String(me.id), metaAppKey);
+
+  if (!primary) {
+    return connectFromUserToken(token, {
+      metaAppKey,
+      app,
+      upgradeLongLived: false,
+      label,
+    });
+  }
+
+  let same = false;
+  try {
+    same = decryptToken(primary.user_token_enc) === token;
+  } catch {
+    same = false;
+  }
+  if (same) {
+    return connectFromUserToken(token, {
+      metaAppKey,
+      app,
+      upgradeLongLived: false,
+      label,
+    });
+  }
+
+  const slotUid = `${me.id}~${tokenFingerprint(token)}`;
+  const slot = db
+    .prepare(
+      `SELECT id, name FROM fb_accounts WHERE fb_user_id = ? AND meta_app_key = ?`
+    )
+    .get(slotUid, metaAppKey);
+
+  const picture = me.picture?.data?.url || me.picture?.url || null;
+  const slotCount = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM fb_accounts
+       WHERE meta_app_key = ? AND (fb_user_id = ? OR fb_user_id LIKE ?)`
+    )
+    .get(metaAppKey, String(me.id), `${me.id}~%`).n;
+  const slotName =
+    label ||
+    (slot && slot.name) ||
+    `${me.name || "System User"} · token ${slotCount + 1}`;
+
+  if (slot) {
+    db.prepare(
+      `UPDATE fb_accounts SET
+        name = ?, picture_url = ?, user_token_enc = ?,
+        status = 'active', last_error = NULL, updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(slotName, picture, encryptToken(token), slot.id);
+    return {
+      extra_slot: true,
+      account: getAccountPublic(slot.id),
+      pages: listPages({ accountId: slot.id, limit: 5000 }),
+    };
+  }
+
+  const n = db
+    .prepare(`SELECT COUNT(*) AS c FROM fb_accounts WHERE status != 'deleted'`)
+    .get().c;
+  const q = checkQuota("account", n);
+  if (!q.ok) throw new Error(q.error || "License không cho thêm token (account)");
+
+  const info = db
+    .prepare(
+      `INSERT INTO fb_accounts
+        (fb_user_id, name, email, picture_url, user_token_enc, user_token_expires_at,
+         status, meta_app_key, meta_app_id)
+       VALUES (?, ?, NULL, ?, ?, NULL, 'active', ?, ?)`
+    )
+    .run(
+      slotUid,
+      slotName,
+      picture,
+      encryptToken(token),
+      metaAppKey,
+      app.appId || null
+    );
+  return {
+    extra_slot: true,
+    account: getAccountPublic(info.lastInsertRowid),
+    pages: [],
+  };
+}
+
+function getOrCreatePageTokenImportAccount(metaAppKey, appId) {
+  const db = getDb();
+  const existing = db
+    .prepare(
+      `SELECT id FROM fb_accounts WHERE fb_user_id = ? AND meta_app_key = ?`
+    )
+    .get(PAGE_TOKEN_IMPORT_UID, metaAppKey);
+  if (existing) return existing.id;
+
+  const n = db
+    .prepare(`SELECT COUNT(*) AS c FROM fb_accounts WHERE status != 'deleted'`)
+    .get().c;
+  const q = checkQuota("account", n);
+  if (!q.ok) throw new Error(q.error || "License không cho thêm account");
+
+  const info = db
+    .prepare(
+      `INSERT INTO fb_accounts
+        (fb_user_id, name, email, picture_url, user_token_enc, user_token_expires_at,
+         status, meta_app_key, meta_app_id)
+       VALUES (?, ?, NULL, NULL, ?, NULL, 'active', ?, ?)`
+    )
+    .run(
+      PAGE_TOKEN_IMPORT_UID,
+      "Page tokens (BM import)",
+      encryptToken("page-token-import"),
+      metaAppKey,
+      appId || null
+    );
+  return info.lastInsertRowid;
+}
+
+async function importPageToken(token, me, opts = {}) {
+  const metaAppKey = String(opts.metaAppKey || "app1");
+  const app = opts.app || {};
+  const accountId = getOrCreatePageTokenImportAccount(
+    metaAppKey,
+    app.appId || null
+  );
+
+  const db = getDb();
+  const pageId = String(me.id);
+  const existingPage = db
+    .prepare(
+      `SELECT id FROM fb_pages WHERE account_id = ? AND page_id = ?`
+    )
+    .get(accountId, pageId);
+  if (!existingPage) {
+    const activeGlobal = db
+      .prepare(`SELECT COUNT(*) AS n FROM fb_pages WHERE status = 'active'`)
+      .get().n;
+    const quota = checkQuota("page", activeGlobal);
+    if (!quota.ok) throw new Error(quota.error || "License hết slot Page");
+  }
+
+  const picture = me.picture?.data?.url || me.picture?.url || null;
+  db.prepare(
+    `INSERT INTO fb_pages (
+      account_id, page_id, name, category, tasks_json, page_token_enc,
+      followers_count, fan_count, picture_url, link,
+      status, last_synced_at, updated_at
+    ) VALUES (
+      ?, ?, ?, NULL, '[]', ?, NULL, NULL, ?, NULL,
+      'active', datetime('now'), datetime('now')
+    )
+    ON CONFLICT(account_id, page_id) DO UPDATE SET
+      name = excluded.name,
+      page_token_enc = excluded.page_token_enc,
+      picture_url = COALESCE(excluded.picture_url, fb_pages.picture_url),
+      status = 'active',
+      last_synced_at = datetime('now'),
+      updated_at = datetime('now')`
+  ).run(accountId, pageId, me.name || pageId, encryptToken(token), picture);
+
+  const activeForAccount = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM fb_pages WHERE account_id = ? AND status = 'active'`
+    )
+    .get(accountId).n;
+  db.prepare(
+    `UPDATE fb_accounts SET page_count = ?, last_sync_at = datetime('now'),
+       status = 'active', last_error = NULL, updated_at = datetime('now') WHERE id = ?`
+  ).run(activeForAccount, accountId);
+
+  const page = db
+    .prepare(
+      `SELECT id, page_id, name, status FROM fb_pages WHERE account_id = ? AND page_id = ?`
+    )
+    .get(accountId, pageId);
+  return { account_id: accountId, page };
 }
 
 export async function connectFromOAuthCode(code, opts = {}) {
@@ -221,6 +548,13 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
     .prepare(`SELECT * FROM fb_accounts WHERE id = ?`)
     .get(accountId);
   if (!row) throw new Error("Account not found");
+
+  if (String(row.fb_user_id || "") === PAGE_TOKEN_IMPORT_UID) {
+    throw new Error(
+      "Account này là Page token dán tay — không Sync /me/accounts. " +
+        "Dán thêm token ở «Import token BM» hoặc xóa Page không dùng."
+    );
+  }
 
   const userToken =
     userTokenOptional || decryptToken(row.user_token_enc);

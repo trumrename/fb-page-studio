@@ -221,6 +221,7 @@
                   <div class="actions" style="margin:0;gap:.35rem">
                     <button type="button" class="btn-ghost btn-sm" id="btnRefreshHistory" title="Làm mới lịch sử">↻</button>
                     <button type="button" class="btn-ok btn-sm" id="btnFollowLive" style="display:none">● Theo dõi live</button>
+                    <button type="button" class="btn-primary btn-sm" id="btnFbCheckTasks" title="Gọi Graph API kiểm tra bài còn trên Page">Đối soát Facebook</button>
                   </div>
                 </div>
                 <div id="jobHistoryList" class="job-history-list"><p class="muted" style="margin:0;font-size:.8rem">Chưa có lịch sử job.</p></div>
@@ -838,7 +839,7 @@
           const tasks = job.tasks || [];
           if (!tasks.length) {
             tl.innerHTML = finished
-              ? "<p class='muted'>Bản lịch sử không lưu từng task chi tiết — xem danh sách page phía trên.</p>"
+              ? "<p class='muted'>Job cũ chưa lưu từng task. Chạy job mới (sau bản này) sẽ có đủ video 1–2–3. Vẫn bấm «Đối soát Facebook» nếu có post_id trong log.</p>"
               : "<p class='muted'>—</p>";
           } else {
             tl.innerHTML = tasks
@@ -849,15 +850,23 @@
                   finished && isFail
                     ? `<button type="button" class="btn-primary btn-sm btn-retry-task" data-task-id="${esc(t.id)}" data-job-id="${esc(job.id)}" style="margin-top:.35rem">↻ Đăng lại</button>`
                     : "";
+                const url = t.fb_post_url || t.result?.post_url || t.fb_check?.permalink_url || "";
+                const fb = t.fb_check;
+                let fbBadge = "";
+                if (fb && fb.on_facebook === true) fbBadge = `<span class="ok" style="font-size:.72rem">FB: còn</span>`;
+                else if (fb && fb.on_facebook === false) fbBadge = `<span class="fail" style="font-size:.72rem">FB: mất</span>`;
+                const link = url
+                  ? `<a href="${esc(url)}" target="_blank" rel="noopener" style="font-size:.75rem">Mở bài</a>`
+                  : "";
                 return `
           <div class="task-row ${isFail ? "fail-row" : ""}">
             <div>
               <b>${esc(t.page_name)}</b>
-              <div class="muted">${esc(t.label || "")}</div>
+              <div class="muted">${esc(t.label || "")}${t.post_type ? " · " + esc(t.post_type) : ""}</div>
               ${
                 isFail
                   ? `<div class="task-error">⚠ ${esc(err)}</div>${retryBtn}`
-                  : `<div class="muted" style="margin-top:.15rem">${esc(t.message || "")}</div>`
+                  : `<div class="muted" style="margin-top:.15rem">${esc(t.message || "")} ${link} ${fbBadge}</div>`
               }
             </div>
             <div class="${t.status === "ok" ? "ok" : isFail ? "fail" : "muted"}">${esc(statusLabel(t.status))}</div>
@@ -1053,6 +1062,39 @@
     $("btnRetryAllFailed")?.addEventListener("click", () => retryFailedTasks(currentJobId, {}));
     $("btnRetryAllFailed2")?.addEventListener("click", () => retryFailedTasks(currentJobId, {}));
     $("btnRefreshHistory")?.addEventListener("click", () => loadJobHistory());
+    $("btnFbCheckTasks")?.addEventListener("click", async () => {
+      const id = currentJobId;
+      if (!id) {
+        toast("error", "Chưa chọn job", "Chọn một lần chạy trong lịch sử hoặc chạy job mới.");
+        return;
+      }
+      const btn = $("btnFbCheckTasks");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Đang gọi Graph…";
+      }
+      try {
+        const r = await api("/api/jobs/" + encodeURIComponent(id) + "/fb-check", {
+          method: "POST",
+          body: "{}",
+        });
+        toast(
+          "success",
+          "Đối soát Facebook",
+          `Còn ${r.on_facebook || 0} · mất ${r.missing || 0} · lỗi ${r.errors || 0} · bỏ qua ${r.skipped || 0}`
+        );
+        const live = await api("/api/jobs/" + id).catch(() => null);
+        if (live?.job) renderJob({ ...live.job, tasks: r.tasks || live.job.tasks }, { force: true });
+        else renderJob({ ...(lastRenderedJob || {}), id, tasks: r.tasks || [] }, { force: true });
+      } catch (e) {
+        toast("error", "Đối soát thất bại", e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Đối soát Facebook";
+        }
+      }
+    });
     $("btnFollowLive")?.addEventListener("click", () => enableFollowLive());
     $("pageProgressFilter")?.addEventListener("input", (e) => {
       pageFilterQ = e.target.value || "";
