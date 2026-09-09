@@ -14,6 +14,10 @@ import {
   getCaptionStats,
 } from "./poster.js";
 import { scheduleOnePost } from "./schedule.js";
+import {
+  createCommentSiteTracker,
+  getCommentMaxPagesPerSite,
+} from "./mediaLibrary.js";
 import { getReportPaths } from "./reportExport.js";
 import {
   isTransientGraphError,
@@ -51,7 +55,7 @@ function persistJobsNow() {
       .slice(0, MAX_JOBS)
       .map((j) => {
         // Strip internal flags from disk snapshot
-        const { _resume, _history_saved, ...rest } = j;
+        const { _resume, _history_saved, _commentSiteTracker, ...rest } = j;
         return rest;
       });
     fs.writeFileSync(JOB_STATE_FILE, JSON.stringify(list, null, 2), "utf8");
@@ -594,6 +598,17 @@ export function startJob({
 } = {}) {
   trimJobs();
   const id = nanoid(10);
+  // Comment site budget: mỗi domain (site) tối đa N page trong job này
+  let commentSiteMax = 10;
+  try {
+    const firstPage = (tasks || []).map((t) => Number(t.page_row_id)).find((n) => n > 0);
+    if (firstPage) {
+      const cfg0 = getPagePostConfig(firstPage);
+      commentSiteMax = getCommentMaxPagesPerSite(cfg0?.link_lists || {}, 10);
+    }
+  } catch {
+    /* keep default 10 */
+  }
   const job = {
     id,
     type: type || "batch",
@@ -607,6 +622,8 @@ export function startJob({
     stop_requested: false,
     /** pause between tasks until resume */
     paused: false,
+    /** Shared across tasks — limit comment links per domain to N pages */
+    _commentSiteTracker: createCommentSiteTracker(commentSiteMax),
     /** Direct Local: replan next day after finishing */
     continuous: !!continuous,
     continuous_settings: continuous_settings || null,
@@ -936,6 +953,16 @@ async function runBurstParallel(job, group) {
 async function runJob(jobId) {
   const job = jobs.get(jobId);
   if (!job) return;
+  if (!job._commentSiteTracker) {
+    let max = 10;
+    try {
+      const pid = (job.tasks || []).map((t) => Number(t.page_row_id)).find((n) => n > 0);
+      if (pid) max = getCommentMaxPagesPerSite(getPagePostConfig(pid)?.link_lists || {}, 10);
+    } catch {
+      /* default */
+    }
+    job._commentSiteTracker = createCommentSiteTracker(max);
+  }
   job.status = "running";
   job.started_at = nowIso();
   notify(job, "info", `Job bắt đầu · ${job.title}`, `${job.tasks.length} nhiệm vụ đang chạy tuần tự.`);
@@ -1373,6 +1400,7 @@ async function executeTask(task, job = null) {
       burst: !!task.opts.burst,
       post_type: task.opts.post_type,
       delivery_mode: deliveryMode,
+      comment_site_tracker: job?._commentSiteTracker || null,
     });
   }
   if (kind === "schedule") {
@@ -1381,6 +1409,7 @@ async function executeTask(task, job = null) {
       scheduled_publish_time: task.opts.scheduled_publish_time,
       post_type: task.opts.post_type,
       caption: task.opts.caption,
+      comment_site_tracker: job?._commentSiteTracker || null,
     });
   }
   throw new Error(`Unknown task kind: ${kind}`);

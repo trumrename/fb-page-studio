@@ -497,6 +497,76 @@ export function getCommentLinkPool(linkLists = {}) {
 }
 
 /**
+ * Site = hostname của link (bỏ www.).
+ * Ví dụ: https://profiles.dailypulsepost.com/1-natalie/ → profiles.dailypulsepost.com
+ */
+export function extractCommentSite(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return String(u.hostname || "")
+      .toLowerCase()
+      .replace(/^www\./, "");
+  } catch {
+    const m = raw.match(/^(?:https?:\/\/)?([^/?#]+)/i);
+    return m
+      ? String(m[1])
+          .toLowerCase()
+          .replace(/^www\./, "")
+      : "";
+  }
+}
+
+/**
+ * Ngân sách: mỗi site (domain) chỉ được comment trên tối đa N page (unique page_row_id).
+ * Dùng chung trong 1 job / 1 phiên chạy.
+ */
+export function createCommentSiteTracker(maxPagesPerSite = 10) {
+  const max = Math.max(0, Number(maxPagesPerSite) || 0);
+  /** @type {Map<string, Set<number>>} */
+  const siteToPages = new Map();
+  return {
+    maxPagesPerSite: max,
+    /** Site còn chỗ cho page này? (page đã dùng site trước đó vẫn OK) */
+    canUse(site, pageRowId) {
+      if (!max || !site) return true;
+      const id = Number(pageRowId) || 0;
+      const set = siteToPages.get(site);
+      if (!set) return true;
+      if (set.has(id)) return true;
+      return set.size < max;
+    },
+    /** Ghi nhận page đã comment bằng link thuộc site */
+    record(site, pageRowId) {
+      if (!max || !site) return;
+      const id = Number(pageRowId) || 0;
+      if (!id) return;
+      if (!siteToPages.has(site)) siteToPages.set(site, new Set());
+      siteToPages.get(site).add(id);
+    },
+    count(site) {
+      return siteToPages.get(site)?.size || 0;
+    },
+    snapshot() {
+      const out = {};
+      for (const [s, set] of siteToPages) out[s] = set.size;
+      return out;
+    },
+  };
+}
+
+export function getCommentMaxPagesPerSite(linkLists = {}, fallback = 10) {
+  const n = Number(
+    linkLists?.comment_max_pages_per_site ??
+      linkLists?.max_pages_per_site ??
+      fallback
+  );
+  if (!Number.isFinite(n)) return 10;
+  return Math.max(0, Math.min(500, n));
+}
+
+/**
  * random | sequential | match_media (khớp số thứ tự tên file ↔ dòng link)
  */
 export function getCommentPickMode(linkLists = {}, fallback = "random") {
@@ -692,18 +762,63 @@ export function pickLinkByMediaOrdinal(rawLines, mediaPathOrName) {
     }
   }
 
-  // 3) Cùng số đầu: media "1-natalie…" ↔ URL "/1-…" (theo số trong link, không theo dòng)
-  if (mediaOrd != null && map.has(mediaOrd)) {
-    const url = map.get(mediaOrd);
-    const idx = urls.findIndex((u) => String(u).trim() === String(url).trim());
-    return {
-      url,
-      ordinal: mediaOrd,
-      used_link_index: idx >= 0 ? idx : null,
-      matched: true,
-      reason: "url_path_number",
-      slug: extractUrlSlug(url),
-    };
+  // 3) Cùng số đầu trong URL path — nếu NHIỀU site cùng số, chọn slug gần tên file nhất.
+  //    Ví dụ media "1-natalie-mercer" vs siteA/1-natalie-mercer + siteB/1-other → chọn A.
+  if (mediaOrd != null) {
+    const candidates = entries.filter((e) => e.pathNumber === mediaOrd);
+    if (candidates.length === 1) {
+      const e = candidates[0];
+      const idx = urls.findIndex((u) => String(u).trim() === String(e.url).trim());
+      return {
+        url: e.url,
+        ordinal: mediaOrd,
+        used_link_index: idx >= 0 ? idx : null,
+        matched: true,
+        reason: "url_path_number",
+        slug: e.slug,
+      };
+    }
+    if (candidates.length > 1) {
+      let best = null;
+      let bestScore = -1;
+      for (const e of candidates) {
+        const sk = normalizeKey(e.slug);
+        let score = 0;
+        if (stemKey === sk) score = 100;
+        else if (stemKey.includes(sk) || sk.includes(stemKey)) score = 80;
+        else {
+          // token overlap (natalie, mercer…)
+          const a = new Set(stemKey.split("-").filter((t) => t && t !== String(mediaOrd)));
+          const b = sk.split("-").filter((t) => t && t !== String(mediaOrd));
+          const hit = b.filter((t) => a.has(t)).length;
+          score = hit * 10;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          best = e;
+        }
+      }
+      if (best && bestScore > 0) {
+        const idx = urls.findIndex((u) => String(u).trim() === String(best.url).trim());
+        return {
+          url: best.url,
+          ordinal: mediaOrd,
+          used_link_index: idx >= 0 ? idx : null,
+          matched: true,
+          reason: "url_path_number_best_slug",
+          slug: best.slug,
+        };
+      }
+      // Nhiều site cùng số, không phân biệt được theo tên → bỏ (tránh gắn nhầm site)
+      return {
+        url: null,
+        ordinal: mediaOrd,
+        used_link_index: null,
+        matched: false,
+        reason: "ambiguous_same_number_multi_site",
+        slug: stemKey,
+      };
+    }
   }
 
   return {
@@ -751,6 +866,7 @@ export function buildComment(templates, linkLists = {}, pickMode = "random") {
  * - Template không placeholder (vd "see more :") + có link → "câu\nlink".
  *
  * cfg.media_path / cfg.media_name: dùng khi mode = match_media
+ * cfg.page_row_id + cfg.comment_site_tracker: giới hạn tối đa N page / site (domain)
  *
  * @returns {{ text: string|null, link: string|null, template: string|null, link_lists: object, used_link_index: number|null }}
  */
@@ -758,6 +874,16 @@ export function assignCommentForPost(cfg = {}) {
   const ll0 = cfg.link_lists && typeof cfg.link_lists === "object" ? { ...cfg.link_lists } : {};
   const mode = getCommentPickMode(ll0, cfg.comment_pick_mode || "random");
   const templates = normalizeLineList(cfg.comment_templates);
+  const pageRowId = Number(cfg.page_row_id) || 0;
+  const siteTracker = cfg.comment_site_tracker || null;
+  const maxPagesPerSite =
+    siteTracker?.maxPagesPerSite ?? getCommentMaxPagesPerSite(ll0, 10);
+  const linkSiteOk = (url) => {
+    if (!siteTracker || !maxPagesPerSite) return true;
+    const site = extractCommentSite(url);
+    if (!site) return true;
+    return siteTracker.canUse(site, pageRowId);
+  };
   // Keep raw lines (may include "1. https://...") for ordinal matching
   const rawLinkLines = (() => {
     const ll = ll0;
@@ -817,18 +943,24 @@ export function assignCommentForPost(cfg = {}) {
   let linkNext = Number(ll0.comment_link_next) || 0;
   let usedLinkIndex = null;
   let matchMeta = null;
+  let siteSkipReason = null;
   if (links.length || rawLinkLines.length) {
     if (mode === "match_media") {
       const mediaRef = cfg.media_path || cfg.media_name || "";
       const picked = pickLinkByMediaOrdinal(rawLinkLines.length ? rawLinkLines : links, mediaRef);
       matchMeta = picked;
-      if (picked.url) {
+      if (picked.url && linkSiteOk(picked.url)) {
         link = picked.url;
         usedLinkIndex = picked.used_link_index;
-        // Do not advance sequential cursor on match — pairing is by filename/slug
+      } else if (picked.url && !linkSiteOk(picked.url)) {
+        link = "";
+        usedLinkIndex = null;
+        siteSkipReason = `site_cap:${extractCommentSite(picked.url)}`;
+        console.warn(
+          `[assignCommentForPost] site cap — ${extractCommentSite(picked.url)} đã đủ ${maxPagesPerSite} page → skip comment (media=${mediaRef})`
+        );
       } else {
         // KHÔNG fallback sequential/random — tránh comment nhầm link khác.
-        // Media không có URL khớp → bỏ comment (bài vẫn đăng bình thường).
         link = "";
         usedLinkIndex = null;
         console.warn(
@@ -836,11 +968,22 @@ export function assignCommentForPost(cfg = {}) {
         );
       }
     } else {
-      const start = Math.abs(Number(ll0.comment_link_next) || 0) % links.length;
-      const p = pickFromList(links, mode, linkNext);
-      link = p.item;
-      linkNext = p.nextIndex;
-      usedLinkIndex = mode === "sequential" ? start : links.indexOf(link);
+      // random / sequential: chỉ chọn link thuộc site còn slot page
+      const allowed = links.filter((u) => linkSiteOk(u));
+      if (!allowed.length) {
+        link = "";
+        usedLinkIndex = null;
+        siteSkipReason = "all_sites_at_cap";
+        console.warn(
+          `[assignCommentForPost] mọi site đã đủ ${maxPagesPerSite} page → skip comment (page=${pageRowId})`
+        );
+      } else {
+        const start = Math.abs(Number(ll0.comment_link_next) || 0) % allowed.length;
+        const p = pickFromList(allowed, mode, linkNext);
+        link = p.item;
+        linkNext = p.nextIndex;
+        usedLinkIndex = mode === "sequential" ? start : allowed.indexOf(link);
+      }
     }
   }
 
@@ -877,8 +1020,8 @@ export function assignCommentForPost(cfg = {}) {
 
   // Template kiểu "see more :" mà không có link nào trong kho → null (đừng comment rỗng ý nghĩa)
   text = String(text || "").trim() || null;
-  // match_media: không khớp slug → không comment (tránh "see more :" không URL / URL sai)
-  if (mode === "match_media" && !link) {
+  // match_media / site-cap: không có link hợp lệ → không comment
+  if ((mode === "match_media" || siteSkipReason) && !link) {
     text = null;
   }
   if (text && !link && !/https?:\/\//i.test(text)) {
@@ -889,11 +1032,17 @@ export function assignCommentForPost(cfg = {}) {
     );
   }
 
+  const usedSite = link ? extractCommentSite(link) : "";
+  if (text && link && siteTracker && usedSite) {
+    siteTracker.record(usedSite, pageRowId);
+  }
+
   const link_lists = {
     ...ll0,
     comment_link_mode: mode,
     comment_tpl_next: tplNext,
     comment_link_next: linkNext,
+    comment_max_pages_per_site: maxPagesPerSite,
     // Keep primary pool for UI (if only full_album/see_more existed, leave them)
     comment_links:
       Array.isArray(ll0.comment_links) && ll0.comment_links.length
@@ -911,6 +1060,8 @@ export function assignCommentForPost(cfg = {}) {
     used_link_index: usedLinkIndex,
     mode,
     media_ordinal: matchMeta?.ordinal ?? extractOrdinalFromName(cfg.media_path || cfg.media_name || "") ?? null,
-    match_reason: matchMeta?.reason || null,
+    match_reason: matchMeta?.reason || siteSkipReason || null,
+    comment_site: usedSite || null,
+    site_page_count: usedSite && siteTracker ? siteTracker.count(usedSite) : null,
   };
 }

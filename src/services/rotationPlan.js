@@ -118,6 +118,13 @@ export const DEFAULT_ROTATION = {
   run_now_continuous: false,
   /** only include enabled page configs if true */
   only_enabled_pages: false,
+  /**
+   * (Tuỳ chọn) Giới hạn page khi CHẠY đăng — mặc định TẮT (0).
+   * Comment theo site dùng comment_max_pages_per_site trong link_lists, không dùng field này.
+   * meta_app | account · 0 = không giới hạn
+   */
+  max_pages_per_site: 0,
+  max_pages_scope: "meta_app",
   /** account_ids filter (empty = all) when groups empty */
   account_ids: [],
   page_row_ids: [], // empty = all pages when page_target_mode=all
@@ -365,6 +372,12 @@ export function normalizeSettings(s) {
   out.page_row_ids = Array.isArray(out.page_row_ids)
     ? out.page_row_ids.map(Number).filter((n) => n > 0)
     : [];
+  {
+    const cap = Number(out.max_pages_per_site);
+    out.max_pages_per_site = Number.isFinite(cap) ? clamp(cap, 0, 500) : 0;
+    const sc = String(out.max_pages_scope || "meta_app").toLowerCase();
+    out.max_pages_scope = sc === "account" ? "account" : "meta_app";
+  }
   // Mutual exclusive page scope
   if (out.page_target_mode === "all") {
     out.page_row_ids = [];
@@ -510,6 +523,85 @@ export function loadAccountPageMatrix(settings) {
       })),
     };
   });
+}
+
+/**
+ * Cắt page theo giới hạn / site.
+ * - scope=meta_app: mỗi Meta App tối đa N page (gộp mọi admin thuộc App)
+ * - scope=account: mỗi tài khoản FB tối đa N page
+ * max_pages_per_site <= 0 → không cắt
+ */
+export function applyMaxPagesPerSite(matrix, settings = {}) {
+  const maxPer = Number(settings.max_pages_per_site);
+  if (!Number.isFinite(maxPer) || maxPer <= 0) {
+    return { matrix, warnings: [], dropped: [] };
+  }
+  const scope = settings.max_pages_scope === "account" ? "account" : "meta_app";
+  const warnings = [];
+  const dropped = [];
+
+  if (scope === "account") {
+    const next = matrix.map((a) => {
+      if (a.pages.length <= maxPer) return a;
+      const keep = a.pages.slice(0, maxPer);
+      for (const p of a.pages.slice(maxPer)) {
+        dropped.push({
+          page_row_id: p.page_row_id,
+          page_name: p.page_name,
+          account_name: a.account_name,
+          meta_app_key: a.meta_app_key,
+          reason: `max ${maxPer} page / tài khoản`,
+        });
+      }
+      warnings.push(
+        `Tài khoản «${a.account_name}»: giữ ${maxPer}/${a.pages.length} page (giới hạn / site).`
+      );
+      return { ...a, pages: keep };
+    });
+    return { matrix: next.filter((a) => a.pages.length), warnings, dropped };
+  }
+
+  // meta_app: cap across all accounts in the same Meta App
+  const byApp = new Map();
+  for (const a of matrix) {
+    const k = a.meta_app_key || "app1";
+    if (!byApp.has(k)) byApp.set(k, []);
+    byApp.get(k).push(a);
+  }
+  const keepIds = new Set();
+  for (const [k, accounts] of byApp) {
+    const flat = [];
+    for (const a of accounts) {
+      for (const p of a.pages) flat.push({ a, p });
+    }
+    const label = accounts[0]?.meta_app_name || k;
+    for (let i = 0; i < flat.length; i++) {
+      const { a, p } = flat[i];
+      if (i < maxPer) {
+        keepIds.add(Number(p.page_row_id));
+      } else {
+        dropped.push({
+          page_row_id: p.page_row_id,
+          page_name: p.page_name,
+          account_name: a.account_name,
+          meta_app_key: k,
+          reason: `max ${maxPer} page / Meta App (${label})`,
+        });
+      }
+    }
+    if (flat.length > maxPer) {
+      warnings.push(
+        `Meta App «${label}»: giữ ${maxPer}/${flat.length} page (giới hạn / site).`
+      );
+    }
+  }
+  const next = matrix
+    .map((a) => ({
+      ...a,
+      pages: a.pages.filter((p) => keepIds.has(Number(p.page_row_id))),
+    }))
+    .filter((a) => a.pages.length);
+  return { matrix: next, warnings, dropped };
 }
 
 /**
@@ -1193,12 +1285,22 @@ export function buildRunNowPlan(inputSettings = {}) {
       "Chế độ «Chỉ page đã tick»: hãy tick ít nhất 1 Page ở bước 1, hoặc chọn «Tất cả page»."
     );
   }
-  const matrix = loadAccountPageMatrix(settings).filter((a) => a.pages.length > 0);
+  let matrix = loadAccountPageMatrix(settings).filter((a) => a.pages.length > 0);
   if (!matrix.length) {
     throw new Error(
       settings.page_target_mode === "all"
         ? "Không có Page active nào để chạy."
         : "Không có Page đã tick (hoặc Page không active)."
+    );
+  }
+  const warnings = [];
+  const blockers = [];
+  const capped = applyMaxPagesPerSite(matrix, settings);
+  matrix = capped.matrix;
+  for (const w of capped.warnings || []) warnings.push(w);
+  if (!matrix.length) {
+    throw new Error(
+      `Giới hạn max ${settings.max_pages_per_site} page/site đã cắt hết Page — tăng giới hạn hoặc tick ít App hơn.`
     );
   }
   const groups = resolveGroups(settings, matrix);
@@ -1217,8 +1319,6 @@ export function buildRunNowPlan(inputSettings = {}) {
   let planDay = settings.force_plan_day || todayVn;
   let overdueToday = false;
   let planDayShifted = false;
-  const warnings = [];
-  const blockers = [];
 
   const anti = getAntiSpamSettings();
   const pageConfigs = new Map();

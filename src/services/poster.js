@@ -673,8 +673,10 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       // 1 bài = 1 gán (random hoặc lần lượt theo page)
       const assigned = assignCommentForPost({
         ...cfg,
+        page_row_id: pageRowId,
         media_path: movedPath || mediaPath || null,
         media_name: path.basename(String(movedPath || mediaPath || "")),
+        comment_site_tracker: opts.comment_site_tracker || null,
       });
       commentText = assigned.text;
       commentLinkLists = assigned.link_lists || cfg.link_lists;

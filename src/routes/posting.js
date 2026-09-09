@@ -244,6 +244,7 @@ function normalizeConfigBody(input) {
       "comment_tpl_next",
       "comment_delay_minutes",
       "comment_min_likes",
+      "comment_max_pages_per_site",
       "caption_lead_enabled",
       "caption_lead_mode",
       "caption_lead_tpl_next",
@@ -258,11 +259,12 @@ function normalizeConfigBody(input) {
           k === "comment_tpl_next" ||
           k === "comment_delay_minutes" ||
           k === "comment_min_likes" ||
+          k === "comment_max_pages_per_site" ||
           k === "caption_lead_tpl_next" ||
           k === "caption_lead_link_next"
         ) {
           const n = Number(Array.isArray(v) ? v[0] : v);
-          out[k] = Number.isFinite(n) ? Math.max(0, n) : 0;
+          out[k] = Number.isFinite(n) ? Math.max(0, Math.min(500, n)) : 0;
         } else if (k === "caption_lead_enabled" || k === "video_title_enabled") {
           const raw = Array.isArray(v) ? v[0] : v;
           const s = String(raw ?? "").trim().toLowerCase();
@@ -285,10 +287,20 @@ function normalizeConfigBody(input) {
         ) {
           const raw = Array.isArray(v) ? v[0] : v;
           const m = String(raw || "random").trim().toLowerCase();
-          out[k] =
-            m === "sequential" || m === "sequence" || m === "theo_bai"
-              ? "sequential"
-              : "random";
+          if (
+            m === "match_media" ||
+            m === "by_media" ||
+            m === "by_filename" ||
+            m === "theo_ten" ||
+            m === "theo_ten_media" ||
+            m === "media_name"
+          ) {
+            out[k] = "match_media";
+          } else if (m === "sequential" || m === "sequence" || m === "theo_bai") {
+            out[k] = "sequential";
+          } else {
+            out[k] = "random";
+          }
         } else if (k === "comment_when") {
           const raw = Array.isArray(v) ? v[0] : v;
           const m = String(raw || "after_publish").trim().toLowerCase();

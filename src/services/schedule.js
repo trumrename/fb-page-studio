@@ -472,8 +472,10 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
     if (cfg.comment_enabled) {
       const assigned = assignCommentForPost({
         ...cfg,
+        page_row_id: pageRowId,
         media_path: mediaPath || null,
         media_name: mediaPath ? path.basename(String(mediaPath)) : null,
+        comment_site_tracker: opts.comment_site_tracker || null,
       });
       pendingComment = assigned.text;
       commentLinkLists = assigned.link_lists || cfg.link_lists;
@@ -1332,8 +1334,11 @@ async function applyPendingCommentForLog(row, token, fbStatus = null) {
     }
     const assigned = assignCommentForPost({
       ...cfg,
+      page_row_id: row.page_row_id,
       media_path: row.media_path || null,
       media_name: row.media_path ? path.basename(String(row.media_path)) : null,
+      // Deferred comments: no shared job tracker — still honor per-call tracker if passed
+      comment_site_tracker: null,
     });
     message = assigned.text;
     if (assigned.link_lists) {

@@ -2921,12 +2921,17 @@ Tối | 18:00 | 21:30 | 2</textarea>
             <b>Theo tên media</b> — <code>1-natalie-mercer.mp4</code> ↔ URL <code>/1-natalie-mercer/</code>
           </label>
           <p class="muted" style="margin:.35rem 0 0;font-size:.74rem;line-height:1.35">
-            Mode «Theo tên media»: khớp <b>slug trong link</b>, không theo thứ tự dòng list.
-            Ví dụ file <code>1-natalie-mercer.mp4</code> → comment
-            <code>https://profiles…/1-natalie-mercer/</code>.<br/>
-            <b>Media không có link khớp</b> → bài vẫn đăng, <b>bỏ comment</b> (không gắn link nhầm).<br/>
-            <b>Link không có media</b> → link đó chỉ chờ đến khi có file trùng tên/slug.
+            Mode «Theo tên media»: khớp <b>slug trong link</b> (vd file <code>1-natalie-mercer.mp4</code>
+            → <code>https://profiles…/1-natalie-mercer/</code>).<br/>
+            <b>Mỗi site (domain)</b> chỉ comment tối đa <b>10 page</b> / lần chạy — site khác vẫn comment bình thường.<br/>
+            Media không khớp / site đã đủ 10 page → bài vẫn đăng, <b>bỏ comment</b> (không gắn link nhầm).
           </p>
+          <div style="margin-top:.45rem;max-width:220px">
+            <label>Tối đa page / site (domain)</label>
+            <input type="number" id="comment_max_pages_per_site" min="0" max="500" value="${esc(
+              c.link_lists?.comment_max_pages_per_site ?? 10
+            )}" title="0 = không giới hạn. Mặc định 10: mỗi domain chỉ comment trên tối đa 10 Fanpage mỗi job." />
+          </div>
         </div>
         <label><b>Câu kèm</b> (tuỳ chọn) — mỗi dòng 1 câu, random mỗi comment · <b>không cần</b> <code>{link}</code></label>
         <textarea id="comment_templates" rows="4" placeholder="see more :&#10;full album:&#10;xem full:">${esc(tpls)}</textarea>
@@ -3103,6 +3108,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
           comment_when: when,
           comment_delay_minutes: when === "immediate" ? 0 : delayMin,
           comment_min_likes: when === "immediate" ? 0 : minLikes,
+          comment_max_pages_per_site: Math.max(
+            0,
+            Math.min(500, Number($("comment_max_pages_per_site")?.value) || 10)
+          ),
           story_link_mode: $("story_link_mode")?.value || "combo",
           caption_lead_enabled: leadOn ? 1 : 0,
           caption_lead_mode: leadMode === "sequential" ? "sequential" : "random",
