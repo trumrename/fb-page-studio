@@ -750,11 +750,11 @@ full album:
                   Khung Sáng / Tối
                   <span class="hint-inline">Tên | bắt đầu | kết thúc | số video</span>
                 </label>
-                <textarea id="bulkStdWindows" rows="3" placeholder="Sáng | 06:00 | 08:00 | 3&#10;Tối | 18:00 | 20:00 | 3">Sáng | 06:00 | 08:00 | 3
-Tối | 18:00 | 20:00 | 3</textarea>
+                <textarea id="bulkStdWindows" rows="3" placeholder="Sáng | 06:00 | 08:00 | 1&#10;Tối | 18:00 | 20:00 | 1">Sáng | 06:00 | 08:00 | 1
+Tối | 18:00 | 20:00 | 1</textarea>
                 <label class="checks" style="display:block;margin-top:.55rem">
-                  <input type="checkbox" id="bulkStdBurst" checked />
-                  3 video / page đăng 1 lúc (cách nhau ≤ 30 giây)
+                  <input type="checkbox" id="bulkStdBurst" />
+                  Đăng liền trong khung (số bài = cột cuối mỗi dòng khung, không ép 3)
                 </label>
                 <label class="checks" style="display:block">
                   <input type="checkbox" id="bulkStdSplit" />
@@ -771,7 +771,7 @@ Tối | 18:00 | 20:00 | 3</textarea>
                     <b>Đăng trực tiếp</b> — tool chờ đến giờ mới bấm Graph, phải giữ máy bật
                   </label>
                   <p class="muted" style="margin:.35rem 0 0;font-size:.76rem;line-height:1.4">
-                    Burst 3 video vẫn cách ≤30s trên cùng page. Hẹn FB: mốc đã qua hoặc &lt; 10 phút sẽ được đẩy lên tối thiểu +10 phút (luật Graph).
+                    Số bài lấy từ khung (vd <code>| 1</code> = 1 bài). Hẹn FB: mốc đã qua hoặc &lt; 10 phút sẽ đẩy +10 phút (luật Graph).
                   </p>
                 </div>
                 <p class="muted" id="bulkStdWindowTotal" style="margin:.45rem 0 0;font-size:.82rem"></p>
@@ -967,17 +967,17 @@ Tối | 18:00 | 21:30 | 2</textarea>
                   <label style="font-weight:700">Giờ đăng TRỰC TIẾP (tool chờ → đăng API)</label>
                   <div class="bulk-mode-pick" role="radiogroup" aria-label="Chế độ đăng trực tiếp" style="margin-top:.4rem">
                     <label class="bulk-mode-card is-rec">
-                      <input type="radio" name="rotNowTimeMode" id="rotNowTimeWindows" value="windows" checked />
+                      <input type="radio" name="rotNowTimeMode" id="rotNowTimeGap" value="gap_chain" checked />
                       <span>
-                        <b>Chuẩn mới · Sáng/Tối <span class="rec-badge">Khuyên dùng</span></b>
-                        <small>06:00–08:00 + 18:00–20:00 · 3 video/page ≤30s</small>
+                        <b>Liên tục + gap <span class="rec-badge">Mặc định</span></b>
+                        <small>Số bài = ô «Số bài / Page / ngày» · bài 1 ngay</small>
                       </span>
                     </label>
                     <label class="bulk-mode-card">
-                      <input type="radio" name="rotNowTimeMode" id="rotNowTimeGap" value="gap_chain" />
+                      <input type="radio" name="rotNowTimeMode" id="rotNowTimeWindows" value="windows" />
                       <span>
-                        <b>Liên tục + gap</b>
-                        <small>Bài 1 ngay · các bài sau + khoảng cách page</small>
+                        <b>Khung Sáng/Tối</b>
+                        <small>Số bài = cột cuối mỗi dòng khung (vd | 1)</small>
                       </span>
                     </label>
                     <label class="bulk-mode-card">
@@ -996,18 +996,17 @@ Tối | 18:00 | 21:30 | 2</textarea>
               <div id="rotNowWindowsBox" style="margin-top:.65rem;padding:.75rem;border:1px dashed rgba(61,214,140,.5);border-radius:10px;background:rgba(0,0,0,.15)">
                 <label style="font-weight:700;display:block">Khung Sáng / Tối cho Direct Local</label>
                 <p class="muted" style="margin:.3rem 0 .45rem;font-size:.78rem">
-                  Mỗi dòng: <code>Tên | HH:mm bắt đầu | HH:mm kết thúc | số video liền nhau</code>.
-                  Mặc định: <b>06:00–08:00</b> và <b>18:00–20:00</b>.
-                  40 page / máy (2 token × 20) rải đều trong 2 giờ — mỗi page <b>3 video ≤ 30 giây</b>, không nổ cùng lúc.
+                  Mỗi dòng: <code>Tên | HH:mm bắt đầu | HH:mm kết thúc | số bài</code>.
+                  Ví dụ <code>Sáng | 06:00 | 08:00 | 1</code> = <b>1 bài</b> trong khung sáng (không ép 3).
                 </p>
-                <textarea id="rotNowWindows" rows="3" placeholder="Sáng | 06:00 | 08:00 | 3&#10;Tối | 18:00 | 20:00 | 3"></textarea>
+                <textarea id="rotNowWindows" rows="3" placeholder="Sáng | 06:00 | 08:00 | 1&#10;Tối | 18:00 | 20:00 | 1"></textarea>
                 <label class="checks" style="display:block;margin-top:.5rem">
                   <input type="checkbox" id="rotSplitPagesWindows" />
-                  Chỉ chia nửa page sáng / nửa tối (tắt = cả 40 page chạy cả 2 khung)
+                  Chỉ chia nửa page sáng / nửa tối (tắt = cả list chạy cả 2 khung)
                 </label>
                 <label class="checks" style="display:block">
-                  <input type="checkbox" id="rotBurstThreeVideos" checked />
-                  3 bài / page đăng liền (≤ 30 giây) — theo loại media đã chọn phía dưới
+                  <input type="checkbox" id="rotBurstThreeVideos" />
+                  Đăng liền trong khung (≤ 30 giây giữa các bài) — số bài lấy từ cột cuối, không ép 3
                 </label>
                 <p class="muted" id="rotNowWindowTotal" style="margin:.35rem 0 0;font-size:.82rem"></p>
               </div>
@@ -1021,7 +1020,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
                 </div>
                 <div>
                   <label>Số bài / Page / ngày <span class="muted">(mode liên tục)</span></label>
-                  <input type="number" id="rotNowPerDay" min="1" max="12" value="2" />
+                  <input type="number" id="rotNowPerDay" min="1" max="12" value="1" />
                 </div>
                 <div>
                   <label>Múi giờ</label>
@@ -1629,7 +1628,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
 
       if (isStd) {
         if ($("bulkStdWindows") && !$("bulkStdWindows").value.trim()) {
-          $("bulkStdWindows").value = "Sáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3";
+          $("bulkStdWindows").value = DEFAULT_STANDARD_WINDOWS;
         }
         syncStandardDeliveryUi();
         syncStandardBurstFields({ fromBulk: true });
@@ -1645,11 +1644,13 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if (!el) return;
       const kind = getBulkScheduleKind();
       if (kind === "standard_burst") {
-        const burst = $("bulkStdBurst")?.checked !== false;
+        const burst = !!$("bulkStdBurst")?.checked;
         const fb = standardDelivery() === "fb_scheduled";
+        const wins = parseWindowsText($("bulkStdWindows")?.value || "") || [];
+        const postsHint = wins.map((w) => `${w.posts || 1}`).join("+") || "?";
         el.innerHTML =
-          `<span class="ok">④ Chuẩn mới</span> · 06:00–08:00 + 18:00–20:00 · ` +
-          `rải đều 2 giờ · mỗi page ${burst ? "3 video ≤30s" : "theo số khung"} · ` +
+          `<span class="ok">④ Chuẩn mới</span> · Sáng/Tối · ` +
+          `bài/page=<b>${esc(postsHint)}</b>${burst ? " · đăng liền" : ""} · ` +
           (fb
             ? `<b>hẹn Facebook</b> (tắt tool được sau khi Graph nhận lịch)`
             : `<b>treo tool</b> đăng trực tiếp`);
@@ -4056,7 +4057,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       }
       return windows;
     }
-    const DEFAULT_STANDARD_WINDOWS = "Sáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3";
+    const DEFAULT_STANDARD_WINDOWS = "Sáng | 06:00 | 08:00 | 1\nTối | 18:00 | 20:00 | 1";
 
     function syncStandardBurstFields({ fromBulk = false } = {}) {
       const bulkWin = $("bulkStdWindows");
@@ -4089,12 +4090,13 @@ Tối | 18:00 | 21:30 | 2</textarea>
         if (prev != null && $("rotNowWindows") && !$("bulkStdWindows")?.value.trim()) {
           $("rotNowWindows").value = prev;
         }
-        const burst = $("bulkStdBurst")?.checked !== false;
+        const burst = !!$("bulkStdBurst")?.checked;
         const split = !!$("bulkStdSplit")?.checked;
+        const postsLbl = windows.map((w) => `${w.posts || 1}`).join("+");
         box.innerHTML = split
-          ? `→ Nửa page sáng / nửa tối · mỗi page <b>${windows[0]?.posts || 3} video</b>.`
-          : `→ Cả list chạy <b>cả 2 khung</b> · rải đều 2 giờ · mỗi page ${burst ? "3 video ≤30s" : (windows[0]?.posts || "") + " bài"} ` +
-            `(${windows.map((w) => esc(w.name) + " " + w.start + "–" + w.end).join(" · ")}).`;
+          ? `→ Nửa page sáng / nửa tối · mỗi page <b>${windows[0]?.posts || 1} bài</b>${burst ? " (đăng liền)" : ""}.`
+          : `→ Cả list chạy <b>cả 2 khung</b> · bài/page=<b>${esc(postsLbl)}</b>${burst ? " · đăng liền" : ""} ` +
+            `(${windows.map((w) => esc(w.name) + " " + w.start + "–" + w.end + " ×" + (w.posts || 1)).join(" · ")}).`;
       } catch (e) {
         box.innerHTML = `<span class="fail">${esc(e.message)}</span>`;
       }
@@ -4160,8 +4162,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if (
         !confirm(
           fb
-            ? `Hẹn Facebook CHUẨN MỚI?\n${sum.ids.length} page đã tick: ${sum.text}\nSáng 06:00–08:00 + Tối 18:00–20:00\nMỗi page 3 video ≤30s, rải đều 2 giờ.\n\nGraph nhận lịch xong có thể tắt tool.`
-            : `Bắt đầu CHUẨN MỚI (treo tool, đăng trực tiếp)?\n${sum.ids.length} page đã tick: ${sum.text}\nSáng 06:00–08:00 + Tối 18:00–20:00\nMỗi page 3 video ≤30s, rải đều trong 2 giờ.\n\nGiữ tool/PC bật.`
+            ? `Hẹn Facebook CHUẨN MỚI?\n${sum.ids.length} page đã tick: ${sum.text}\nKhung Sáng/Tối theo ô cấu hình (số bài = cột cuối mỗi dòng).\n\nGraph nhận lịch xong có thể tắt tool.`
+            : `Bắt đầu CHUẨN MỚI (treo tool, đăng trực tiếp)?\n${sum.ids.length} page đã tick: ${sum.text}\nKhung Sáng/Tối theo ô cấu hình (số bài = cột cuối mỗi dòng).\n\nGiữ tool/PC bật.`
         )
       ) {
         return;
@@ -4215,15 +4217,15 @@ Tối | 18:00 | 21:30 | 2</textarea>
             : mode === "pattern"
               ? "pattern"
               : "sequence Page";
+        const postsLbl = windows.map((w) => `${w.posts || 1}`).join("+");
         if (split) {
           box.innerHTML =
-            `→ Nửa page sáng / nửa tối · mỗi page <b>${windows[0]?.posts || 3} bài (${esc(mediaLbl)})</b> ` +
+            `→ Nửa page sáng / nửa tối · mỗi page <b>${windows[0]?.posts || 1} bài (${esc(mediaLbl)})</b>${burst ? " · đăng liền" : ""} ` +
             `(${windows.map((item) => esc(item.name) + " " + item.start + "–" + item.end).join(" · ")}).`;
         } else {
           box.innerHTML =
-            `→ Cả list (vd 40 page / 2 token) chạy <b>cả 2 khung</b>, rải đều 2 giờ · ` +
-            `mỗi page ${burst ? `3 bài liền (${esc(mediaLbl)})` : (windows[0]?.posts || "") + " bài"}. ` +
-            `(${windows.map((item) => esc(item.name) + " " + item.start + "–" + item.end).join(" · ")}).`;
+            `→ Cả list chạy <b>cả 2 khung</b> · bài/page=<b>${esc(postsLbl)}</b> (${esc(mediaLbl)})${burst ? " · đăng liền" : ""}. ` +
+            `(${windows.map((item) => esc(item.name) + " " + item.start + "–" + item.end + " ×" + (item.posts || 1)).join(" · ")}).`;
         }
       } catch (e) {
         box.innerHTML = `<span class="fail">${esc(e.message)}</span>`;
@@ -4242,8 +4244,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       // seed Direct Local windows from FB windows textarea once if empty
       if ($("rotNowWindows") && !$("rotNowWindows").value.trim()) {
         $("rotNowWindows").value =
-          ($("rotWindows")?.value || "").trim() ||
-          "Sáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3";
+          ($("rotWindows")?.value || "").trim() || DEFAULT_STANDARD_WINDOWS;
       }
       if (timeMode === "windows") syncDirectLocalWindowTotal();
       const burstKind =
@@ -4364,14 +4365,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
         if (timeMode === "windows") throw e;
         windows = parseWindowsText($("rotNowWindows")?.value || $("rotWindows")?.value || "") || [];
       }
-      // Must be explicit checked — do NOT treat missing as true (`!== false` bug)
+      // Burst = đăng liền (gap ngắn); số bài lấy từ cột cuối khung / ô per-day — KHÔNG ép 3
       const burst = !!$("rotBurstThreeVideos")?.checked;
       const split = !!$("rotSplitPagesWindows")?.checked;
-      if (burst && Array.isArray(windows)) {
-        windows = windows.map((w) => ({ ...w, posts: 3 }));
-      }
+      const perDayInput = Math.max(1, Number($("rotNowPerDay")?.value) || 1);
+      const windowPostsSum = Array.isArray(windows)
+        ? windows.reduce((s, w) => s + (Number(w.posts) || 0), 0)
+        : 0;
       // Honor media UI: fixed photo must stay photo even when burst is on
-      // (TRƯỚC: burst luôn ép post_type=video → chọn photo vẫn đăng video).
       const fixedType = String($("rotNowPostType")?.value || "photo").toLowerCase();
       let postType;
       let patternMode;
@@ -4386,7 +4387,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
         patternMode = "page_sequence";
       }
       return {
-        posts_per_page_per_day: burst ? 3 : Number($("rotNowPerDay").value) || 1,
+        posts_per_page_per_day:
+          timeMode === "windows" && windowPostsSum > 0 ? windowPostsSum : perDayInput,
         post_type: postType,
         page_target_mode: target,
         run_now_time_mode: timeMode,
@@ -5606,10 +5608,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
         !$("rotNowTimeWindows")?.checked &&
         !$("rotNowTimePreferred")?.checked
       ) {
-        if ($("rotNowTimeWindows")) $("rotNowTimeWindows").checked = true;
+        if ($("rotNowTimeGap")) $("rotNowTimeGap").checked = true;
       }
       if ($("rotWindows") && !$("rotWindows").value.trim()) {
-        $("rotWindows").value = "Sáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3";
+        $("rotWindows").value = DEFAULT_STANDARD_WINDOWS;
       }
       if ($("rotNowWindows") && !$("rotNowWindows").value.trim()) {
         $("rotNowWindows").value = DEFAULT_STANDARD_WINDOWS;

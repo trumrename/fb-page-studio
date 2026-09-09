@@ -59,8 +59,8 @@ export const DEFAULT_ROTATION = {
   /** windows mode: distribute posts into named ranges */
   mode: "windows", // windows | fixed_gap
   windows: [
-    { name: "Sáng", start: "06:00", end: "08:00", posts: 3 },
-    { name: "Tối", start: "18:00", end: "20:00", posts: 3 },
+    { name: "Sáng", start: "06:00", end: "08:00", posts: 1 },
+    { name: "Tối", start: "18:00", end: "20:00", posts: 1 },
   ],
   fixed_gap: {
     first_start: "08:00",
@@ -97,8 +97,8 @@ export const DEFAULT_ROTATION = {
    * false = mọi page chạy cả 2 khung, rải đều trong 06–08 và 18–20.
    */
   split_pages_across_windows: false,
-  /** Trong 1 khung: N video liền nhau trên 1 page rồi mới sang page sau. */
-  burst_same_page: true,
+  /** Trong 1 khung: N bài liền nhau trên 1 page rồi mới sang page sau. Mặc định TẮT — không ép 3 bài. */
+  burst_same_page: false,
   burst_gap_sec_min: 10,
   burst_gap_sec_max: 30,
   page_burst_gap_sec_min: 15,
@@ -276,7 +276,10 @@ export function saveRotationSettings(partial) {
 
 export function normalizeSettings(s) {
   const out = { ...DEFAULT_ROTATION, ...s };
-  out.posts_per_page_per_day = clamp(Number(out.posts_per_page_per_day) || 2, 1, 12);
+  {
+    const ppd = Number(out.posts_per_page_per_day);
+    out.posts_per_page_per_day = clamp(Number.isFinite(ppd) && ppd > 0 ? ppd : 1, 1, 12);
+  }
   out.days_ahead = clamp(Number(out.days_ahead) || 1, 1, 14);
   out.tz_offset_minutes = Number.isFinite(Number(out.tz_offset_minutes))
     ? Number(out.tz_offset_minutes)
@@ -338,7 +341,8 @@ export function normalizeSettings(s) {
       m === "windows" || m === "preferred" ? m : "gap_chain";
   }
   out.split_pages_across_windows = !!out.split_pages_across_windows;
-  out.burst_same_page = out.burst_same_page !== false;
+  // Explicit only — TRƯỚC: !== false khiến thiếu field cũng bị ép burst 3 bài
+  out.burst_same_page = !!out.burst_same_page;
   out.burst_gap_sec_min = clamp(Number(out.burst_gap_sec_min) || 10, 5, 30);
   out.burst_gap_sec_max = clamp(
     Number(out.burst_gap_sec_max) || 30,
@@ -912,7 +916,7 @@ export function buildSplitWindowBurstSlots({
 
   for (let wi = 0; wi < windows.length; wi++) {
     const w = windows[wi];
-    const burst = clamp(Number(w.posts) || 3, 1, 12);
+    const burst = clamp(Number(w.posts) || 1, 1, 12);
     const group = buckets[wi] || [];
     if (!group.length) continue;
 
@@ -978,7 +982,7 @@ export function buildSplitWindowBurstSlots({
   const numbered = slots.map((s, i) => ({ ...s, order: i + 1 }));
   const burstCount = Math.max(
     1,
-    ...windows.map((w) => Number(w.posts) || 3),
+    ...windows.map((w) => Number(w.posts) || 1),
     3
   );
   return {
@@ -991,7 +995,7 @@ export function buildSplitWindowBurstSlots({
       start: w.start,
       end: w.end,
       pages: (buckets[i] || []).length,
-      videos_each: clamp(Number(w.posts) || 3, 1, 12),
+      videos_each: clamp(Number(w.posts) || 1, 1, 12),
     })),
   };
 }
