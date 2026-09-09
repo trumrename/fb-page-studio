@@ -384,6 +384,16 @@ function recompute(job) {
     if (t.status === "ok") m.ok++;
     if (t.status === "fail") m.fail++;
   }
+  let comments_ok = 0;
+  let comments_fail = 0;
+  let comments_pending = 0;
+  for (const t of tasks) {
+    const r = t.result;
+    if (!r) continue;
+    if (r.comment_id) comments_ok += 1;
+    else if (r.comment_error) comments_fail += 1;
+    else if (r.comment_pending || (r.comment_text && !r.comment_id)) comments_pending += 1;
+  }
   job.progress = {
     total,
     done,
@@ -392,6 +402,9 @@ function recompute(job) {
     skipped,
     percent: Math.min(100, Math.round((progressUnits / total) * 100)),
     by_mode,
+    comments_ok,
+    comments_fail,
+    comments_pending,
     current_task_id: running?.id || null,
     current_label: running
       ? `${running.page_name || "?"} · ${running.label || running.kind}`
@@ -892,6 +905,24 @@ async function finishTaskResult(job, task, result) {
     task.message = successMessage(task, result);
     if (result?.auto_retries) task.message += ` · tự retry ${result.auto_retries} lần`;
     notify(job, "success", `OK · ${task.page_name}`, task.message);
+    const cr = task.result;
+    if (cr?.comment_error) {
+      notify(job, "warn", `Comment ✗ · ${task.page_name}`, String(cr.comment_error).slice(0, 180));
+    } else if (cr?.comment_id) {
+      notify(
+        job,
+        "success",
+        `Comment ✓ · ${task.page_name}`,
+        String(cr.comment_text || cr.comment_id || "").slice(0, 160)
+      );
+    } else if (cr?.comment_pending) {
+      notify(
+        job,
+        "info",
+        `Comment ⏳ · ${task.page_name}`,
+        "Chờ bài publish rồi gửi comment (after_publish / retry)"
+      );
+    }
   }
   const paths = getReportPaths();
   job.report_files = uniqueFiles(job.report_files, {
@@ -1365,6 +1396,16 @@ function uniqueFiles(list, paths) {
 
 function summarizeResult(result) {
   if (!result) return null;
+  const commentText =
+    result.comment_text ||
+    result.comment_text_preview ||
+    result.log?.comment_text ||
+    null;
+  const commentId = result.comment_id || result.log?.comment_id || null;
+  const commentError = result.comment_error || null;
+  const commentPending =
+    !!result.comment_pending ||
+    (!!commentText && !commentId && !commentError && !!result.scheduled);
   return {
     ok: result.ok !== false && result.scheduled !== false,
     post_id: result.post?.post_id || result.log?.fb_post_id || null,
@@ -1374,16 +1415,27 @@ function summarizeResult(result) {
     media_moved_to: result.media_moved_to || null,
     scheduled_at: result.scheduled_at_iso || result.log?.scheduled_publish_time || null,
     error: result.error || null,
+    comment_id: commentId,
+    comment_text: commentText,
+    comment_error: commentError,
+    comment_pending: commentPending,
+    comment_when: result.comment_when || null,
+    comment_immediate: !!result.comment_immediate || !!commentId,
   };
 }
 
 function successMessage(task, result) {
   const r = summarizeResult(result);
   const link = r?.post_url || r?.post_id || "—";
-  if (task.kind === "schedule" || result?.scheduled) {
-    return `Đã hẹn ${r?.post_type || ""} · ${r?.scheduled_at || ""} · ${link}`;
-  }
-  return `Đã đăng ${r?.post_type || ""} · ${link}`;
+  let base =
+    task.kind === "schedule" || result?.scheduled
+      ? `Đã hẹn ${r?.post_type || ""} · ${r?.scheduled_at || ""} · ${link}`
+      : `Đã đăng ${r?.post_type || ""} · ${link}`;
+  if (r?.comment_error) base += ` · comment ✗ ${r.comment_error}`;
+  else if (r?.comment_id) base += " · comment ✓";
+  else if (r?.comment_pending) base += " · comment ⏳ chờ sau publish";
+  else if (r?.comment_text) base += " · comment đã gán";
+  return base;
 }
 
 async function executeTask(task, job = null) {

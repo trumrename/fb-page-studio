@@ -233,6 +233,20 @@ check(
     posting.includes('body.media_pattern_mode = "fixed"')
 );
 check(
+  "Chuẩn mới has editable plan-day / window time / posts / gap fields",
+  ["bulkStdDay", "bulkStdAmStart", "bulkStdAmPosts", "bulkStdPmPosts", "bulkStdGapMin", "bulkStdForceDay", "syncBulkStdWindowsFromFields"].every(
+    (x) => posting.includes(x)
+  )
+);
+const jobRunner = read("src/services/jobRunner.js");
+check(
+  "Job progress tracks comment ok/fail/pending and notifies",
+  jobRunner.includes("comments_ok") &&
+    jobRunner.includes("comment_pending") &&
+    jobRunner.includes("Comment ✓") &&
+    jobRunner.includes("Comment ✗")
+);
+check(
   "UI separates page target modes (selected XOR all)",
   posting.includes('name="rotPageTarget"') &&
     posting.includes('value="selected"') &&

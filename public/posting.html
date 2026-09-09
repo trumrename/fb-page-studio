@@ -741,21 +741,80 @@ full album:
             </div>
 
             <div id="bulkStandardPanel" class="bulk-opt-panel is-dim" style="margin-top:.65rem;padding:0;border:none;background:transparent">
-              <div class="bulk-opt-hd" style="padding:0 .15rem">④ Chuẩn mới — đăng trực tiếp (giữ tool mở)</div>
+              <div class="bulk-opt-hd" style="padding:0 .15rem">④ Chuẩn mới — Sáng/Tối (sửa ngày · giờ · số bài tại đây)</div>
               <div class="sched-form" style="border-color:rgba(251,191,36,.55)">
                 <p class="muted" style="margin:0 0 .55rem;font-size:.82rem;line-height:1.5">
-                  Dùng đúng <b>Loại bài</b> phía trên (photo / video / text). Chọn <b>video</b> thì mọi vòng đều video — không lấy sequence Page (ảnh→video→text).
-                  Số bài = cột cuối mỗi dòng khung; tick «Đăng liền» nếu muốn gap ngắn giữa các bài cùng page.
+                  Dùng <b>Loại bài</b> phía trên. Chọn <b>video</b> = mọi vòng video.
+                  Sửa <b>ngày plan / giờ khung / số bài</b> bằng ô bên dưới (không bị khóa).
                 </p>
-                <label class="sched-form-label" for="bulkStdWindows">
-                  Khung Sáng / Tối
-                  <span class="hint-inline">Tên | bắt đầu | kết thúc | số video</span>
+                <div class="sched-date-box" style="margin-top:0">
+                  <div class="sched-date-title">Ngày plan (VN) — để trống = hôm nay / tự đẩy ngày mai nếu quá giờ</div>
+                  <div class="sched-date-row">
+                    <label class="sched-date-field">
+                      <span>Ngày</span>
+                      <input type="number" id="bulkStdDay" min="1" max="31" inputmode="numeric" />
+                    </label>
+                    <label class="sched-date-field">
+                      <span>Tháng</span>
+                      <input type="number" id="bulkStdMonth" min="1" max="12" inputmode="numeric" />
+                    </label>
+                    <label class="sched-date-field">
+                      <span>Năm</span>
+                      <input type="number" id="bulkStdYear" class="sched-year" min="2024" max="2100" inputmode="numeric" />
+                    </label>
+                    <label class="checks" style="align-self:end;margin:0 0 .35rem">
+                      <input type="checkbox" id="bulkStdForceDay" />
+                      Ép đúng ngày này
+                    </label>
+                  </div>
+                </div>
+                <div class="sched-extra-row" style="margin-top:.55rem">
+                  <label class="sched-date-field">
+                    <span>Sáng · bắt đầu</span>
+                    <input type="time" id="bulkStdAmStart" step="60" value="06:00" />
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Sáng · kết thúc</span>
+                    <input type="time" id="bulkStdAmEnd" step="60" value="08:00" />
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Sáng · số bài</span>
+                    <input type="number" id="bulkStdAmPosts" min="1" max="12" value="1" inputmode="numeric" />
+                  </label>
+                </div>
+                <div class="sched-extra-row" style="margin-top:.35rem">
+                  <label class="sched-date-field">
+                    <span>Tối · bắt đầu</span>
+                    <input type="time" id="bulkStdPmStart" step="60" value="18:00" />
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Tối · kết thúc</span>
+                    <input type="time" id="bulkStdPmEnd" step="60" value="20:00" />
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Tối · số bài</span>
+                    <input type="number" id="bulkStdPmPosts" min="1" max="12" value="1" inputmode="numeric" />
+                  </label>
+                </div>
+                <div class="sched-extra-row" style="margin-top:.35rem">
+                  <label class="sched-date-field">
+                    <span>Gap page/admin min (phút)</span>
+                    <input type="number" id="bulkStdGapMin" min="0" max="1440" value="0" inputmode="numeric" title="0 = nhiều page gần cùng lúc" />
+                  </label>
+                  <label class="sched-date-field">
+                    <span>Gap page/admin max (phút)</span>
+                    <input type="number" id="bulkStdGapMax" min="0" max="2880" value="0" inputmode="numeric" />
+                  </label>
+                </div>
+                <label class="sched-form-label" for="bulkStdWindows" style="margin-top:.55rem">
+                  Khung (đồng bộ tự động từ ô trên — vẫn sửa tay được)
+                  <span class="hint-inline">Tên | bắt đầu | kết thúc | số bài</span>
                 </label>
                 <textarea id="bulkStdWindows" rows="3" placeholder="Sáng | 06:00 | 08:00 | 1&#10;Tối | 18:00 | 20:00 | 1">Sáng | 06:00 | 08:00 | 1
 Tối | 18:00 | 20:00 | 1</textarea>
                 <label class="checks" style="display:block;margin-top:.55rem">
                   <input type="checkbox" id="bulkStdBurst" />
-                  Đăng liền trong khung (số bài = cột cuối mỗi dòng khung, không ép 3)
+                  Đăng liền trong khung (số bài = ô «số bài» / cột cuối, không ép 3)
                 </label>
                 <label class="checks" style="display:block">
                   <input type="checkbox" id="bulkStdSplit" />
@@ -772,7 +831,7 @@ Tối | 18:00 | 20:00 | 1</textarea>
                     <b>Đăng trực tiếp</b> — tool chờ đến giờ mới bấm Graph, phải giữ máy bật
                   </label>
                   <p class="muted" style="margin:.35rem 0 0;font-size:.76rem;line-height:1.4">
-                    Số bài lấy từ khung (vd <code>| 1</code> = 1 bài). Hẹn FB: mốc đã qua hoặc &lt; 10 phút sẽ đẩy +10 phút (luật Graph).
+                    Số bài lấy từ ô «số bài» (vd 1 hoặc 3). Hẹn FB: mốc đã qua hoặc &lt; 10 phút sẽ đẩy +10 phút (luật Graph).
                   </p>
                 </div>
                 <p class="muted" id="bulkStdWindowTotal" style="margin:.45rem 0 0;font-size:.82rem"></p>
@@ -1236,6 +1295,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkCommentWhenImmediate", "bulkCommentWhenPublish",
       "bulkCommentDelayMin", "bulkCommentMinLikes",
       "bulkStdWindows", "bulkStdBurst", "bulkStdSplit", "bulkStdDelivery",
+      "bulkStdAmStart", "bulkStdAmEnd", "bulkStdAmPosts",
+      "bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts",
+      "bulkStdGapMin", "bulkStdGapMax",
+      "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdForceDay",
     ];
     const rotationWorkspaceControlIds = [
       "rotMode", "rotDays", "rotPostType", "rotAppStrategy", "rotNowPerDay",
@@ -1589,10 +1652,11 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const startEl = $("bulkFixedSubStart");
       const activeEl = $("bulkActive");
       const stdEl = $("bulkStandardPanel");
-      if (listEl) listEl.style.display = "";
-      if (startEl) startEl.style.display = "";
-      if (activeEl) activeEl.style.display = "";
-      if (stdEl) stdEl.style.display = "";
+      // Ẩn panel không dùng — tránh sửa nhầm ô ngày/số bị khóa
+      if (listEl) listEl.style.display = kind === "list_times" ? "" : "none";
+      if (startEl) startEl.style.display = kind === "start_at" ? "" : "none";
+      if (activeEl) activeEl.style.display = kind === "active_times" ? "" : "none";
+      if (stdEl) stdEl.style.display = kind === "standard_burst" ? "" : "none";
 
       setPanelDim(listEl, kind !== "list_times");
       setPanelDim(startEl, kind !== "start_at");
@@ -1600,8 +1664,12 @@ Tối | 18:00 | 21:30 | 2</textarea>
       setPanelDim(stdEl, kind !== "standard_burst");
       const gapEl = $("bulkPageGapPanel");
       if (gapEl) {
-        if (kind === "standard_burst") setPanelDim(gapEl, true);
-        else {
+        // ④ có gap riêng (bulkStdGap*) — panel gap chung chỉ cho ①②③
+        if (kind === "standard_burst") {
+          gapEl.style.display = "none";
+          setPanelDim(gapEl, true);
+        } else {
+          gapEl.style.display = "";
           gapEl.classList.remove("is-dim", "is-active");
           gapEl.querySelectorAll("input, textarea, select, button").forEach((node) => {
             node.disabled = false;
@@ -1631,8 +1699,13 @@ Tối | 18:00 | 21:30 | 2</textarea>
         if ($("bulkStdWindows") && !$("bulkStdWindows").value.trim()) {
           $("bulkStdWindows").value = DEFAULT_STANDARD_WINDOWS;
         }
+        ensureBulkStdPlanDayDefaults();
+        syncBulkStdFieldsFromWindows();
         syncStandardDeliveryUi();
         syncStandardBurstFields({ fromBulk: true });
+        // Mở khóa khung Direct Local (tránh is-dim còn sót khi chuyển từ gap_chain)
+        applyRotNowTimeExclusiveUi();
+        syncRunNowMediaUi();
         syncBulkStandardWindowTotal();
       }
 
@@ -3724,6 +3797,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const el = $(id);
       if (!el) return;
       el.addEventListener("change", () => {
+        if (id === "bulkStdWindows") syncBulkStdFieldsFromWindows();
         syncStandardBurstFields({ fromBulk: true });
         syncBulkStandardWindowTotal();
         runNowPlanId = null;
@@ -3732,11 +3806,34 @@ Tối | 18:00 | 21:30 | 2</textarea>
         queueWorkspaceSave(200);
       });
       el.addEventListener("input", () => {
+        if (id === "bulkStdWindows") syncBulkStdFieldsFromWindows();
         syncStandardBurstFields({ fromBulk: true });
         syncBulkStandardWindowTotal();
         runNowPlanId = null;
         runNowPlanSignature = null;
       });
+    });
+    [
+      "bulkStdAmStart", "bulkStdAmEnd", "bulkStdAmPosts",
+      "bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts",
+      "bulkStdGapMin", "bulkStdGapMax",
+      "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdForceDay",
+    ].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      const onEdit = () => {
+        if (id.startsWith("bulkStdAm") || id.startsWith("bulkStdPm")) {
+          syncBulkStdWindowsFromFields();
+        }
+        syncStandardBurstFields({ fromBulk: true });
+        syncBulkStandardWindowTotal();
+        runNowPlanId = null;
+        runNowPlanSignature = null;
+        updateBulkTimingModeBadge();
+        queueWorkspaceSave(200);
+      };
+      el.addEventListener("change", onEdit);
+      el.addEventListener("input", onEdit);
     });
     $("bulkPostType")?.addEventListener("change", () => {
       const t = String($("bulkPostType")?.value || "auto").toLowerCase();
@@ -4078,6 +4175,54 @@ Tối | 18:00 | 21:30 | 2</textarea>
     }
     const DEFAULT_STANDARD_WINDOWS = "Sáng | 06:00 | 08:00 | 1\nTối | 18:00 | 20:00 | 1";
 
+    function ensureBulkStdPlanDayDefaults() {
+      const now = new Date();
+      if ($("bulkStdDay") && !$("bulkStdDay").value) $("bulkStdDay").value = String(now.getDate());
+      if ($("bulkStdMonth") && !$("bulkStdMonth").value) $("bulkStdMonth").value = String(now.getMonth() + 1);
+      if ($("bulkStdYear") && !$("bulkStdYear").value) $("bulkStdYear").value = String(now.getFullYear());
+    }
+
+    function readBulkStdForcePlanDay() {
+      if (!$("bulkStdForceDay")?.checked) return null;
+      const day = Number($("bulkStdDay")?.value);
+      const mon = Number($("bulkStdMonth")?.value);
+      const yr = Number($("bulkStdYear")?.value);
+      if (!Number.isFinite(day) || !Number.isFinite(mon) || !Number.isFinite(yr)) return null;
+      if (day < 1 || day > 31 || mon < 1 || mon > 12 || yr < 2024) return null;
+      return `${yr}-${pad2(mon)}-${pad2(day)}`;
+    }
+
+    /** Ô giờ/số bài Chuẩn mới → textarea khung */
+    function syncBulkStdWindowsFromFields() {
+      const amStart = String($("bulkStdAmStart")?.value || "06:00").slice(0, 5);
+      const amEnd = String($("bulkStdAmEnd")?.value || "08:00").slice(0, 5);
+      const amPosts = Math.max(1, Math.min(12, Number($("bulkStdAmPosts")?.value) || 1));
+      const pmStart = String($("bulkStdPmStart")?.value || "18:00").slice(0, 5);
+      const pmEnd = String($("bulkStdPmEnd")?.value || "20:00").slice(0, 5);
+      const pmPosts = Math.max(1, Math.min(12, Number($("bulkStdPmPosts")?.value) || 1));
+      const text = `Sáng | ${amStart} | ${amEnd} | ${amPosts}\nTối | ${pmStart} | ${pmEnd} | ${pmPosts}`;
+      if ($("bulkStdWindows")) $("bulkStdWindows").value = text;
+      if ($("rotNowWindows")) $("rotNowWindows").value = text;
+      return text;
+    }
+
+    /** Textarea khung → ô giờ/số bài */
+    function syncBulkStdFieldsFromWindows() {
+      const wins = parseWindowsText($("bulkStdWindows")?.value || "") || [];
+      const am = wins.find((w) => /sáng|sang|am|morning/i.test(w.name)) || wins[0];
+      const pm = wins.find((w) => /tối|toi|pm|evening|night/i.test(w.name)) || wins[1];
+      if (am) {
+        if ($("bulkStdAmStart")) $("bulkStdAmStart").value = String(am.start || "06:00").slice(0, 5);
+        if ($("bulkStdAmEnd")) $("bulkStdAmEnd").value = String(am.end || "08:00").slice(0, 5);
+        if ($("bulkStdAmPosts")) $("bulkStdAmPosts").value = String(Math.max(1, Number(am.posts) || 1));
+      }
+      if (pm) {
+        if ($("bulkStdPmStart")) $("bulkStdPmStart").value = String(pm.start || "18:00").slice(0, 5);
+        if ($("bulkStdPmEnd")) $("bulkStdPmEnd").value = String(pm.end || "20:00").slice(0, 5);
+        if ($("bulkStdPmPosts")) $("bulkStdPmPosts").value = String(Math.max(1, Number(pm.posts) || 1));
+      }
+    }
+
     function syncStandardBurstFields({ fromBulk = false } = {}) {
       const bulkWin = $("bulkStdWindows");
       const rotWin = $("rotNowWindows");
@@ -4088,6 +4233,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
         if ($("rotNowTimeWindows")) $("rotNowTimeWindows").checked = true;
         if ($("rotNowTimeGap")) $("rotNowTimeGap").checked = false;
         if ($("rotNowTimePreferred")) $("rotNowTimePreferred").checked = false;
+        if ($("rotTaskGapMin") && $("bulkStdGapMin")) $("rotTaskGapMin").value = $("bulkStdGapMin").value || "0";
+        if ($("rotTaskGapMax") && $("bulkStdGapMax")) $("rotTaskGapMax").value = $("bulkStdGapMax").value || "0";
       } else {
         if (rotWin && bulkWin && rotWin.value.trim()) bulkWin.value = rotWin.value;
         if ($("bulkStdSplit")) $("bulkStdSplit").checked = !!$("rotSplitPagesWindows")?.checked;
@@ -4148,6 +4295,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         flash("Tick ít nhất 1 page — hoặc sang tab 2 chọn «Tất cả page»", false);
         return;
       }
+      syncBulkStdWindowsFromFields();
       syncStandardBurstFields({ fromBulk: true });
       let settingsBody;
       try {
@@ -4160,6 +4308,13 @@ Tối | 18:00 | 21:30 | 2</textarea>
         settingsBody.page_row_ids = sum.ids;
       }
       settingsBody.delivery = standardDelivery();
+      const forceDay = readBulkStdForcePlanDay();
+      if (forceDay) settingsBody.force_plan_day = forceDay;
+      // Gap page/admin từ ô Chuẩn mới (ưu tiên hơn rotTaskGap*)
+      const gMin = Number($("bulkStdGapMin")?.value);
+      const gMax = Number($("bulkStdGapMax")?.value);
+      if (Number.isFinite(gMin)) settingsBody.between_tasks_gap_minutes_min = Math.max(0, gMin);
+      if (Number.isFinite(gMax)) settingsBody.between_tasks_gap_minutes_max = Math.max(0, gMax);
       const fb = settingsBody.delivery === "fb_scheduled";
       if (dry) {
         $("bulkResult").innerHTML = "Đang tính lịch chuẩn mới (giờ VN)…";
@@ -4675,6 +4830,9 @@ Tối | 18:00 | 21:30 | 2</textarea>
         p.done,
         p.ok,
         p.fail,
+        p.comments_ok || 0,
+        p.comments_fail || 0,
+        p.comments_pending || 0,
         p.current_task_id || "",
         p.current_label || "",
         (job.tasks || []).length,
@@ -4706,7 +4864,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
       setLiveText("liveJobTitle", job.title || job.id);
       setLiveText("liveJobStatus", job.status || "queued");
       setLiveText("liveJobPct", `${p.percent || 0}%`);
-      setLiveText("liveJobStats", `OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}`);
+      const commentBits =
+        Number(p.comments_ok || 0) + Number(p.comments_fail || 0) + Number(p.comments_pending || 0) > 0
+          ? ` · Comment ✓${p.comments_ok || 0} ✗${p.comments_fail || 0} ⏳${p.comments_pending || 0}`
+          : "";
+      setLiveText(
+        "liveJobStats",
+        `OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}${commentBits}`
+      );
       const bar = $("liveJobBar");
       if (bar) bar.style.width = `${p.percent || 0}%`;
       setLiveText("liveJobCurrent", p.current_label || "—");
@@ -4796,6 +4961,17 @@ Tối | 18:00 | 21:30 | 2</textarea>
           .map((t) => {
             const isFail = t.status === "fail";
             const err = isFail ? t.error || t.message || "Thất bại" : "";
+            const cr = t.result || {};
+            let commentLine = "";
+            if (cr.comment_error) {
+              commentLine = `<div class="fail" style="margin-top:.15rem;font-size:.78rem">Comment ✗ ${esc(String(cr.comment_error).slice(0, 120))}</div>`;
+            } else if (cr.comment_id) {
+              commentLine = `<div class="ok" style="margin-top:.15rem;font-size:.78rem">Comment ✓ ${esc(String(cr.comment_text || cr.comment_id).slice(0, 100))}</div>`;
+            } else if (cr.comment_pending) {
+              commentLine = `<div class="muted" style="margin-top:.15rem;font-size:.78rem">Comment ⏳ chờ sau publish</div>`;
+            } else if (cr.comment_text) {
+              commentLine = `<div class="muted" style="margin-top:.15rem;font-size:.78rem">Comment đã gán (chưa có id)</div>`;
+            }
             const retry =
               finished && isFail
                 ? `<button type="button" class="btn-primary btn-sm btn-live-retry-one" data-task-id="${esc(t.id)}" style="margin-top:.3rem">↻ Đăng lại</button>`
@@ -4804,6 +4980,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
           <div><b>${esc(t.page_name)}</b>
             <div class="muted">${esc(t.label || "")}</div>
             ${isFail ? `<div class="fail" style="margin-top:.2rem;font-size:.8rem">⚠ ${esc(err)}</div>${retry}` : `<div class="muted">${esc(t.message || "")}</div>`}
+            ${commentLine}
           </div>
           <span class="${t.status === "ok" ? "ok" : isFail ? "fail" : "muted"}">${esc(t.status)} · ${t.percent || 0}%</span>
         </div>`;
@@ -4818,9 +4995,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
 
       const o = job.outcome;
       if (o) {
+        const p = job.progress || {};
+        const cLine =
+          Number(p.comments_ok || 0) + Number(p.comments_fail || 0) + Number(p.comments_pending || 0) > 0
+            ? `<div class="muted" style="margin-top:.35rem"><b>COMMENT:</b> ✓ ${p.comments_ok || 0} · ✗ ${p.comments_fail || 0} · ⏳ chờ ${p.comments_pending || 0}</div>`
+            : "";
         setLiveHtml(
           "liveJobOutcome",
-          `<div class="${o.shortfall ? "fail" : "ok"}"><b>KẾT QUẢ:</b> dự kiến ${o.expected} · thành công ${o.success} · lỗi ${o.failed} · bỏ qua ${o.skipped} · thiếu ${o.shortfall}${canRetry ? " · có thể Đăng lại lỗi" : ""}</div>`
+          `<div class="${o.shortfall ? "fail" : "ok"}"><b>KẾT QUẢ:</b> dự kiến ${o.expected} · thành công ${o.success} · lỗi ${o.failed} · bỏ qua ${o.skipped} · thiếu ${o.shortfall}${canRetry ? " · có thể Đăng lại lỗi" : ""}</div>${cLine}`
         );
       }
       if (finished) {

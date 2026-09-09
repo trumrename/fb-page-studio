@@ -718,6 +718,8 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
           return {
             ok: true,
             post: result,
+            comment_id: null,
+            comment_text: commentText,
             comment_error: ce.message,
             log: logFailComment,
             day_index: dayIndex,
@@ -764,6 +766,10 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       post_type: postType,
       media_moved_to: movedPath,
       media_hash: fin.hash,
+      comment_id: commentId,
+      comment_text: commentText,
+      comment_error: null,
+      comment_immediate: !!commentId,
     };
   } catch (e) {
     // Only Graph API failures trigger backoff — not local validation (caption/media empty)
