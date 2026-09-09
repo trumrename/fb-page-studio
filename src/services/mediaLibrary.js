@@ -518,64 +518,103 @@ export function getCommentPickMode(linkLists = {}, fallback = "random") {
 }
 
 /**
- * Lấy số thứ tự từ tên file/media.
- * Ví dụ: "1. meredith.mp4", "03-tamara.jpg", "7_diana.mov", "video 2 title.png"
+ * Bỏ prefix stamp khi moveToPosted: 2026-09-09T12-00-00-000Z_name
+ * và optional random: stamp_abc123_name
+ */
+export function stripPostedStampPrefix(baseName) {
+  let s = String(baseName || "");
+  s = s.replace(/^\d{4}-\d{2}-\d{2}T[\d\-]+Z_/i, "");
+  s = s.replace(/^[a-z0-9]{4,10}_(?=\d)/i, ""); // rare random prefix before number
+  return s;
+}
+
+/**
+ * Stem tên media (không đuôi, không stamp posted).
+ * Ví dụ: ".../1-natalie-mercer.mp4" → "1-natalie-mercer"
+ */
+export function mediaStemFromPath(nameOrPath) {
+  const raw = String(nameOrPath || "").trim();
+  if (!raw) return "";
+  const base = path.basename(raw, path.extname(raw));
+  return stripPostedStampPrefix(base).trim();
+}
+
+/**
+ * Lấy slug cuối từ URL: https://host/1-natalie-mercer/ → "1-natalie-mercer"
+ */
+export function extractUrlSlug(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (!parts.length) return "";
+    return decodeURIComponent(parts[parts.length - 1]).trim();
+  } catch {
+    const m = raw.match(/\/([^/?#]+)\/?(?:[?#].*)?$/);
+    return m ? decodeURIComponent(m[1]).trim() : "";
+  }
+}
+
+/**
+ * Số đầu trong slug/tên: "1-natalie-mercer" → 1, "03.tamara" → 3
+ * @returns {number|null}
+ */
+export function extractLeadingNumber(text) {
+  const s = String(text || "").trim();
+  const m = s.match(/^0*(\d{1,4})(?=[.\-_)\s]|$)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * Lấy số thứ tự từ tên file/media (sau khi bỏ stamp posted).
  * @returns {number|null} 1-based ordinal
  */
 export function extractOrdinalFromName(nameOrPath) {
-  const raw = String(nameOrPath || "").trim();
-  if (!raw) return null;
-  const base = path.basename(raw, path.extname(raw));
-  // Leading number: 1.  1)  1-  1_  01.
-  let m = base.match(/^\s*0*(\d{1,4})\s*(?:[.\-_)\]:]|\s+)/);
-  if (m) {
-    const n = Number(m[1]);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  }
-  // Pure number filename: "3.mp4" / "12"
-  m = base.match(/^\s*0*(\d{1,4})\s*$/);
-  if (m) {
-    const n = Number(m[1]);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  }
-  // Number after common separators near the start: "clip_3_title"
-  m = base.match(/(?:^|[_\s-])0*(\d{1,4})(?=[_\s.-]|$)/);
-  if (m) {
-    const n = Number(m[1]);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  }
-  return null;
+  const stem = mediaStemFromPath(nameOrPath);
+  if (!stem) return null;
+  return extractLeadingNumber(stem);
 }
 
 /**
  * Parse 1 dòng kho link: "1. https://..." hoặc URL thuần.
- * @returns {{ ordinal: number|null, url: string }|null}
+ * Gắn thêm slug + số trong path URL (không dùng số thứ tự dòng list).
+ * @returns {{ ordinal: number|null, url: string, slug: string, pathNumber: number|null }|null}
  */
 export function parseLinkEntry(line) {
   const raw = String(line || "").trim();
   if (!raw) return null;
+  let url = null;
+  let lineOrdinal = null;
   const numbered = raw.match(
     /^\s*0*(\d{1,4})\s*[.\)\-:\]]\s*((?:https?:\/\/)\S+|(?:[\w.-]+\.[a-z]{2,})\S*)/i
   );
   if (numbered) {
-    return { ordinal: Number(numbered[1]), url: numbered[2].trim() };
+    lineOrdinal = Number(numbered[1]);
+    url = numbered[2].trim();
+  } else {
+    const spaced = raw.match(
+      /^\s*0*(\d{1,4})\s+((?:https?:\/\/)\S+|(?:[\w.-]+\.[a-z]{2,})\S*)/i
+    );
+    if (spaced) {
+      lineOrdinal = Number(spaced[1]);
+      url = spaced[2].trim();
+    } else if (/^https?:\/\//i.test(raw) || /^[\w.-]+\.[a-z]{2,}/i.test(raw)) {
+      url = raw;
+    }
   }
-  // "1 https://..." (space only)
-  const spaced = raw.match(
-    /^\s*0*(\d{1,4})\s+((?:https?:\/\/)\S+|(?:[\w.-]+\.[a-z]{2,})\S*)/i
-  );
-  if (spaced) {
-    return { ordinal: Number(spaced[1]), url: spaced[2].trim() };
-  }
-  if (/^https?:\/\//i.test(raw) || /^[\w.-]+\.[a-z]{2,}/i.test(raw)) {
-    return { ordinal: null, url: raw };
-  }
-  return null;
+  if (!url) return null;
+  const slug = extractUrlSlug(url);
+  const pathNumber = extractLeadingNumber(slug);
+  // Ưu tiên số trong URL slug (1-natalie-mercer), không phải số dòng list
+  const ordinal = pathNumber != null ? pathNumber : lineOrdinal;
+  return { ordinal, url, slug, pathNumber, lineOrdinal };
 }
 
 /**
- * Map ordinal → URL từ kho link.
- * Dòng có số (1. url) dùng số đó; dòng không số gán 1,2,3… theo thứ tự.
+ * Map theo số trong URL slug (1-natalie → 1). Không gán auto theo thứ tự dòng.
  */
 export function buildOrdinalLinkMap(rawLines) {
   const entries = [];
@@ -585,40 +624,97 @@ export function buildOrdinalLinkMap(rawLines) {
   }
   /** @type {Map<number, string>} */
   const map = new Map();
-  let auto = 1;
+  /** @type {Map<string, string>} */
+  const slugMap = new Map();
   for (const e of entries) {
-    const ord = e.ordinal != null && e.ordinal > 0 ? e.ordinal : auto;
-    if (!map.has(ord)) map.set(ord, e.url);
-    auto += 1;
+    if (e.slug) {
+      const key = e.slug.toLowerCase();
+      if (!slugMap.has(key)) slugMap.set(key, e.url);
+    }
+    // Chỉ map khi có số trong path URL (hoặc số dòng nếu URL không có số)
+    const ord = e.pathNumber != null ? e.pathNumber : e.lineOrdinal;
+    if (ord != null && ord > 0 && !map.has(ord)) map.set(ord, e.url);
   }
   const urls = entries.map((e) => e.url);
-  return { map, entries, urls };
+  return { map, slugMap, entries, urls };
+}
+
+function normalizeKey(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{2,5}$/i, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 /**
- * Chọn link theo số trên tên media. Fallback: index (ord-1) trong list phẳng.
+ * Chọn link theo slug/số TRONG URL khớp tên media.
+ * Ví dụ media "1-natalie-mercer.mp4" ↔ https://…/1-natalie-mercer/
+ * KHÔNG dùng số thứ tự dòng trong list.
  */
 export function pickLinkByMediaOrdinal(rawLines, mediaPathOrName) {
-  const { map, urls } = buildOrdinalLinkMap(rawLines);
-  const ord = extractOrdinalFromName(mediaPathOrName);
-  if (ord == null) {
-    return { url: null, ordinal: null, used_link_index: null, matched: false, reason: "no_ordinal_in_media_name" };
+  const { map, slugMap, entries, urls } = buildOrdinalLinkMap(rawLines);
+  const stem = mediaStemFromPath(mediaPathOrName);
+  if (!stem) {
+    return { url: null, ordinal: null, used_link_index: null, matched: false, reason: "no_media_name" };
   }
-  if (map.has(ord)) {
-    const url = map.get(ord);
+  const stemKey = normalizeKey(stem);
+  const mediaOrd = extractLeadingNumber(stem);
+
+  // 1) Exact slug: tên file = đoạn path URL (1-natalie-mercer)
+  if (slugMap.has(stemKey)) {
+    const url = slugMap.get(stemKey);
     const idx = urls.findIndex((u) => String(u).trim() === String(url).trim());
-    return { url, ordinal: ord, used_link_index: idx >= 0 ? idx : ord - 1, matched: true, reason: "ordinal_map" };
-  }
-  if (urls[ord - 1]) {
     return {
-      url: urls[ord - 1],
-      ordinal: ord,
-      used_link_index: ord - 1,
+      url,
+      ordinal: mediaOrd,
+      used_link_index: idx >= 0 ? idx : null,
       matched: true,
-      reason: "list_index_fallback",
+      reason: "slug_exact",
+      slug: stemKey,
     };
   }
-  return { url: null, ordinal: ord, used_link_index: null, matched: false, reason: "ordinal_not_in_links" };
+
+  // 2) Slug chứa trong tên file hoặc ngược lại (file dài hơn / stamp còn sót)
+  for (const e of entries) {
+    if (!e.slug) continue;
+    const sk = normalizeKey(e.slug);
+    if (!sk) continue;
+    if (stemKey === sk || stemKey.includes(sk) || sk.includes(stemKey)) {
+      const idx = urls.findIndex((u) => String(u).trim() === String(e.url).trim());
+      return {
+        url: e.url,
+        ordinal: e.pathNumber ?? mediaOrd,
+        used_link_index: idx >= 0 ? idx : null,
+        matched: true,
+        reason: "slug_contains",
+        slug: sk,
+      };
+    }
+  }
+
+  // 3) Cùng số đầu: media "1-natalie…" ↔ URL "/1-…" (theo số trong link, không theo dòng)
+  if (mediaOrd != null && map.has(mediaOrd)) {
+    const url = map.get(mediaOrd);
+    const idx = urls.findIndex((u) => String(u).trim() === String(url).trim());
+    return {
+      url,
+      ordinal: mediaOrd,
+      used_link_index: idx >= 0 ? idx : null,
+      matched: true,
+      reason: "url_path_number",
+      slug: extractUrlSlug(url),
+    };
+  }
+
+  return {
+    url: null,
+    ordinal: mediaOrd,
+    used_link_index: null,
+    matched: false,
+    reason: "no_slug_or_number_match",
+    slug: stemKey,
+  };
 }
 
 function pickFromList(list, mode, nextIndex) {

@@ -524,14 +524,14 @@ see more :
                   </label>
                   <label class="checks" style="margin:0">
                     <input type="radio" name="bulkCommentPickMode" id="bulkCommentModeMatch" value="match_media" />
-                    <b>Theo tên media</b> — file <code>3.xxx.mp4</code> ↔ link số 3
+                    <b>Theo tên media</b> — file <code>1-natalie-mercer.mp4</code> ↔ URL <code>/1-natalie-mercer/</code>
                   </label>
                 </div>
-                <label for="bulkCommentLinks"><b>Kho link full / comment</b> (mỗi dòng 1 URL — có thể ghi <code>1. https://…</code>)</label>
+                <label for="bulkCommentLinks"><b>Kho link full / comment</b> (mỗi dòng 1 URL)</label>
                 <textarea
                   id="bulkCommentLinks"
                   rows="6"
-                  placeholder="1. https://…/link-1&#10;2. https://…/link-2&#10;3. https://…/link-3"
+                  placeholder="https://profiles…/1-natalie-mercer/&#10;https://profiles…/2-tamara-weston/"
                   style="width:100%;box-sizing:border-box;font-family:ui-monospace,Consolas,monospace;font-size:.9rem"
                 ></textarea>
                 <div class="actions" style="margin:.35rem 0 .25rem;flex-wrap:wrap;gap:.35rem">
@@ -2918,11 +2918,12 @@ Tối | 18:00 | 21:30 | 2</textarea>
             <input type="radio" name="comment_link_mode" id="comment_mode_match" value="match_media" ${
               (c.link_lists?.comment_link_mode || "") === "match_media" ? "checked" : ""
             } />
-            <b>Theo tên media</b> — <code>3.xxx.mp4</code> ↔ link số 3
+            <b>Theo tên media</b> — <code>1-natalie-mercer.mp4</code> ↔ URL <code>/1-natalie-mercer/</code>
           </label>
           <p class="muted" style="margin:.35rem 0 0;font-size:.74rem;line-height:1.35">
-            Mode «Theo tên media»: đặt tên file <code>1.…</code> <code>2.…</code> giống số trên list link.
-            Link có thể ghi <code>1. https://…</code> hoặc chỉ URL theo thứ tự dòng = 1,2,3…
+            Mode «Theo tên media»: khớp <b>slug trong link</b>, không theo thứ tự dòng list.
+            Ví dụ file <code>1-natalie-mercer.mp4</code> → comment
+            <code>https://profiles…/1-natalie-mercer/</code>.
           </p>
         </div>
         <label><b>Câu kèm</b> (tuỳ chọn) — mỗi dòng 1 câu, random mỗi comment · <b>không cần</b> <code>{link}</code></label>
