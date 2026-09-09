@@ -396,9 +396,8 @@ export function composeCaptionWithLead(captionBody, cfg = {}) {
       if (picked.url) {
         link = picked.url;
       } else {
-        const i = Math.abs(linkNext) % links.length;
-        link = links[i];
-        linkNext = i + 1;
+        // Không gắn lead link sai khi không khớp slug
+        link = "";
       }
     } else if (mode === "sequential") {
       const i = Math.abs(linkNext) % links.length;
@@ -826,16 +825,14 @@ export function assignCommentForPost(cfg = {}) {
       if (picked.url) {
         link = picked.url;
         usedLinkIndex = picked.used_link_index;
-        // Do not advance sequential cursor on match — pairing is by filename
+        // Do not advance sequential cursor on match — pairing is by filename/slug
       } else {
-        // Fallback sequential so comment vẫn có link (tránh mất comment)
-        const start = Math.abs(Number(ll0.comment_link_next) || 0) % Math.max(links.length, 1);
-        const p = pickFromList(links, "sequential", linkNext);
-        link = p.item;
-        linkNext = p.nextIndex;
-        usedLinkIndex = links.length ? start : null;
+        // KHÔNG fallback sequential/random — tránh comment nhầm link khác.
+        // Media không có URL khớp → bỏ comment (bài vẫn đăng bình thường).
+        link = "";
+        usedLinkIndex = null;
         console.warn(
-          `[assignCommentForPost] match_media miss (${picked.reason || "?"}) media=${mediaRef} → fallback sequential`
+          `[assignCommentForPost] match_media miss (${picked.reason || "?"}) media=${mediaRef} → skip comment (no wrong link)`
         );
       }
     } else {
@@ -880,6 +877,10 @@ export function assignCommentForPost(cfg = {}) {
 
   // Template kiểu "see more :" mà không có link nào trong kho → null (đừng comment rỗng ý nghĩa)
   text = String(text || "").trim() || null;
+  // match_media: không khớp slug → không comment (tránh "see more :" không URL / URL sai)
+  if (mode === "match_media" && !link) {
+    text = null;
+  }
   if (text && !link && !/https?:\/\//i.test(text)) {
     // Chỉ câu mẫu, không URL — vẫn cho gửi (user có thể chỉ muốn text),
     // nhưng ghi log để debug bulk
