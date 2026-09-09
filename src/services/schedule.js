@@ -379,7 +379,11 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
   }
 
   // Dòng mở đầu (view full album : + link) rồi caption kho
-  const leadPack = composeCaptionWithLead(caption, cfg);
+  const leadPack = composeCaptionWithLead(caption, {
+    ...cfg,
+    media_path: mediaPath || null,
+    media_name: mediaPath ? path.basename(String(mediaPath)) : null,
+  });
   caption = leadPack.text || caption;
   if (leadPack.link_lists) {
     cfg = { ...cfg, link_lists: leadPack.link_lists };
@@ -466,7 +470,11 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
     let commentImmediateError = null;
     let commentLinkLists = cfg.link_lists;
     if (cfg.comment_enabled) {
-      const assigned = assignCommentForPost(cfg);
+      const assigned = assignCommentForPost({
+        ...cfg,
+        media_path: mediaPath || null,
+        media_name: mediaPath ? path.basename(String(mediaPath)) : null,
+      });
       pendingComment = assigned.text;
       commentLinkLists = assigned.link_lists || cfg.link_lists;
       // Default IMMEDIATE — thiếu field trên page cũ = comment ngay (đúng “sau khi đăng API”)
@@ -1322,7 +1330,11 @@ async function applyPendingCommentForLog(row, token, fbStatus = null) {
     if (!cfg.comment_enabled) {
       return { commented: false, skipped: true, reason: "comment_disabled" };
     }
-    const assigned = assignCommentForPost(cfg);
+    const assigned = assignCommentForPost({
+      ...cfg,
+      media_path: row.media_path || null,
+      media_name: row.media_path ? path.basename(String(row.media_path)) : null,
+    });
     message = assigned.text;
     if (assigned.link_lists) {
       savePagePostConfig(row.page_row_id, { ...cfg, link_lists: assigned.link_lists });

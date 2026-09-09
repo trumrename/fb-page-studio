@@ -348,15 +348,10 @@ export function composeCaptionWithLead(captionBody, cfg = {}) {
     ll0.caption_lead_templates ?? ll0.caption_lead ?? ll0.title_lead_templates
   );
   const links = getCaptionLeadLinkPool(ll0);
-  const modeRaw = String(
-    ll0.caption_lead_mode || ll0.comment_link_mode || "random"
-  )
-    .trim()
-    .toLowerCase();
-  const mode =
-    modeRaw === "sequential" || modeRaw === "sequence" || modeRaw === "theo_bai"
-      ? "sequential"
-      : "random";
+  const mode = getCommentPickMode(
+    { comment_link_mode: ll0.caption_lead_mode || ll0.comment_link_mode || "random" },
+    "random"
+  );
 
   if (!templates.length && !links.length) {
     return { text: body, lead: null, link: null, link_lists: ll0 };
@@ -366,19 +361,46 @@ export function composeCaptionWithLead(captionBody, cfg = {}) {
   let linkNext = Number(ll0.caption_lead_link_next) || 0;
   let tpl = "";
   let link = "";
+  const mediaRef = cfg.media_path || cfg.media_name || "";
 
   if (templates.length) {
     if (mode === "sequential") {
       const i = Math.abs(tplNext) % templates.length;
       tpl = templates[i];
       tplNext = i + 1;
+    } else if (mode === "match_media") {
+      const ord = extractOrdinalFromName(mediaRef);
+      if (ord != null) {
+        const numbered = templates.findIndex((t) => extractOrdinalFromName(t) === ord);
+        const idx = numbered >= 0 ? numbered : Math.min(Math.max(ord - 1, 0), templates.length - 1);
+        tpl = templates[idx];
+        tplNext += 1;
+      } else {
+        tpl = templates[Math.floor(Math.random() * templates.length)];
+        tplNext += 1;
+      }
     } else {
       tpl = templates[Math.floor(Math.random() * templates.length)];
       tplNext += 1;
     }
   }
   if (links.length) {
-    if (mode === "sequential") {
+    if (mode === "match_media") {
+      const raw =
+        normalizeLineList(ll0.caption_lead_links).length
+          ? normalizeLineList(ll0.caption_lead_links)
+          : normalizeLineList(ll0.comment_links).length
+            ? normalizeLineList(ll0.comment_links)
+            : links;
+      const picked = pickLinkByMediaOrdinal(raw, mediaRef);
+      if (picked.url) {
+        link = picked.url;
+      } else {
+        const i = Math.abs(linkNext) % links.length;
+        link = links[i];
+        linkNext = i + 1;
+      }
+    } else if (mode === "sequential") {
       const i = Math.abs(linkNext) % links.length;
       link = links[i];
       linkNext = i + 1;
@@ -459,10 +481,12 @@ export function getCommentLinkPool(linkLists = {}) {
   const seen = new Set();
   const out = [];
   for (const arr of buckets) {
-    for (const u of arr) {
+    for (const line of arr) {
+      const parsed = parseLinkEntry(line);
+      const u = parsed?.url || String(line || "").trim();
       const k = String(u || "").trim().toLowerCase();
       if (!k || seen.has(k)) continue;
-      // chỉ nhận URL-ish
+      // chỉ nhận URL-ish (sau khi bỏ số thứ tự "1. https://...")
       if (!/^https?:\/\//i.test(u) && !/^[\w.-]+\.[a-z]{2,}/i.test(u)) continue;
       seen.add(k);
       out.push(String(u).trim());
@@ -474,13 +498,127 @@ export function getCommentLinkPool(linkLists = {}) {
 }
 
 /**
- * random | sequential (theo từng bài của page — xoay vòng list)
+ * random | sequential | match_media (khớp số thứ tự tên file ↔ dòng link)
  */
 export function getCommentPickMode(linkLists = {}, fallback = "random") {
   const m = String(linkLists?.comment_link_mode || linkLists?.comment_pick_mode || fallback)
     .trim()
     .toLowerCase();
+  if (
+    m === "match_media" ||
+    m === "by_media" ||
+    m === "by_filename" ||
+    m === "theo_ten" ||
+    m === "theo_ten_media" ||
+    m === "media_name"
+  ) {
+    return "match_media";
+  }
   return m === "sequential" || m === "sequence" || m === "theo_bai" ? "sequential" : "random";
+}
+
+/**
+ * Lấy số thứ tự từ tên file/media.
+ * Ví dụ: "1. meredith.mp4", "03-tamara.jpg", "7_diana.mov", "video 2 title.png"
+ * @returns {number|null} 1-based ordinal
+ */
+export function extractOrdinalFromName(nameOrPath) {
+  const raw = String(nameOrPath || "").trim();
+  if (!raw) return null;
+  const base = path.basename(raw, path.extname(raw));
+  // Leading number: 1.  1)  1-  1_  01.
+  let m = base.match(/^\s*0*(\d{1,4})\s*(?:[.\-_)\]:]|\s+)/);
+  if (m) {
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  // Pure number filename: "3.mp4" / "12"
+  m = base.match(/^\s*0*(\d{1,4})\s*$/);
+  if (m) {
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  // Number after common separators near the start: "clip_3_title"
+  m = base.match(/(?:^|[_\s-])0*(\d{1,4})(?=[_\s.-]|$)/);
+  if (m) {
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  return null;
+}
+
+/**
+ * Parse 1 dòng kho link: "1. https://..." hoặc URL thuần.
+ * @returns {{ ordinal: number|null, url: string }|null}
+ */
+export function parseLinkEntry(line) {
+  const raw = String(line || "").trim();
+  if (!raw) return null;
+  const numbered = raw.match(
+    /^\s*0*(\d{1,4})\s*[.\)\-:\]]\s*((?:https?:\/\/)\S+|(?:[\w.-]+\.[a-z]{2,})\S*)/i
+  );
+  if (numbered) {
+    return { ordinal: Number(numbered[1]), url: numbered[2].trim() };
+  }
+  // "1 https://..." (space only)
+  const spaced = raw.match(
+    /^\s*0*(\d{1,4})\s+((?:https?:\/\/)\S+|(?:[\w.-]+\.[a-z]{2,})\S*)/i
+  );
+  if (spaced) {
+    return { ordinal: Number(spaced[1]), url: spaced[2].trim() };
+  }
+  if (/^https?:\/\//i.test(raw) || /^[\w.-]+\.[a-z]{2,}/i.test(raw)) {
+    return { ordinal: null, url: raw };
+  }
+  return null;
+}
+
+/**
+ * Map ordinal → URL từ kho link.
+ * Dòng có số (1. url) dùng số đó; dòng không số gán 1,2,3… theo thứ tự.
+ */
+export function buildOrdinalLinkMap(rawLines) {
+  const entries = [];
+  for (const line of normalizeLineList(rawLines)) {
+    const e = parseLinkEntry(line);
+    if (e?.url) entries.push(e);
+  }
+  /** @type {Map<number, string>} */
+  const map = new Map();
+  let auto = 1;
+  for (const e of entries) {
+    const ord = e.ordinal != null && e.ordinal > 0 ? e.ordinal : auto;
+    if (!map.has(ord)) map.set(ord, e.url);
+    auto += 1;
+  }
+  const urls = entries.map((e) => e.url);
+  return { map, entries, urls };
+}
+
+/**
+ * Chọn link theo số trên tên media. Fallback: index (ord-1) trong list phẳng.
+ */
+export function pickLinkByMediaOrdinal(rawLines, mediaPathOrName) {
+  const { map, urls } = buildOrdinalLinkMap(rawLines);
+  const ord = extractOrdinalFromName(mediaPathOrName);
+  if (ord == null) {
+    return { url: null, ordinal: null, used_link_index: null, matched: false, reason: "no_ordinal_in_media_name" };
+  }
+  if (map.has(ord)) {
+    const url = map.get(ord);
+    const idx = urls.findIndex((u) => String(u).trim() === String(url).trim());
+    return { url, ordinal: ord, used_link_index: idx >= 0 ? idx : ord - 1, matched: true, reason: "ordinal_map" };
+  }
+  if (urls[ord - 1]) {
+    return {
+      url: urls[ord - 1],
+      ordinal: ord,
+      used_link_index: ord - 1,
+      matched: true,
+      reason: "list_index_fallback",
+    };
+  }
+  return { url: null, ordinal: ord, used_link_index: null, matched: false, reason: "ordinal_not_in_links" };
 }
 
 function pickFromList(list, mode, nextIndex) {
@@ -512,9 +650,12 @@ export function buildComment(templates, linkLists = {}, pickMode = "random") {
  * - Mỗi page có kho template (câu kèm) + kho link riêng.
  * - mode random: mỗi bài random 1 câu + 1 link.
  * - mode sequential (theo bài): bài 1 → dòng 1, bài 2 → dòng 2, … hết list thì xoay vòng.
+ * - mode match_media: số trên tên file ảnh/video ↔ số trên dòng link (1. url / 2. url…).
  * - Câu kèm trống + có link → comment = chỉ URL.
  * - Template có {link}/{see_more}/{full_album} → thay (legacy).
  * - Template không placeholder (vd "see more :") + có link → "câu\nlink".
+ *
+ * cfg.media_path / cfg.media_name: dùng khi mode = match_media
  *
  * @returns {{ text: string|null, link: string|null, template: string|null, link_lists: object, used_link_index: number|null }}
  */
@@ -522,9 +663,24 @@ export function assignCommentForPost(cfg = {}) {
   const ll0 = cfg.link_lists && typeof cfg.link_lists === "object" ? { ...cfg.link_lists } : {};
   const mode = getCommentPickMode(ll0, cfg.comment_pick_mode || "random");
   const templates = normalizeLineList(cfg.comment_templates);
+  // Keep raw lines (may include "1. https://...") for ordinal matching
+  const rawLinkLines = (() => {
+    const ll = ll0;
+    const buckets = [
+      ll.comment_links,
+      ll.caption_lead_links,
+      ll.full_album,
+      ll.see_more,
+    ];
+    for (const b of buckets) {
+      const arr = normalizeLineList(b);
+      if (arr.length) return arr;
+    }
+    return [];
+  })();
   const links = getCommentLinkPool(ll0);
 
-  if (!templates.length && !links.length) {
+  if (!templates.length && !links.length && !rawLinkLines.length) {
     return {
       text: null,
       link: null,
@@ -537,20 +693,62 @@ export function assignCommentForPost(cfg = {}) {
   let tpl = "";
   let tplNext = Number(ll0.comment_tpl_next) || 0;
   if (templates.length) {
-    const p = pickFromList(templates, mode, tplNext);
-    tpl = p.item;
-    tplNext = p.nextIndex;
+    // Templates: match_media → sequential by same ordinal when possible, else random
+    if (mode === "match_media") {
+      const mediaRef = cfg.media_path || cfg.media_name || "";
+      const ord = extractOrdinalFromName(mediaRef);
+      if (ord != null && templates.length) {
+        const idx = Math.min(Math.max(ord - 1, 0), templates.length - 1);
+        // Prefer template that starts with same number if present
+        const numbered = templates.findIndex((t) => {
+          const o = extractOrdinalFromName(String(t).replace(/\s+/g, " "));
+          return o === ord;
+        });
+        tpl = templates[numbered >= 0 ? numbered : idx];
+        tplNext = tplNext + 1;
+      } else {
+        const p = pickFromList(templates, "random", tplNext);
+        tpl = p.item;
+        tplNext = p.nextIndex;
+      }
+    } else {
+      const p = pickFromList(templates, mode === "sequential" ? "sequential" : "random", tplNext);
+      tpl = p.item;
+      tplNext = p.nextIndex;
+    }
   }
 
   let link = "";
   let linkNext = Number(ll0.comment_link_next) || 0;
   let usedLinkIndex = null;
-  if (links.length) {
-    const start = Math.abs(Number(ll0.comment_link_next) || 0) % links.length;
-    const p = pickFromList(links, mode, linkNext);
-    link = p.item;
-    linkNext = p.nextIndex;
-    usedLinkIndex = mode === "sequential" ? start : links.indexOf(link);
+  let matchMeta = null;
+  if (links.length || rawLinkLines.length) {
+    if (mode === "match_media") {
+      const mediaRef = cfg.media_path || cfg.media_name || "";
+      const picked = pickLinkByMediaOrdinal(rawLinkLines.length ? rawLinkLines : links, mediaRef);
+      matchMeta = picked;
+      if (picked.url) {
+        link = picked.url;
+        usedLinkIndex = picked.used_link_index;
+        // Do not advance sequential cursor on match — pairing is by filename
+      } else {
+        // Fallback sequential so comment vẫn có link (tránh mất comment)
+        const start = Math.abs(Number(ll0.comment_link_next) || 0) % Math.max(links.length, 1);
+        const p = pickFromList(links, "sequential", linkNext);
+        link = p.item;
+        linkNext = p.nextIndex;
+        usedLinkIndex = links.length ? start : null;
+        console.warn(
+          `[assignCommentForPost] match_media miss (${picked.reason || "?"}) media=${mediaRef} → fallback sequential`
+        );
+      }
+    } else {
+      const start = Math.abs(Number(ll0.comment_link_next) || 0) % links.length;
+      const p = pickFromList(links, mode, linkNext);
+      link = p.item;
+      linkNext = p.nextIndex;
+      usedLinkIndex = mode === "sequential" ? start : links.indexOf(link);
+    }
   }
 
   // Keyed lists still support {see_more} / {full_album} independently if set
@@ -615,5 +813,7 @@ export function assignCommentForPost(cfg = {}) {
     link_lists,
     used_link_index: usedLinkIndex,
     mode,
+    media_ordinal: matchMeta?.ordinal ?? extractOrdinalFromName(cfg.media_path || cfg.media_name || "") ?? null,
+    match_reason: matchMeta?.reason || null,
   };
 }

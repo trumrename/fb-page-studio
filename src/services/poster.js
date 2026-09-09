@@ -483,7 +483,12 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
   }
 
   // Dòng mở đầu (view full album : + link) + caption kho — tuỳ chọn
-  const leadPack = composeCaptionWithLead(caption, cfg);
+  // Truyền media_path để mode match_media khớp số thứ tự tên file ↔ link
+  const leadPack = composeCaptionWithLead(caption, {
+    ...cfg,
+    media_path: mediaPath || null,
+    media_name: mediaPath ? path.basename(String(mediaPath)) : null,
+  });
   caption = leadPack.text || caption;
   if (leadPack.link_lists) {
     cfg = { ...cfg, link_lists: leadPack.link_lists };
@@ -666,7 +671,11 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     let commentLinkLists = cfg.link_lists;
     if (cfg.comment_enabled && result?.post_id) {
       // 1 bài = 1 gán (random hoặc lần lượt theo page)
-      const assigned = assignCommentForPost(cfg);
+      const assigned = assignCommentForPost({
+        ...cfg,
+        media_path: movedPath || mediaPath || null,
+        media_name: path.basename(String(movedPath || mediaPath || "")),
+      });
       commentText = assigned.text;
       commentLinkLists = assigned.link_lists || cfg.link_lists;
       if (commentText) {

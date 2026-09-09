@@ -522,12 +522,16 @@ see more :
                     <input type="radio" name="bulkCommentPickMode" id="bulkCommentModeSeq" value="sequential" />
                     <b>Theo thứ tự</b> — bài 1 = dòng 1, bài 2 = dòng 2…
                   </label>
+                  <label class="checks" style="margin:0">
+                    <input type="radio" name="bulkCommentPickMode" id="bulkCommentModeMatch" value="match_media" />
+                    <b>Theo tên media</b> — file <code>3.xxx.mp4</code> ↔ link số 3
+                  </label>
                 </div>
-                <label for="bulkCommentLinks"><b>Kho link full / comment</b> (mỗi dòng 1 URL — list dài được)</label>
+                <label for="bulkCommentLinks"><b>Kho link full / comment</b> (mỗi dòng 1 URL — có thể ghi <code>1. https://…</code>)</label>
                 <textarea
                   id="bulkCommentLinks"
                   rows="6"
-                  placeholder="https://…/link-1&#10;https://…/link-2&#10;https://…/link-3"
+                  placeholder="1. https://…/link-1&#10;2. https://…/link-2&#10;3. https://…/link-3"
                   style="width:100%;box-sizing:border-box;font-family:ui-monospace,Consolas,monospace;font-size:.9rem"
                 ></textarea>
                 <div class="actions" style="margin:.35rem 0 .25rem;flex-wrap:wrap;gap:.35rem">
@@ -1228,7 +1232,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkStartDay", "bulkStartMonth", "bulkStartYear",
       "bulkStartDay2", "bulkStartMonth2", "bulkStartYear2", "bulkStartTime",
       "bulkCommentEnabled", "bulkCommentTemplates", "bulkCommentLinks",
-      "bulkCommentModeSeq", "bulkCommentModeRnd",
+      "bulkCommentModeSeq", "bulkCommentModeRnd", "bulkCommentModeMatch",
       "bulkCommentWhenImmediate", "bulkCommentWhenPublish",
       "bulkCommentDelayMin", "bulkCommentMinLikes",
       "bulkStdWindows", "bulkStdBurst", "bulkStdSplit", "bulkStdDelivery",
@@ -2871,8 +2875,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
             Gợi ý: kho sẵn <code>video-titles-300.txt</code> (300 title cùng tone caption). 1 dòng = 1 title.
           </p>
         </div>
-        <label><b>Kho link full / comment (page này)</b> — mỗi dòng 1 URL (list dài được)</label>
-        <textarea id="comment_links" rows="5" placeholder="https://full1&#10;https://full2&#10;https://full3">${esc(
+        <label><b>Kho link full / comment (page này)</b> — mỗi dòng 1 URL (có thể <code>1. https://…</code>)</label>
+        <textarea id="comment_links" rows="5" placeholder="1. https://full1&#10;2. https://full2&#10;3. https://full3">${esc(
           (Array.isArray(c.link_lists?.comment_links) && c.link_lists.comment_links.length
             ? c.link_lists.comment_links
             : [
@@ -2900,16 +2904,26 @@ Tối | 18:00 | 21:30 | 2</textarea>
           <label style="display:block;margin-bottom:.3rem"><b>Link từng bài full</b></label>
           <label class="checks" style="display:inline-block;margin-right:1rem">
             <input type="radio" name="comment_link_mode" id="comment_mode_rnd" value="random" ${
-              (c.link_lists?.comment_link_mode || "random") !== "sequential" ? "checked" : ""
+              !["sequential", "match_media"].includes(c.link_lists?.comment_link_mode || "random") ? "checked" : ""
             } />
-            Random mỗi bài (comment full + link)
+            Random mỗi bài
           </label>
-          <label class="checks" style="display:inline-block;margin-left:1rem">
+          <label class="checks" style="display:inline-block;margin-right:1rem">
             <input type="radio" name="comment_link_mode" id="comment_mode_seq" value="sequential" ${
               (c.link_lists?.comment_link_mode || "") === "sequential" ? "checked" : ""
             } />
             Theo thứ tự (bài 1=dòng 1…)
           </label>
+          <label class="checks" style="display:inline-block">
+            <input type="radio" name="comment_link_mode" id="comment_mode_match" value="match_media" ${
+              (c.link_lists?.comment_link_mode || "") === "match_media" ? "checked" : ""
+            } />
+            <b>Theo tên media</b> — <code>3.xxx.mp4</code> ↔ link số 3
+          </label>
+          <p class="muted" style="margin:.35rem 0 0;font-size:.74rem;line-height:1.35">
+            Mode «Theo tên media»: đặt tên file <code>1.…</code> <code>2.…</code> giống số trên list link.
+            Link có thể ghi <code>1. https://…</code> hoặc chỉ URL theo thứ tự dòng = 1,2,3…
+          </p>
         </div>
         <label><b>Câu kèm</b> (tuỳ chọn) — mỗi dòng 1 câu, random mỗi comment · <b>không cần</b> <code>{link}</code></label>
         <textarea id="comment_templates" rows="4" placeholder="see more :&#10;full album:&#10;xem full:">${esc(tpls)}</textarea>
@@ -3034,11 +3048,11 @@ Tối | 18:00 | 21:30 | 2</textarea>
 
     function collectConfig() {
       const mode =
-        $("comment_mode_rnd")?.checked
-          ? "random"
+        $("comment_mode_match")?.checked
+          ? "match_media"
           : $("comment_mode_seq")?.checked
             ? "sequential"
-            : "sequential";
+            : "random";
       const when =
         $("comment_when_immediate")?.checked ? "immediate" : "after_publish";
       const linksRaw = ($("comment_links")?.value || "").trim();
@@ -5088,6 +5102,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       $("btnBulkCaptionLeadOff").onclick = () => applyBulkCaptionLead({ enabled: false });
 
     function getBulkCommentPickMode() {
+      if ($("bulkCommentModeMatch")?.checked) return "match_media";
       if ($("bulkCommentModeSeq")?.checked) return "sequential";
       if ($("bulkCommentModeRnd")?.checked) return "random";
       return "random";
