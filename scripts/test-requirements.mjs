@@ -227,6 +227,12 @@ check(
     posting.includes("rotNowTimeWindows")
 );
 check(
+  "Chuẩn mới honors bulkPostType (video/photo) instead of page sequence",
+  posting.includes("applyBulkPostTypeToRunNowBody") &&
+    posting.includes("applyBulkPostTypeToRunNowBody(collectRunNowBody())") &&
+    posting.includes('body.media_pattern_mode = "fixed"')
+);
+check(
   "UI separates page target modes (selected XOR all)",
   posting.includes('name="rotPageTarget"') &&
     posting.includes('value="selected"') &&

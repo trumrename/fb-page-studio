@@ -541,7 +541,8 @@ see more :
                 </div>
                 <div id="bulkLinksFreeList" style="max-height:11rem;overflow:auto;margin:0 0 .5rem;padding:.4rem .5rem;border:1px solid rgba(255,255,255,.1);border-radius:10px;background:rgba(0,0,0,.2);font-size:.78rem"></div>
                 <p class="muted" style="margin:.2rem 0 .5rem;font-size:.76rem">
-                  Mỗi bài → <b>1 comment</b>: random/lần lượt <b>1 câu kèm</b> + <b>1 link</b> từ kho.
+                  Mỗi bài → <b>1 comment</b>: 1 câu kèm + 1 link. Mode «Theo tên media»: khớp slug trước;
+                  không khớp → lấy link khác còn slot (tối đa 10 page/site). Không để comment trống URL.
                   <b>Phải bấm «Áp dụng»</b> sau khi dán list.
                 </p>
                 <label for="bulkCommentTemplates"><b>Câu kèm</b> (mỗi dòng 1 câu — random mỗi comment · <b>không cần</b> ghi <code>{link}</code>)</label>
@@ -743,8 +744,8 @@ full album:
               <div class="bulk-opt-hd" style="padding:0 .15rem">④ Chuẩn mới — đăng trực tiếp (giữ tool mở)</div>
               <div class="sched-form" style="border-color:rgba(251,191,36,.55)">
                 <p class="muted" style="margin:0 0 .55rem;font-size:.82rem;line-height:1.5">
-                  Không tạo lịch hẹn Facebook. Tool chờ giờ VN rồi đăng Graph.
-                  Cả list page chạy <b>cả 2 khung</b>. Mỗi page 3 video liền nhau (cách ≤30s), các page rải đều trong 2 giờ.
+                  Dùng đúng <b>Loại bài</b> phía trên (photo / video / text). Chọn <b>video</b> thì mọi vòng đều video — không lấy sequence Page (ảnh→video→text).
+                  Số bài = cột cuối mỗi dòng khung; tick «Đăng liền» nếu muốn gap ngắn giữa các bài cùng page.
                 </p>
                 <label class="sched-form-label" for="bulkStdWindows">
                   Khung Sáng / Tối
@@ -1648,9 +1649,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
         const fb = standardDelivery() === "fb_scheduled";
         const wins = parseWindowsText($("bulkStdWindows")?.value || "") || [];
         const postsHint = wins.map((w) => `${w.posts || 1}`).join("+") || "?";
+        const mediaT = String($("bulkPostType")?.value || "auto").toLowerCase();
+        const mediaLbl =
+          mediaT === "video" || mediaT === "photo" || mediaT === "text" || mediaT === "story"
+            ? mediaT
+            : "auto/sequence";
         el.innerHTML =
           `<span class="ok">④ Chuẩn mới</span> · Sáng/Tối · ` +
-          `bài/page=<b>${esc(postsHint)}</b>${burst ? " · đăng liền" : ""} · ` +
+          `bài/page=<b>${esc(postsHint)}</b> · loại=<b>${esc(mediaLbl)}</b>${burst ? " · đăng liền" : ""} · ` +
           (fb
             ? `<b>hẹn Facebook</b> (tắt tool được sau khi Graph nhận lịch)`
             : `<b>treo tool</b> đăng trực tiếp`);
@@ -2925,7 +2931,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
             Mode «Theo tên media»: khớp <b>slug trong link</b> (vd file <code>1-natalie-mercer.mp4</code>
             → <code>https://profiles…/1-natalie-mercer/</code>).<br/>
             <b>Mỗi site (domain)</b> chỉ comment tối đa <b>10 page</b> / lần chạy — site khác vẫn comment bình thường.<br/>
-            Media không khớp / site đã đủ 10 page → bài vẫn đăng, <b>bỏ comment</b> (không gắn link nhầm).
+            Không khớp slug → lấy <b>link khác</b> còn slot (không để comment trống URL). Mỗi site tối đa 10 page; chỉ bỏ comment khi mọi site đã đủ.
           </p>
           <div style="margin-top:.45rem;max-width:220px">
             <label>Tối đa page / site (domain)</label>
@@ -3732,6 +3738,19 @@ Tối | 18:00 | 21:30 | 2</textarea>
         runNowPlanSignature = null;
       });
     });
+    $("bulkPostType")?.addEventListener("change", () => {
+      const t = String($("bulkPostType")?.value || "auto").toLowerCase();
+      // Đồng bộ Direct Local để preview/tab 2 khớp «Loại bài»
+      if (t === "photo" || t === "video" || t === "text") {
+        if ($("rotNowMediaMode")) $("rotNowMediaMode").value = "fixed";
+        if ($("rotNowPostType")) $("rotNowPostType").value = t;
+        syncRunNowMediaUi();
+      }
+      runNowPlanId = null;
+      runNowPlanSignature = null;
+      updateBulkTimingModeBadge();
+      queueWorkspaceSave(200);
+    });
     $("bulkMode").onchange = () => {
       const m = $("bulkMode").value;
       const sub = $("bulkFixedSubMode")?.value || "list_times";
@@ -4102,6 +4121,27 @@ Tối | 18:00 | 21:30 | 2</textarea>
       }
     }
 
+    /**
+     * ④ Chuẩn mới lấy loại bài từ dropdown «Loại bài» (bulkPostType).
+     * Trước đây bị bỏ qua → luôn theo sequence Page (photo→video→text) nên chọn video vẫn báo thiếu ảnh.
+     */
+    function applyBulkPostTypeToRunNowBody(body) {
+      const t = String($("bulkPostType")?.value || "auto").toLowerCase().trim();
+      if (t === "photo" || t === "video" || t === "text") {
+        body.post_type = t;
+        body.media_pattern_mode = "fixed";
+        if ($("rotNowMediaMode")) $("rotNowMediaMode").value = "fixed";
+        if ($("rotNowPostType")) $("rotNowPostType").value = t;
+        syncRunNowMediaUi();
+      } else if (t === "story") {
+        body.post_type = "story";
+        body.media_pattern_mode = "fixed";
+        if ($("rotNowMediaMode")) $("rotNowMediaMode").value = "fixed";
+      }
+      // auto = giữ media_pattern_mode / sequence đang cấu hình ở Direct Local
+      return body;
+    }
+
     async function runStandardBurstFromBulk(dry) {
       const sum = selectedPageSummary(12);
       if (!sum.ids.length && pageTargetMode() === "selected") {
@@ -4111,7 +4151,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       syncStandardBurstFields({ fromBulk: true });
       let settingsBody;
       try {
-        settingsBody = collectRunNowBody();
+        settingsBody = applyBulkPostTypeToRunNowBody(collectRunNowBody());
       } catch (e) {
         flash(e.message, false);
         return;

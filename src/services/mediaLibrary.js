@@ -395,8 +395,12 @@ export function composeCaptionWithLead(captionBody, cfg = {}) {
       const picked = pickLinkByMediaOrdinal(raw, mediaRef);
       if (picked.url) {
         link = picked.url;
+      } else if (links.length) {
+        // Không khớp slug → vẫn gắn 1 link khác (tránh caption thiếu URL)
+        const i = Math.abs(linkNext) % links.length;
+        link = links[i];
+        linkNext = i + 1;
       } else {
-        // Không gắn lead link sai khi không khớp slug
         link = "";
       }
     } else if (mode === "sequential") {
@@ -860,7 +864,8 @@ export function buildComment(templates, linkLists = {}, pickMode = "random") {
  * - Mỗi page có kho template (câu kèm) + kho link riêng.
  * - mode random: mỗi bài random 1 câu + 1 link.
  * - mode sequential (theo bài): bài 1 → dòng 1, bài 2 → dòng 2, … hết list thì xoay vòng.
- * - mode match_media: số trên tên file ảnh/video ↔ số trên dòng link (1. url / 2. url…).
+ * - mode match_media: ưu tiên URL khớp slug/số tên file; không khớp (hoặc site đã đủ N page)
+ *   → lấy link khác còn slot (không để comment trống URL). Chỉ bỏ comment khi mọi site đã đủ cap.
  * - Câu kèm trống + có link → comment = chỉ URL.
  * - Template có {link}/{see_more}/{full_album} → thay (legacy).
  * - Template không placeholder (vd "see more :") + có link → "câu\nlink".
@@ -883,6 +888,21 @@ export function assignCommentForPost(cfg = {}) {
     const site = extractCommentSite(url);
     if (!site) return true;
     return siteTracker.canUse(site, pageRowId);
+  };
+  /** Link còn trong ngân sách site (fallback khi miss slug / site matched đã đủ). */
+  const pickAllowedFallback = (pool, nextIdx, pickMode = "random") => {
+    const allowed = (pool || []).filter((u) => linkSiteOk(u));
+    if (!allowed.length) {
+      return { link: "", linkNext: nextIdx, usedLinkIndex: null, siteSkipReason: "all_sites_at_cap" };
+    }
+    const start = Math.abs(Number(nextIdx) || 0) % allowed.length;
+    const p = pickFromList(allowed, pickMode === "sequential" ? "sequential" : "random", nextIdx);
+    return {
+      link: p.item,
+      linkNext: p.nextIndex,
+      usedLinkIndex: pickMode === "sequential" ? start : allowed.indexOf(p.item),
+      siteSkipReason: null,
+    };
   };
   // Keep raw lines (may include "1. https://...") for ordinal matching
   const rawLinkLines = (() => {
@@ -952,37 +972,43 @@ export function assignCommentForPost(cfg = {}) {
       if (picked.url && linkSiteOk(picked.url)) {
         link = picked.url;
         usedLinkIndex = picked.used_link_index;
-      } else if (picked.url && !linkSiteOk(picked.url)) {
-        link = "";
-        usedLinkIndex = null;
-        siteSkipReason = `site_cap:${extractCommentSite(picked.url)}`;
-        console.warn(
-          `[assignCommentForPost] site cap — ${extractCommentSite(picked.url)} đã đủ ${maxPagesPerSite} page → skip comment (media=${mediaRef})`
-        );
       } else {
-        // KHÔNG fallback sequential/random — tránh comment nhầm link khác.
-        link = "";
-        usedLinkIndex = null;
-        console.warn(
-          `[assignCommentForPost] match_media miss (${picked.reason || "?"}) media=${mediaRef} → skip comment (no wrong link)`
-        );
+        // Miss slug hoặc site khớp đã đủ N page → lấy link khác còn slot (không để trống URL)
+        const why = picked.url
+          ? `site_cap:${extractCommentSite(picked.url)}`
+          : `match_miss:${picked.reason || "?"}`;
+        const fb = pickAllowedFallback(links.length ? links : rawLinkLines, linkNext, "random");
+        if (fb.link) {
+          link = fb.link;
+          linkNext = fb.linkNext;
+          usedLinkIndex = fb.usedLinkIndex;
+          matchMeta = { ...picked, fallback: true, fallback_from: why, url: fb.link };
+          console.warn(
+            `[assignCommentForPost] ${why} media=${mediaRef} → fallback link khác (site còn slot)`
+          );
+        } else {
+          link = "";
+          usedLinkIndex = null;
+          siteSkipReason = fb.siteSkipReason || why;
+          console.warn(
+            `[assignCommentForPost] ${why} media=${mediaRef} → mọi site đã đủ ${maxPagesPerSite} page → skip comment`
+          );
+        }
       }
     } else {
       // random / sequential: chỉ chọn link thuộc site còn slot page
-      const allowed = links.filter((u) => linkSiteOk(u));
-      if (!allowed.length) {
+      const fb = pickAllowedFallback(links, linkNext, mode);
+      if (!fb.link) {
         link = "";
         usedLinkIndex = null;
-        siteSkipReason = "all_sites_at_cap";
+        siteSkipReason = fb.siteSkipReason || "all_sites_at_cap";
         console.warn(
           `[assignCommentForPost] mọi site đã đủ ${maxPagesPerSite} page → skip comment (page=${pageRowId})`
         );
       } else {
-        const start = Math.abs(Number(ll0.comment_link_next) || 0) % allowed.length;
-        const p = pickFromList(allowed, mode, linkNext);
-        link = p.item;
-        linkNext = p.nextIndex;
-        usedLinkIndex = mode === "sequential" ? start : allowed.indexOf(link);
+        link = fb.link;
+        linkNext = fb.linkNext;
+        usedLinkIndex = fb.usedLinkIndex;
       }
     }
   }
