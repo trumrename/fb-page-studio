@@ -1003,7 +1003,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
                 </label>
                 <label class="checks" style="display:block">
                   <input type="checkbox" id="rotBurstThreeVideos" checked />
-                  3 video / page đăng 1 lúc (cách nhau ≤ 30 giây)
+                  3 bài / page đăng liền (≤ 30 giây) — theo loại media đã chọn phía dưới
                 </label>
                 <p class="muted" id="rotNowWindowTotal" style="margin:.35rem 0 0;font-size:.82rem"></p>
               </div>
@@ -4038,14 +4038,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if (fromBulk) {
         if (bulkWin && rotWin && bulkWin.value.trim()) rotWin.value = bulkWin.value;
         if ($("rotSplitPagesWindows")) $("rotSplitPagesWindows").checked = !!$("bulkStdSplit")?.checked;
-        if ($("rotBurstThreeVideos")) $("rotBurstThreeVideos").checked = $("bulkStdBurst")?.checked !== false;
+        if ($("rotBurstThreeVideos")) $("rotBurstThreeVideos").checked = !!$("bulkStdBurst")?.checked;
         if ($("rotNowTimeWindows")) $("rotNowTimeWindows").checked = true;
         if ($("rotNowTimeGap")) $("rotNowTimeGap").checked = false;
         if ($("rotNowTimePreferred")) $("rotNowTimePreferred").checked = false;
       } else {
         if (rotWin && bulkWin && rotWin.value.trim()) bulkWin.value = rotWin.value;
         if ($("bulkStdSplit")) $("bulkStdSplit").checked = !!$("rotSplitPagesWindows")?.checked;
-        if ($("bulkStdBurst")) $("bulkStdBurst").checked = $("rotBurstThreeVideos")?.checked !== false;
+        if ($("bulkStdBurst")) $("bulkStdBurst").checked = !!$("rotBurstThreeVideos")?.checked;
       }
       if (rotWin && !rotWin.value.trim()) rotWin.value = DEFAULT_STANDARD_WINDOWS;
       if (bulkWin && !bulkWin.value.trim()) bulkWin.value = DEFAULT_STANDARD_WINDOWS;
@@ -4181,15 +4181,22 @@ Tối | 18:00 | 21:30 | 2</textarea>
       try {
         const windows = readDirectLocalWindowsStrict();
         const split = !!$("rotSplitPagesWindows")?.checked;
-        const burst = $("rotBurstThreeVideos")?.checked !== false;
+        const burst = !!$("rotBurstThreeVideos")?.checked;
+        const mode = mediaPatternMode();
+        const mediaLbl =
+          mode === "fixed"
+            ? ($("rotNowPostType")?.value || "photo")
+            : mode === "pattern"
+              ? "pattern"
+              : "sequence Page";
         if (split) {
           box.innerHTML =
-            `→ Nửa page sáng / nửa tối · mỗi page <b>${windows[0]?.posts || 3} video</b> ` +
+            `→ Nửa page sáng / nửa tối · mỗi page <b>${windows[0]?.posts || 3} bài (${esc(mediaLbl)})</b> ` +
             `(${windows.map((item) => esc(item.name) + " " + item.start + "–" + item.end).join(" · ")}).`;
         } else {
           box.innerHTML =
             `→ Cả list (vd 40 page / 2 token) chạy <b>cả 2 khung</b>, rải đều 2 giờ · ` +
-            `mỗi page ${burst ? "3 video ≤30s" : (windows[0]?.posts || "") + " bài"}. ` +
+            `mỗi page ${burst ? `3 bài liền (${esc(mediaLbl)})` : (windows[0]?.posts || "") + " bài"}. ` +
             `(${windows.map((item) => esc(item.name) + " " + item.start + "–" + item.end).join(" · ")}).`;
         }
       } catch (e) {
@@ -4199,6 +4206,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
     function syncRunNowMediaUi() {
       const mode = mediaPatternMode();
       const timeMode = runNowTimeMode();
+      const burstOn = !!$("rotBurstThreeVideos")?.checked;
+      const fixedType = ($("rotNowPostType")?.value || "photo").toLowerCase();
       if ($("rotNowPostTypeWrap")) $("rotNowPostTypeWrap").style.opacity = mode === "fixed" ? "1" : "0.45";
       if ($("rotNowPatternWrap")) $("rotNowPatternWrap").style.opacity = mode === "pattern" ? "1" : "0.45";
       if ($("rotNowGapBox")) $("rotNowGapBox").style.opacity = timeMode === "gap_chain" ? "1" : "0.5";
@@ -4211,23 +4220,41 @@ Tối | 18:00 | 21:30 | 2</textarea>
           "Sáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3";
       }
       if (timeMode === "windows") syncDirectLocalWindowTotal();
+      const burstKind =
+        mode === "fixed"
+          ? fixedType === "video"
+            ? "video"
+            : fixedType === "text"
+              ? "text"
+              : "ảnh (photo)"
+          : mode === "pattern"
+            ? "theo pattern"
+            : "theo sequence Page";
       const th = $("rotNowTimeHelp");
       if (th) {
         th.textContent =
           timeMode === "preferred"
             ? "Giờ ưa thích từng page (cùng hẹn FB) · max/interval page + anti · tool chờ → đăng API."
             : timeMode === "windows"
-              ? "06:00–08:00 và 18:00–20:00: rải 40 page trong 2 giờ; mỗi page 3 video ≤30s."
+              ? burstOn
+                ? `Khung giờ: rải page trong 2 giờ; mỗi page 3 bài liền (${burstKind}).`
+                : "Khung giờ: rải page trong 2 giờ theo số bài mỗi khung."
               : "Liên tục: bài đầu ngay; các vòng sau + gap (interval page + anti).";
       }
       const help = $("rotNowMediaHelp");
       if (help) {
         if (mode === "pattern") {
-          help.textContent = `Pattern lặp theo #bài trong ngày. Ví dụ 4 bài + "photo,video,video,photo" → ảnh, video, video, ảnh.`;
+          help.textContent =
+            `Pattern lặp theo #bài. Ví dụ "photo,video,video,photo".` +
+            (burstOn ? " Burst 3 bài cũng theo pattern (không ép video)." : "");
         } else if (mode === "fixed") {
-          help.textContent = "Mọi bài cùng một loại (photo / video / text).";
+          help.textContent =
+            `Mọi bài = ${fixedType}.` +
+            (burstOn ? ` Burst 3 bài cũng là ${fixedType} (không ép video).` : "");
         } else {
-          help.textContent = "Dùng sequence từng Page (cấu hình Page: photo, video, …).";
+          help.textContent =
+            "Dùng sequence từng Page (cấu hình Page: photo, video, …)." +
+            (burstOn ? " Burst theo sequence, không ép video." : "");
         }
       }
     }
@@ -4249,7 +4276,11 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const body = {
         mode: $("rotMode").value,
         days_ahead: Number($("rotDays").value) || 1,
-        post_type: mediaMode === "fixed" ? ($("rotPostType").value || $("rotNowPostType").value) : ($("rotPostType").value || "auto"),
+        // Prefer Direct Local fixed type when that control is set; fall back to advanced rotPostType
+        post_type:
+          mediaMode === "fixed"
+            ? ($("rotNowPostType")?.value || $("rotPostType")?.value || "photo")
+            : ($("rotPostType")?.value || "auto"),
         page_target_mode: target,
         media_pattern_mode: mediaMode,
         media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
@@ -4307,18 +4338,33 @@ Tối | 18:00 | 21:30 | 2</textarea>
         if (timeMode === "windows") throw e;
         windows = parseWindowsText($("rotNowWindows")?.value || $("rotWindows")?.value || "") || [];
       }
-      const burst = $("rotBurstThreeVideos")?.checked !== false;
+      // Must be explicit checked — do NOT treat missing as true (`!== false` bug)
+      const burst = !!$("rotBurstThreeVideos")?.checked;
       const split = !!$("rotSplitPagesWindows")?.checked;
       if (burst && Array.isArray(windows)) {
         windows = windows.map((w) => ({ ...w, posts: 3 }));
       }
-      const fixedType = burst ? "video" : ($("rotNowPostType")?.value || "photo");
+      // Honor media UI: fixed photo must stay photo even when burst is on
+      // (TRƯỚC: burst luôn ép post_type=video → chọn photo vẫn đăng video).
+      const fixedType = String($("rotNowPostType")?.value || "photo").toLowerCase();
+      let postType;
+      let patternMode;
+      if (mediaMode === "fixed") {
+        postType = fixedType && fixedType !== "auto" ? fixedType : "photo";
+        patternMode = "fixed";
+      } else if (mediaMode === "pattern") {
+        postType = "auto";
+        patternMode = "pattern";
+      } else {
+        postType = "auto";
+        patternMode = "page_sequence";
+      }
       return {
         posts_per_page_per_day: burst ? 3 : Number($("rotNowPerDay").value) || 1,
-        post_type: burst ? "video" : mediaMode === "fixed" ? fixedType : mediaMode === "page_sequence" ? "auto" : fixedType,
+        post_type: postType,
         page_target_mode: target,
         run_now_time_mode: timeMode,
-        media_pattern_mode: burst ? "fixed" : mediaMode,
+        media_pattern_mode: patternMode,
         media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
         mode: timeMode === "windows" ? "windows" : "fixed_gap",
         windows,
@@ -4911,6 +4957,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const el = $(id);
       if (!el) return;
       el.addEventListener("change", () => {
+        // Changing "Loại cố định" implies fixed mode so photo/video choice actually applies
+        if (id === "rotNowPostType" && $("rotNowMediaMode")) {
+          $("rotNowMediaMode").value = "fixed";
+        }
         syncRunNowMediaUi();
         if (id === "rotNowWindows" || id === "rotSplitPagesWindows" || id === "rotBurstThreeVideos") {
           syncStandardBurstFields({ fromBulk: false });

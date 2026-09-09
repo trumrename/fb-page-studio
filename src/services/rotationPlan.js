@@ -814,9 +814,9 @@ export function buildSplitWindowBurstSlots({
   const warnings = [];
   const orderRef = { n: 0 };
   let planDay = todayVn;
-  const forceVideo =
-    settings.burst_same_page !== false ||
-    String(settings.post_type || "").toLowerCase() === "video";
+  // Burst = đăng N bài liền nhau; loại media theo settings (fixed/pattern/sequence).
+  // TRƯỚC: burst_same_page luôn ép video → chọn photo vẫn đăng video.
+  const forceVideo = String(settings.post_type || "").toLowerCase() === "video";
 
   for (let wi = 0; wi < windows.length; wi++) {
     const w = windows[wi];
@@ -1391,7 +1391,7 @@ export function buildRunNowPlan(inputSettings = {}) {
   const quotaDay = planDay; // always follow planDay (may be shifted to tomorrow)
   let usedBurstPlan = false;
   let burstMeta = null;
-  if (useWindows && settings.burst_same_page !== false) {
+  if (useWindows && settings.burst_same_page === true) {
     burstMeta = buildSplitWindowBurstSlots({
       settings,
       matrix,
@@ -1405,12 +1405,18 @@ export function buildRunNowPlan(inputSettings = {}) {
     planDay = burstMeta.planDay || planDay;
     rounds = burstMeta.burstCount || rounds;
     for (const w of burstMeta.warnings || []) warnings.push(w);
+    const mediaHint =
+      String(settings.media_pattern_mode || "") === "fixed"
+        ? String(settings.post_type || "photo")
+        : String(settings.media_pattern_mode || "") === "pattern"
+          ? `pattern ${settings.media_pattern || ""}`
+          : "theo sequence Page";
     const parts = (burstMeta.window_page_counts || [])
-      .map((x) => `${x.name} ${x.pages} page × ${x.videos_each} video`)
+      .map((x) => `${x.name} ${x.pages} page × ${x.videos_each} bài`)
       .join(" · ");
     if (parts) {
       warnings.push(
-        `Chia list page theo khung (mỗi page 1 khung, ${rounds} video liền nhau): ${parts}.`
+        `Burst theo khung (mỗi page ${rounds} bài liền · media: ${mediaHint}): ${parts}.`
       );
     }
   }
