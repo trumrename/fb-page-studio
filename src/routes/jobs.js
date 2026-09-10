@@ -330,6 +330,7 @@ router.post("/rotation/run-now", (req, res) => {
           unix,
           local_label: `${s.order || ""}. ${s.window_name || s.group_name || ""} · ${s.page_name} · bài${s.post_round || 1} · ${s.local_label || unix}`,
           post_type: s.planned_post_type || body.post_type || "video",
+          use_caption: plan.settings?.use_caption !== false && body.use_caption !== false,
         });
       }
       if (!slots.length) {
@@ -370,6 +371,7 @@ router.post("/rotation/run-now", (req, res) => {
         burst: !!s.burst,
         post_type: s.planned_post_type,
         run_at: s.iso,
+        use_caption: plan.settings?.use_caption !== false && body.use_caption !== false,
       },
     }));
     const job = startJob({
@@ -393,6 +395,7 @@ router.post("/rotation/run-now", (req, res) => {
             media_pattern_mode: body.media_pattern_mode || plan.settings?.media_pattern_mode,
             media_pattern: body.media_pattern || plan.settings?.media_pattern,
             post_type: body.post_type || plan.settings?.post_type,
+            use_caption: body.use_caption !== false && plan.settings?.use_caption !== false,
             app_rotation_mode: body.app_rotation_mode || plan.settings?.app_rotation_mode,
             same_page_gap_hours_min: body.same_page_gap_hours_min ?? plan.settings?.same_page_gap_hours_min,
             same_page_gap_hours_max: body.same_page_gap_hours_max ?? plan.settings?.same_page_gap_hours_max,
@@ -482,6 +485,7 @@ router.post("/bulk-schedule", async (req, res) => {
           unix: s.unix,
           local_label: s.local_label,
           post_type: body.post_type === "auto" ? undefined : body.post_type,
+          use_caption: body.use_caption !== false,
         });
       }
     }

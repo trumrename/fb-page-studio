@@ -23,7 +23,7 @@ import {
   composeCaptionWithLead,
 } from "./mediaLibrary.js";
 import { pickNextVideoTitle } from "./videoTitlePool.js";
-import { getCaptionStats, getPagePostConfig, savePagePostConfig } from "./poster.js";
+import { getCaptionStats, getPagePostConfig, savePagePostConfig, wantsCaption } from "./poster.js";
 import {
   getActiveTimesForPageRow,
   buildSlotsFromActiveHours,
@@ -303,79 +303,116 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
   let usedPoolCaption = false;
   let mediaPath = null;
   const triedCaptions = [];
+  const captionOn = wantsCaption(cfg, opts);
+  const manualCaption0 = opts.caption != null && String(opts.caption).trim();
   const captionPoolTotal = getCaptionStats(cfg).total;
   const maxCaptionAttempts = Math.max(1, captionPoolTotal || 1);
-  // Reserve caption slot ONCE before loop — retries use slot offset so DB
-  // counter is not burned on every attempt (Bug #2 fix).
-  const manualCaption0 = opts.caption != null && String(opts.caption).trim();
-  const baseReservation = !manualCaption0
-    ? reserveCaptionSlot({
-        captionsFolder: cfg.captions_folder,
-        captions: cfg.captions,
-        pageRowId,
-      })
-    : { slot_index: captionSlot };
-  let selectedCaptionSlot = baseReservation.slot_index;
-  for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
-    const manualCaption = manualCaption0;
-    caption =
-      manualCaption
-        ? String(opts.caption).trim()
-        : pickCaption(
-            cfg.captions,
-            selectedCaptionSlot + attempt,
-            "sequential_shuffle",
-            cfg.captions_folder,
-            triedCaptions
-          );
-    if (caption && !manualCaption) triedCaptions.push(caption);
-    usedPoolCaption = !manualCaption;
-    if (postType === "photo" || postType === "image" || postType === "video") {
-      const kind = postType === "video" ? "video" : "photo";
-      const picked = pickUnusedMedia(
-        cfg.media_folder,
-        kind,
-        "random_spaced",
-        slot + attempt,
-        cfg.posted_folder
-      );
-      mediaPath = picked.path;
-    }
+  let selectedCaptionSlot = captionSlot;
+
+  if (!captionOn && !manualCaption0 && (postType === "photo" || postType === "image" || postType === "video")) {
+    const kind = postType === "video" ? "video" : "photo";
+    const picked = pickUnusedMedia(
+      cfg.media_folder,
+      kind,
+      "random_spaced",
+      slot,
+      cfg.posted_folder
+    );
+    mediaPath = picked.path;
+    usedPoolCaption = false;
     const gate = assertCanPublish({
       pageRowId,
       pageId: page.page_id,
-      caption,
-      mediaPath: postType === "text" ? null : mediaPath,
+      caption: "",
+      mediaPath,
       ignore_quota: false,
       ignore_interval: false,
       isSchedule: true,
       scheduledAtUnix: unix,
     });
-    if (gate.ok && caption) break;
-    if (gate.ok && !caption) break;
-    if (
-      [
-        "GRAPH_BACKOFF",
-        "APP_USAGE_HIGH",
-        "PAGE_BLOCKED",
-        "GLOBAL_HOUR_CAP",
-        "GLOBAL_DAY_CAP",
-        "PAGE_COOLDOWN",
-      ].includes(gate.code)
-    ) {
-      throw new Error(gate.error);
-    }
-    if (manualCaption || attempt === maxCaptionAttempts - 1 || !caption) {
-      if (gate.code === "CAPTION_DUP" || triedCaptions.length) {
-        throw new Error(
-          `Hết caption khả dụng trong kho (đã dùng / trùng trong cửa sổ anti-spam). ` +
-            `Đã thử ${triedCaptions.length}/${captionPoolTotal || 0} caption. Thêm dòng vào kho Caption (.txt/.csv).` +
-            (gate.error ? ` — ${gate.error}` : "")
+    if (!gate.ok) throw new Error(gate.error || "Không hẹn được (anti-spam / quota)");
+  } else {
+    // Reserve caption slot ONCE before loop — retries use slot offset so DB
+    // counter is not burned on every attempt (Bug #2 fix).
+    const baseReservation = !manualCaption0
+      ? reserveCaptionSlot({
+          captionsFolder: cfg.captions_folder,
+          captions: cfg.captions,
+          pageRowId,
+        })
+      : { slot_index: captionSlot };
+    selectedCaptionSlot = baseReservation.slot_index;
+    for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
+      const manualCaption = manualCaption0;
+      caption =
+        manualCaption
+          ? String(opts.caption).trim()
+          : pickCaption(
+              cfg.captions,
+              selectedCaptionSlot + attempt,
+              "sequential_shuffle",
+              cfg.captions_folder,
+              triedCaptions
+            );
+      if (caption && !manualCaption) triedCaptions.push(caption);
+      usedPoolCaption = !manualCaption;
+      if (postType === "photo" || postType === "image" || postType === "video") {
+        const kind = postType === "video" ? "video" : "photo";
+        const picked = pickUnusedMedia(
+          cfg.media_folder,
+          kind,
+          "random_spaced",
+          slot + attempt,
+          cfg.posted_folder
         );
+        mediaPath = picked.path;
       }
-      throw new Error(gate.error || "Không chọn được caption để hẹn giờ");
+      const gate = assertCanPublish({
+        pageRowId,
+        pageId: page.page_id,
+        caption,
+        mediaPath: postType === "text" ? null : mediaPath,
+        ignore_quota: false,
+        ignore_interval: false,
+        isSchedule: true,
+        scheduledAtUnix: unix,
+      });
+      if (gate.ok && caption) break;
+      if (gate.ok && !caption) break;
+      if (
+        [
+          "GRAPH_BACKOFF",
+          "APP_USAGE_HIGH",
+          "PAGE_BLOCKED",
+          "GLOBAL_HOUR_CAP",
+          "GLOBAL_DAY_CAP",
+          "PAGE_COOLDOWN",
+        ].includes(gate.code)
+      ) {
+        throw new Error(gate.error);
+      }
+      if (manualCaption || attempt === maxCaptionAttempts - 1 || !caption) {
+        // Ảnh/video: hết caption → hẹn không caption thay vì fail
+        if (
+          !manualCaption &&
+          (postType === "photo" || postType === "image" || postType === "video") &&
+          (gate.code === "CAPTION_DUP" || !caption)
+        ) {
+          caption = "";
+          usedPoolCaption = false;
+          break;
+        }
+        if (gate.code === "CAPTION_DUP" || triedCaptions.length) {
+          throw new Error(
+            `Hết caption khả dụng trong kho (đã dùng / trùng trong cửa sổ anti-spam). ` +
+              `Đã thử ${triedCaptions.length}/${captionPoolTotal || 0} caption. Thêm dòng vào kho Caption (.txt/.csv) hoặc tắt «Dùng caption».` +
+              (gate.error ? ` — ${gate.error}` : "")
+          );
+        }
+        throw new Error(gate.error || "Không chọn được caption để hẹn giờ");
+      }
+      mediaPath = null;
     }
-    mediaPath = null;
   }
 
   // Dòng mở đầu (view full album : + link) rồi caption kho

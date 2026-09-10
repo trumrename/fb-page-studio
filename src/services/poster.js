@@ -116,6 +116,29 @@ export function getDefaultConfig(pageRowId) {
   };
 }
 
+/**
+ * Caption từ kho: bật/tắt.
+ * - opts.use_caption = false → tắt (ưu tiên job/bulk)
+ * - cfg.use_caption / link_lists.use_caption = false → tắt theo page
+ * - mặc định: bật (giữ hành vi cũ)
+ */
+export function wantsCaption(cfg = {}, opts = {}) {
+  const parse = (v) => {
+    if (v === false || v === 0 || v === "0") return false;
+    if (v === true || v === 1 || v === "1") return true;
+    const s = String(v ?? "").trim().toLowerCase();
+    if (["off", "no", "false", "tat", "tắt", "none"].includes(s)) return false;
+    if (["on", "yes", "true", "bat", "bật"].includes(s)) return true;
+    return null;
+  };
+  const fromOpts = parse(opts?.use_caption);
+  if (fromOpts != null) return fromOpts;
+  const ll = cfg?.link_lists && typeof cfg.link_lists === "object" ? cfg.link_lists : {};
+  const fromCfg = parse(cfg?.use_caption ?? ll.use_caption ?? ll.caption_enabled);
+  if (fromCfg != null) return fromCfg;
+  return true;
+}
+
 export function getPagePostConfig(pageRowId) {
   const db = getDb();
   const paths = defaultMediaPaths();
@@ -123,6 +146,12 @@ export function getPagePostConfig(pageRowId) {
     .prepare(`SELECT * FROM page_post_config WHERE page_row_id = ?`)
     .get(pageRowId);
   if (!row) return getDefaultConfig(pageRowId);
+  const link_lists = parseJson(row.link_lists_json, { see_more: [], full_album: [] });
+  const useCapRaw = link_lists?.use_caption ?? link_lists?.caption_enabled;
+  const use_caption =
+    useCapRaw === false || useCapRaw === 0 || useCapRaw === "0" || useCapRaw === "off"
+      ? false
+      : true;
   return {
     page_row_id: row.page_row_id,
     enabled: row.enabled,
@@ -136,10 +165,10 @@ export function getPagePostConfig(pageRowId) {
     pick_mode: row.pick_mode || "random",
     comment_enabled: row.comment_enabled,
     comment_templates: parseJson(row.comment_templates_json, []),
-    link_lists: parseJson(row.link_lists_json, { see_more: [], full_album: [] }),
+    link_lists,
+    use_caption,
     story_enabled: row.story_enabled || 0,
-    story_link_mode:
-      parseJson(row.link_lists_json, {})?.story_link_mode || "combo",
+    story_link_mode: link_lists?.story_link_mode || "combo",
     next_slot_index: row.next_slot_index || 0,
     caption_slot_index: row.caption_slot_index || 0,
     last_post_at: row.last_post_at,
@@ -190,7 +219,14 @@ export function savePagePostConfig(pageRowId, body) {
   if (next.story_link_mode) {
     linkLists.story_link_mode = String(next.story_link_mode);
   }
+  // Caption on/off (ảnh/video). Lưu trong link_lists để không cần migrate cột.
+  if (Object.prototype.hasOwnProperty.call(body || {}, "use_caption")) {
+    linkLists.use_caption = !!body.use_caption;
+  } else if (Object.prototype.hasOwnProperty.call(bodyLl, "use_caption")) {
+    linkLists.use_caption = !!bodyLl.use_caption;
+  }
   next.link_lists = linkLists;
+  next.use_caption = linkLists.use_caption !== false;
   next.story_link_mode = linkLists.story_link_mode || "combo";
 
   const db = getDb();
@@ -400,86 +436,123 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
   ).toLowerCase();
 
   const pageToken = decryptToken(page.page_token_enc);
+  const captionOn = wantsCaption(cfg, opts);
   // Try several captions if duplicate blocked (exclude already-tried)
   let caption = "";
   let mediaPath = null;
   let mediaSkipped = 0;
   const triedCaptions = [];
-  const captionPoolTotal = getCaptionStats(cfg).total;
-  const maxCaptionAttempts = Math.max(1, captionPoolTotal || 1);
-  // Reserve caption slot ONCE before loop — retries use slot offset so DB
-  // counter is not burned on every attempt (Bug #2 fix).
-  const baseReservation = reserveCaptionSlot({
-    captionsFolder: cfg.captions_folder,
-    captions: cfg.captions,
-    pageRowId,
-  });
-  let selectedCaptionSlot = baseReservation.slot_index;
-  for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
-    caption = pickCaption(
-      cfg.captions,
-      selectedCaptionSlot + attempt,
-      "sequential_shuffle",
-      cfg.captions_folder,
-      triedCaptions
+  let selectedCaptionSlot = captionSlot;
+  if (!captionOn && (postType === "photo" || postType === "image" || postType === "video")) {
+    // Bỏ caption: chỉ lấy media, message có thể trống (lead link vẫn chạy nếu bật)
+    const kind = postType === "video" ? "video" : "photo";
+    const picked = pickUnusedMedia(
+      cfg.media_folder,
+      kind,
+      "random_spaced",
+      slot,
+      cfg.posted_folder
     );
-    if (caption) triedCaptions.push(caption);
-    if (postType === "photo" || postType === "image" || postType === "video") {
-      const kind = postType === "video" ? "video" : "photo";
-      const picked = pickUnusedMedia(
-        cfg.media_folder,
-        kind,
-        "random_spaced",
-        slot + attempt,
-        cfg.posted_folder
-      );
-      mediaPath = picked.path;
-      mediaSkipped += picked.skipped || 0;
-    }
+    mediaPath = picked.path;
+    mediaSkipped += picked.skipped || 0;
     const gate = assertCanPublish({
       pageRowId,
       pageId: page.page_id,
-      caption,
+      caption: "",
       mediaPath,
       ignore_quota: !!opts.ignore_quota,
       ignore_interval: !!opts.ignore_interval,
       burst: !!opts.burst,
     });
-    if (gate.ok && caption) break;
-    if (gate.ok && !caption) {
-      // empty pool
-      break;
-    }
-    // hard fail codes that won't fix by retrying caption/media
-    if (
-      [
-        "IGNORE_QUOTA_LOCKED",
-        "IGNORE_INTERVAL_LOCKED",
-        "GRAPH_BACKOFF",
-        "APP_USAGE_HIGH",
-        "PAGE_BLOCKED",
-        "GLOBAL_HOUR_CAP",
-        "GLOBAL_DAY_CAP",
-        "PAGE_COOLDOWN",
-      ].includes(gate.code)
-    ) {
+    if (!gate.ok) {
       releaseInflightMedia(mediaPath);
-      throw new Error(gate.error);
+      throw new Error(gate.error || "Không đăng được (anti-spam / quota)");
     }
-    if (!caption || attempt === maxCaptionAttempts - 1) {
-      releaseInflightMedia(mediaPath);
-      if (gate.code === "CAPTION_DUP" || triedCaptions.length) {
-        throw new Error(
-          `Hết caption khả dụng trong kho (đã dùng / trùng trong cửa sổ anti-spam). ` +
-            `Đã thử ${triedCaptions.length}/${captionPoolTotal || 0} caption. Thêm dòng vào kho Caption (.txt/.csv).` +
-            (gate.error ? ` — ${gate.error}` : "")
+  } else {
+    const captionPoolTotal = getCaptionStats(cfg).total;
+    const maxCaptionAttempts = Math.max(1, captionPoolTotal || 1);
+    // Reserve caption slot ONCE before loop — retries use slot offset so DB
+    // counter is not burned on every attempt (Bug #2 fix).
+    const baseReservation = reserveCaptionSlot({
+      captionsFolder: cfg.captions_folder,
+      captions: cfg.captions,
+      pageRowId,
+    });
+    selectedCaptionSlot = baseReservation.slot_index;
+    for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
+      caption = pickCaption(
+        cfg.captions,
+        selectedCaptionSlot + attempt,
+        "sequential_shuffle",
+        cfg.captions_folder,
+        triedCaptions
+      );
+      if (caption) triedCaptions.push(caption);
+      if (postType === "photo" || postType === "image" || postType === "video") {
+        const kind = postType === "video" ? "video" : "photo";
+        const picked = pickUnusedMedia(
+          cfg.media_folder,
+          kind,
+          "random_spaced",
+          slot + attempt,
+          cfg.posted_folder
         );
+        mediaPath = picked.path;
+        mediaSkipped += picked.skipped || 0;
       }
-      throw new Error(gate.error || "Không chọn được caption");
+      const gate = assertCanPublish({
+        pageRowId,
+        pageId: page.page_id,
+        caption,
+        mediaPath,
+        ignore_quota: !!opts.ignore_quota,
+        ignore_interval: !!opts.ignore_interval,
+        burst: !!opts.burst,
+      });
+      if (gate.ok && caption) break;
+      if (gate.ok && !caption) {
+        // empty pool — ảnh/video vẫn OK không caption
+        break;
+      }
+      // hard fail codes that won't fix by retrying caption/media
+      if (
+        [
+          "IGNORE_QUOTA_LOCKED",
+          "IGNORE_INTERVAL_LOCKED",
+          "GRAPH_BACKOFF",
+          "APP_USAGE_HIGH",
+          "PAGE_BLOCKED",
+          "GLOBAL_HOUR_CAP",
+          "GLOBAL_DAY_CAP",
+          "PAGE_COOLDOWN",
+        ].includes(gate.code)
+      ) {
+        releaseInflightMedia(mediaPath);
+        throw new Error(gate.error);
+      }
+      if (!caption || attempt === maxCaptionAttempts - 1) {
+        releaseInflightMedia(mediaPath);
+        // Ảnh/video: hết caption → đăng không caption thay vì fail
+        if (
+          (postType === "photo" || postType === "image" || postType === "video") &&
+          (gate.code === "CAPTION_DUP" || !caption)
+        ) {
+          caption = "";
+          break;
+        }
+        if (gate.code === "CAPTION_DUP" || triedCaptions.length) {
+          throw new Error(
+            `Hết caption khả dụng trong kho (đã dùng / trùng trong cửa sổ anti-spam). ` +
+              `Đã thử ${triedCaptions.length}/${captionPoolTotal || 0} caption. Thêm dòng vào kho Caption (.txt/.csv) hoặc tắt «Dùng caption».` +
+              (gate.error ? ` — ${gate.error}` : "")
+          );
+        }
+        throw new Error(gate.error || "Không chọn được caption");
+      }
+      // CAPTION_DUP / MEDIA_DUP / KEYWORD → retry pick
+      releaseInflightMedia(mediaPath);
+      mediaPath = null;
     }
-    // CAPTION_DUP / MEDIA_DUP / KEYWORD → retry pick
-    releaseInflightMedia(mediaPath);
-    mediaPath = null;
   }
 
   // Dòng mở đầu (view full album : + link) + caption kho — tuỳ chọn
@@ -502,7 +575,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     if (postType === "text") {
       if (!caption) {
         throw new Error(
-          "Loại text cần caption trong kho (file .txt/.csv) hoặc danh sách inline — không bịa nội dung"
+          "Loại text cần caption trong kho (file .txt/.csv) hoặc danh sách inline — không bịa nội dung. Bật «Dùng caption» hoặc đổi loại bài."
         );
       }
       result = await publishText(page.page_id, pageToken, caption);

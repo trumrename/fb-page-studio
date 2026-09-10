@@ -434,6 +434,10 @@
                 <input type="number" id="bulkTz" value="420" />
               </div>
             </div>
+            <label class="checks" style="display:block;margin:.55rem 0 .15rem">
+              <input type="checkbox" id="bulkUseCaption" checked />
+              <b>Dùng caption</b> từ kho — <b>bỏ tick</b> = ảnh/video đăng <b>không caption</b> (không chặn thiếu/trùng caption). Bài text vẫn cần caption.
+            </label>
 
             <div class="panel section-gap" style="margin-top:.6rem">
               <h2 class="panel-hd" style="font-size:.9rem">Kho ảnh / caption cho các page đã tick</h2>
@@ -1282,7 +1286,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
     }
 
     const bulkWorkspaceControlIds = [
-      "bulkMode", "bulkFixedSubMode", "bulkPostType", "bulkTz", "bulkDays", "bulkPerDay",
+      "bulkMode", "bulkFixedSubMode", "bulkPostType", "bulkUseCaption", "bulkTz", "bulkDays", "bulkPerDay",
       "bulkForceActive", "bulkStart", "bulkCount", "bulkFixedDays", "bulkInterval", "bulkTimes",
       "bulkIntervalMin", "bulkIntervalMax", "bulkPageGapMin", "bulkPageGapMax", "bulkIgnoreQuota",
       "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder",
@@ -1727,9 +1731,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
           mediaT === "video" || mediaT === "photo" || mediaT === "text" || mediaT === "story"
             ? mediaT
             : "auto/sequence";
+        const capLbl = $("bulkUseCaption")?.checked !== false ? "có caption" : "không caption";
         el.innerHTML =
           `<span class="ok">④ Chuẩn mới</span> · Sáng/Tối · ` +
-          `bài/page=<b>${esc(postsHint)}</b> · loại=<b>${esc(mediaLbl)}</b>${burst ? " · đăng liền" : ""} · ` +
+          `bài/page=<b>${esc(postsHint)}</b> · loại=<b>${esc(mediaLbl)}</b> · <b>${esc(capLbl)}</b>${burst ? " · đăng liền" : ""} · ` +
           (fb
             ? `<b>hẹn Facebook</b> (tắt tool được sau khi Graph nhận lịch)`
             : `<b>treo tool</b> đăng trực tiếp`);
@@ -2866,6 +2871,17 @@ Tối | 18:00 | 21:30 | 2</textarea>
           (cùng ổ = rename; khác ổ = copy rồi xóa nguồn). Không giữ file gốc trong Media.
         </p>
         <p class="muted">Media: <b>${(data.media && data.media.photos) || 0}</b> ảnh · <b>${(data.media && data.media.videos) || 0}</b> video — ảnh+video chung 1 folder (lọc theo đuôi file).</p>
+        <label class="checks" style="display:block;margin:0 0 .4rem">
+          <input type="checkbox" id="use_caption" ${
+            c.use_caption === false ||
+            c.link_lists?.use_caption === false ||
+            c.link_lists?.use_caption === 0 ||
+            c.link_lists?.use_caption === "off"
+              ? ""
+              : "checked"
+          } />
+          <b>Dùng caption</b> từ kho cho ảnh/video — <b>bỏ tick</b> = đăng không caption
+        </label>
         <label>Kho tiêu đề / caption (.txt / .csv)</label>
         <div class="row2" style="align-items:end;gap:.4rem">
           <div style="flex:1">
@@ -3166,6 +3182,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         linkLines = leadLinks.filter((s) => /^https?:\/\//i.test(s) || /^[\w.-]+\.[a-z]{2,}/i.test(s));
       }
       const videoTitleOn = !!$("video_title_enabled")?.checked;
+      const useCaption = $("use_caption")?.checked !== false;
       return {
         enabled: $("enabled").checked ? 1 : 0,
         comment_enabled: $("comment_enabled").checked ? 1 : 0,
@@ -3179,6 +3196,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         posted_folder: $("posted_folder").value.trim(),
         captions_folder: $("captions_folder").value.trim(),
         captions: $("captions").value,
+        use_caption: useCaption,
         comment_templates: $("comment_templates")?.value || "",
         link_lists: {
           comment_links: linkLines,
@@ -3199,6 +3217,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
           caption_lead_links: leadLinks,
           video_title_enabled: videoTitleOn ? 1 : 0,
           video_titles_path: ($("video_titles_path")?.value || "").trim(),
+          use_caption: useCaption,
         },
       };
     }
@@ -3353,6 +3372,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         page_target_mode: "selected",
         mode,
         post_type: $("bulkPostType").value,
+        use_caption: $("bulkUseCaption")?.checked !== false,
         tz_offset_minutes: Number($("bulkTz").value) || 420,
         dry_run: !!dryRun,
         ignore_page_quota: $("bulkIgnoreQuota")?.checked || false,
@@ -3843,6 +3863,12 @@ Tối | 18:00 | 21:30 | 2</textarea>
         if ($("rotNowPostType")) $("rotNowPostType").value = t;
         syncRunNowMediaUi();
       }
+      runNowPlanId = null;
+      runNowPlanSignature = null;
+      updateBulkTimingModeBadge();
+      queueWorkspaceSave(200);
+    });
+    $("bulkUseCaption")?.addEventListener("change", () => {
       runNowPlanId = null;
       runNowPlanSignature = null;
       updateBulkTimingModeBadge();
@@ -4506,6 +4532,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         page_target_mode: target,
         media_pattern_mode: mediaMode,
         media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
+        use_caption: $("bulkUseCaption")?.checked !== false,
         app_rotation_mode: $("rotAppStrategy")?.value || "interleave_apps",
         // Cho phép 0 — không dùng `|| 15` (0 bị thành 15)
         between_tasks_gap_minutes_min: (() => {
@@ -4589,6 +4616,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         run_now_time_mode: timeMode,
         media_pattern_mode: patternMode,
         media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
+        use_caption: $("bulkUseCaption")?.checked !== false,
         mode: timeMode === "windows" ? "windows" : "fixed_gap",
         windows,
         split_pages_across_windows: split,
@@ -4672,6 +4700,9 @@ Tối | 18:00 | 21:30 | 2</textarea>
       }
       if ($("rotNowPostType") && s.post_type && s.post_type !== "auto") {
         $("rotNowPostType").value = s.post_type;
+      }
+      if ($("bulkUseCaption")) {
+        $("bulkUseCaption").checked = s.use_caption !== false;
       }
       syncRunNowMediaUi();
       if ($("rotAutoMeta")) {

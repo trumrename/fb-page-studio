@@ -112,6 +112,12 @@ export const DEFAULT_ROTATION = {
   /** e.g. "photo,video" or "photo,video,video,photo" */
   media_pattern: "photo,video",
   /**
+   * true = lấy caption từ kho (mặc định).
+   * false = ảnh/video đăng không caption (không chặn vì thiếu/trùng caption).
+   * Bài text vẫn cần caption.
+   */
+  use_caption: true,
+  /**
    * Direct Local: sau khi xong 1 ngày, tự lập ngày kế tiếp (treo tool mãi
    * đến khi bấm Dừng). false = chỉ chạy 1 đợt plan.
    */
@@ -370,6 +376,15 @@ export function normalizeSettings(s) {
   }
   const pat = parseMediaPattern(out.media_pattern);
   out.media_pattern = pat.length ? pat.join(",") : "photo,video";
+  // use_caption: default true; explicit false/0/"off" → tắt
+  {
+    const v = out.use_caption;
+    if (v === false || v === 0 || v === "0" || String(v).toLowerCase() === "off") {
+      out.use_caption = false;
+    } else {
+      out.use_caption = true;
+    }
+  }
   out.account_ids = Array.isArray(out.account_ids)
     ? out.account_ids.map(Number).filter((n) => n > 0)
     : [];
@@ -1694,7 +1709,17 @@ export function buildRunNowPlan(inputSettings = {}) {
       captionStatsByPool.set(identity.key, getCaptionStats(cfg));
     }
     const stats = captionStatsByPool.get(identity.key);
-    const captionRequired = type === "text" || Number(stats?.total) > 0;
+    // Caption optional: chỉ bắt buộc khi use_caption bật (hoặc bài text).
+    // Tắt use_caption → ảnh/video không cần kho caption.
+    const pageCapOff =
+      cfg?.use_caption === false ||
+      cfg?.link_lists?.use_caption === false ||
+      cfg?.link_lists?.use_caption === 0 ||
+      cfg?.link_lists?.use_caption === "off";
+    const jobCapOn = settings.use_caption !== false;
+    const captionRequired =
+      type === "text" ||
+      (jobCapOn && !pageCapOff && Number(stats?.total) > 0);
     if (captionRequired) {
       if (!captionNeeds.has(identity.key)) {
         captionNeeds.set(identity.key, {
@@ -1816,6 +1841,7 @@ export function buildRunNowPlan(inputSettings = {}) {
       burst_same_page: !!settings.burst_same_page,
       media_pattern_mode: settings.media_pattern_mode,
       media_pattern: settings.media_pattern,
+      use_caption: settings.use_caption !== false,
       windows: settings.windows,
       app_rotation_mode: settings.app_rotation_mode,
       between_tasks_gap_minutes_min: settings.between_tasks_gap_minutes_min,

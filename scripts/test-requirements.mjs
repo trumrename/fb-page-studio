@@ -238,6 +238,13 @@ check(
     (x) => posting.includes(x)
   )
 );
+check(
+  "Caption optional via use_caption / bulkUseCaption",
+  posting.includes("bulkUseCaption") &&
+    posting.includes("use_caption") &&
+    read("src/services/poster.js").includes("export function wantsCaption") &&
+    read("src/services/rotationPlan.js").includes("use_caption: true")
+);
 const jobRunner = read("src/services/jobRunner.js");
 check(
   "Job progress tracks comment ok/fail/pending and notifies",

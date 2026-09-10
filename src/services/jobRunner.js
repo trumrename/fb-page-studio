@@ -1250,6 +1250,7 @@ async function runJob(jobId) {
             burst: !!s.burst,
             post_type: s.planned_post_type,
             run_at: s.iso,
+            use_caption: job.continuous_settings?.use_caption !== false,
           },
         });
       }
@@ -1452,6 +1453,7 @@ async function executeTask(task, job = null) {
       burst: !!task.opts.burst,
       post_type: task.opts.post_type,
       delivery_mode: deliveryMode,
+      use_caption: task.opts.use_caption,
       comment_site_tracker: job?._commentSiteTracker || null,
     });
   }
@@ -1461,6 +1463,7 @@ async function executeTask(task, job = null) {
       scheduled_publish_time: task.opts.scheduled_publish_time,
       post_type: task.opts.post_type,
       caption: task.opts.caption,
+      use_caption: task.opts.use_caption,
       comment_site_tracker: job?._commentSiteTracker || null,
     });
   }
@@ -1635,6 +1638,7 @@ export function startBulkScheduleJob({
     opts: {
       scheduled_publish_time: s.unix || s.scheduled_publish_time,
       post_type: s.post_type,
+      use_caption: s.use_caption,
     },
   }));
   const uniquePages = [
