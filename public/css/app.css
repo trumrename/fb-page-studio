@@ -76,6 +76,11 @@ code {
   /* Do NOT set z-index here — it creates a stacking context that traps
      .sidebar.open under #sidebarBackdrop (sibling outside .app). */
 }
+/* Never capture clicks unless explicitly opened in the mobile drawer */
+.sidebar-backdrop {
+  display: none;
+  pointer-events: none;
+}
 @media (max-width: 960px) {
   .app { grid-template-columns: 1fr; }
   .sidebar { display: none; }
@@ -88,13 +93,12 @@ code {
     box-shadow: var(--shadow);
   }
   .sidebar-backdrop {
-    display: none;
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
     z-index: 40;
   }
-  .sidebar-backdrop.open { display: block; }
+  .sidebar-backdrop.open { display: block; pointer-events: auto; }
 }
 
 .sidebar {

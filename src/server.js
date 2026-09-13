@@ -326,9 +326,22 @@ const schedulerState = {
   last_summary: { checked: 0, posted: 0, skipped: 0, failed: 0 },
 };
 
-app.get("/api/runtime", (_req, res) => {
+app.get("/api/runtime", (req, res) => {
   let enabledPages = 0;
-  let configHealth = { total_pages: 0, custom_config_pages: 0, default_config_pages: 0, valid_folder_pages: 0, ready_pages: 0, pages_without_media: 0, pages_without_captions: 0 };
+  let configHealth = {
+    total_pages: 0,
+    custom_config_pages: 0,
+    default_config_pages: 0,
+    valid_folder_pages: 0,
+    ready_pages: 0,
+    pages_without_media: 0,
+    pages_without_captions: 0,
+    scan: "folders_only",
+  };
+  // Deep media/caption scan (hash disk) chỉ khi ?full=1 — path nóng không được block event loop
+  const fullScan =
+    String(req.query?.full || "") === "1" ||
+    String(req.query?.full || "").toLowerCase() === "true";
   try {
     const db = getDb();
     enabledPages = db
@@ -344,6 +357,11 @@ app.get("/api/runtime", (_req, res) => {
       const cfg = getPagePostConfig(row.id);
       const foldersOk = [cfg.media_folder, cfg.captions_folder, cfg.posted_folder].every((p) => p && fs.existsSync(p));
       if (foldersOk) configHealth.valid_folder_pages++;
+      if (!fullScan) {
+        if (foldersOk) configHealth.ready_pages++;
+        continue;
+      }
+      configHealth.scan = "full";
       if (!mediaCache.has(cfg.media_folder)) mediaCache.set(cfg.media_folder, mediaStats(cfg.media_folder));
       if (!captionCache.has(cfg.captions_folder)) captionCache.set(cfg.captions_folder, getCaptionStats(cfg));
       const media = mediaCache.get(cfg.media_folder);

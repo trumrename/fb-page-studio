@@ -198,9 +198,21 @@
   updateClock();
   setInterval(updateClock, 1000);
 
-  fetch("/api/runtime")
+  // Timeout — tránh pill «Đang kiểm tra hệ thống…» kẹt mãi khi /api/runtime treo
+  const runtimeCtrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const runtimeTimer = runtimeCtrl
+    ? setTimeout(() => {
+        try {
+          runtimeCtrl.abort();
+        } catch {
+          /* ignore */
+        }
+      }, 8000)
+    : null;
+  fetch("/api/runtime", runtimeCtrl ? { signal: runtimeCtrl.signal } : undefined)
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
     .then((r) => {
+      if (runtimeTimer) clearTimeout(runtimeTimer);
       const s = r.scheduler || {};
       const el = document.getElementById("shellSystemText");
       if (el) {
@@ -210,6 +222,7 @@
       }
     })
     .catch(() => {
+      if (runtimeTimer) clearTimeout(runtimeTimer);
       const el = document.getElementById("shellSystemText");
       if (el) el.textContent = "Không kết nối được server";
       side?.querySelector(".system-pill")?.classList.add("offline");

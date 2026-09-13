@@ -749,8 +749,37 @@ full album:
               <div class="sched-form" style="border-color:rgba(251,191,36,.55)">
                 <p class="muted" style="margin:0 0 .55rem;font-size:.82rem;line-height:1.5">
                   Dùng <b>Loại bài</b> phía trên. Chọn <b>video</b> = mọi vòng video.
-                  Sửa <b>ngày plan / giờ khung / số bài</b> bằng ô bên dưới (không bị khóa).
+                  Xen App: Pageᵢ AppA → Pageᵢ AppB (chống spam). Import BM token ở Kết nối Meta → chọn nhóm page bên dưới.
                 </p>
+                <div style="margin:0 0 .55rem;padding:.5rem .65rem;border:1px solid rgba(255,255,255,.1);border-radius:10px;background:rgba(0,0,0,.15)">
+                  <label style="font-weight:700;display:block;margin-bottom:.35rem;font-size:.84rem">Nhóm page (tick nhanh)</label>
+                  <div id="bulkStdPageGroupChips" style="display:flex;flex-wrap:wrap;gap:.35rem"></div>
+                  <p class="muted" style="margin:.35rem 0 0;font-size:.72rem">Cùng nguồn với Bước 1 — hoặc <a href="/index.html#tokenImportPanel">Import token BM</a>.</p>
+                </div>
+                <div style="margin:0 0 .55rem">
+                  <label style="font-weight:700;display:block;margin-bottom:.35rem">Khung chạy</label>
+                  <label class="checks" style="display:inline-block;margin-right:1rem">
+                    <input type="radio" name="bulkStdWindowFilter" id="bulkStdWinAll" value="all" checked />
+                    Cả Sáng + Tối
+                  </label>
+                  <label class="checks" style="display:inline-block;margin-right:1rem">
+                    <input type="radio" name="bulkStdWindowFilter" id="bulkStdWinMorning" value="morning" />
+                    Chỉ Sáng
+                  </label>
+                  <label class="checks" style="display:inline-block">
+                    <input type="radio" name="bulkStdWindowFilter" id="bulkStdWinEvening" value="evening" />
+                    Chỉ Tối
+                  </label>
+                </div>
+                <div class="row2" style="margin:0 0 .55rem;gap:.65rem">
+                  <div>
+                    <label style="font-weight:700">Chiến lược App (xen kẽ)</label>
+                    <select id="bulkStdAppStrategy">
+                      <option value="interleave_apps" selected>Xen App — Pageᵢ AppA → Pageᵢ AppB</option>
+                      <option value="per_app">Hết AppA rồi mới AppB</option>
+                    </select>
+                  </div>
+                </div>
                 <div class="sched-date-box" style="margin-top:0">
                   <div class="sched-date-title">Ngày plan (VN) — để trống = hôm nay / tự đẩy ngày mai nếu quá giờ</div>
                   <div class="sched-date-row">
@@ -832,7 +861,11 @@ Tối | 18:00 | 20:00 | 1</textarea>
                   </label>
                   <label class="checks" style="display:block">
                     <input type="radio" name="bulkStdDelivery" id="bulkStdDeliveryDirect" value="direct" />
-                    <b>Đăng trực tiếp</b> — tool chờ đến giờ mới bấm Graph, phải giữ máy bật
+                    <b>Đăng trực tiếp</b> — tool chờ đến giờ khung rồi bấm Graph, phải giữ máy bật
+                  </label>
+                  <label class="checks" style="display:block">
+                    <input type="radio" name="bulkStdDelivery" id="bulkStdDeliveryNow" value="immediate" />
+                    <b>Đăng ngay</b> — bỏ chờ 06:00/18:00, bắn ngay (vẫn burst + xen App)
                   </label>
                   <p class="muted" style="margin:.35rem 0 0;font-size:.76rem;line-height:1.4">
                     Số bài lấy từ ô «số bài» (vd 1 hoặc 3). Hẹn FB: mốc đã qua hoặc &lt; 10 phút sẽ đẩy +10 phút (luật Graph).
@@ -1303,6 +1336,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts",
       "bulkStdGapMin", "bulkStdGapMax",
       "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdForceDay",
+      "bulkStdWinAll", "bulkStdWinMorning", "bulkStdWinEvening",
+      "bulkStdAppStrategy", "bulkStdDeliveryNow",
     ];
     const rotationWorkspaceControlIds = [
       "rotMode", "rotDays", "rotPostType", "rotAppStrategy", "rotNowPerDay",
@@ -1591,10 +1626,18 @@ Tối | 18:00 | 21:30 | 2</textarea>
     }
 
     function standardDelivery() {
+      if ($("bulkStdDeliveryNow")?.checked) return "immediate";
       if ($("bulkStdDeliveryFb")?.checked) return "fb_scheduled";
       if ($("bulkStdDeliveryDirect")?.checked) return "direct";
       const v = String($("bulkStdDelivery")?.value || "fb_scheduled");
+      if (v === "immediate" || v === "now") return "immediate";
       return v === "direct" ? "direct" : "fb_scheduled";
+    }
+
+    function bulkStdWindowFilter() {
+      if ($("bulkStdWinMorning")?.checked) return "morning";
+      if ($("bulkStdWinEvening")?.checked) return "evening";
+      return "all";
     }
 
     function syncStandardDeliveryUi() {
@@ -1602,6 +1645,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if ($("bulkStdDelivery")) $("bulkStdDelivery").value = d;
       if ($("bulkStdDeliveryFb")) $("bulkStdDeliveryFb").checked = d === "fb_scheduled";
       if ($("bulkStdDeliveryDirect")) $("bulkStdDeliveryDirect").checked = d === "direct";
+      if ($("bulkStdDeliveryNow")) $("bulkStdDeliveryNow").checked = d === "immediate";
     }
 
     /** Returns standard_burst | list_times | start_at | active_times */
@@ -1686,12 +1730,16 @@ Tối | 18:00 | 21:30 | 2</textarea>
       });
 
       const isStd = kind === "standard_burst";
-      const stdFb = isStd && standardDelivery() === "fb_scheduled";
+      const del = isStd ? standardDelivery() : "";
+      const stdFb = del === "fb_scheduled";
+      const stdNow = del === "immediate";
       if ($("btnBulkSchedule")) {
         $("btnBulkSchedule").textContent = isStd
           ? stdFb
             ? "Hẹn giờ Facebook"
-            : "▶ Bắt đầu treo tool"
+            : stdNow
+              ? "▶ Đăng ngay"
+              : "▶ Bắt đầu treo tool"
           : "Hẹn giờ hàng loạt";
         $("btnBulkSchedule").classList.toggle("btn-ok", isStd && !stdFb);
         $("btnBulkSchedule").classList.toggle("btn-warn", !isStd || stdFb);
@@ -1723,7 +1771,9 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const kind = getBulkScheduleKind();
       if (kind === "standard_burst") {
         const burst = !!$("bulkStdBurst")?.checked;
-        const fb = standardDelivery() === "fb_scheduled";
+        const del = standardDelivery();
+        const wf = bulkStdWindowFilter();
+        const wfLbl = wf === "morning" ? "chỉ Sáng" : wf === "evening" ? "chỉ Tối" : "Sáng+Tối";
         const wins = parseWindowsText($("bulkStdWindows")?.value || "") || [];
         const postsHint = wins.map((w) => `${w.posts || 1}`).join("+") || "?";
         const mediaT = String($("bulkPostType")?.value || "auto").toLowerCase();
@@ -1732,12 +1782,18 @@ Tối | 18:00 | 21:30 | 2</textarea>
             ? mediaT
             : "auto/sequence";
         const capLbl = $("bulkUseCaption")?.checked !== false ? "có caption" : "không caption";
+        const appLbl =
+          ($("bulkStdAppStrategy")?.value || "interleave_apps") === "per_app" ? "hết AppA" : "xen App";
+        const delLbl =
+          del === "fb_scheduled"
+            ? "hẹn Facebook"
+            : del === "immediate"
+              ? "đăng ngay"
+              : "treo tool chờ khung";
         el.innerHTML =
-          `<span class="ok">④ Chuẩn mới</span> · Sáng/Tối · ` +
-          `bài/page=<b>${esc(postsHint)}</b> · loại=<b>${esc(mediaLbl)}</b> · <b>${esc(capLbl)}</b>${burst ? " · đăng liền" : ""} · ` +
-          (fb
-            ? `<b>hẹn Facebook</b> (tắt tool được sau khi Graph nhận lịch)`
-            : `<b>treo tool</b> đăng trực tiếp`);
+          `<span class="ok">④ Chuẩn mới</span> · <b>${esc(wfLbl)}</b> · ` +
+          `bài/page=<b>${esc(postsHint)}</b> · loại=<b>${esc(mediaLbl)}</b> · <b>${esc(capLbl)}</b> · ${esc(appLbl)}${burst ? " · đăng liền" : ""} · ` +
+          `<b>${esc(delLbl)}</b>`;
         if (box) box.style.borderColor = "rgba(251,191,36,.65)";
         return;
       }
@@ -2489,23 +2545,32 @@ Tối | 18:00 | 21:30 | 2</textarea>
           });
         }
       }
-      if (pgBox) {
-        const list = selectionGroups.page_groups || [];
+      const pageChipHtml = (list) => {
         if (!list.length) {
-          pgBox.innerHTML = `<span class="muted" style="font-size:.78rem">Chưa có nhóm page — tick page rồi «Lưu nhóm page»</span>`;
-        } else {
-          pgBox.innerHTML = list
-            .map((g) => {
-              const n = (g.page_row_ids || []).length;
-              return `<button type="button" class="btn-ghost btn-sm page-grp-chip" data-id="${esc(g.id)}" title="Chọn ${n} page trong nhóm">
+          return `<span class="muted" style="font-size:.78rem">Chưa có nhóm page — tick page rồi «Lưu nhóm page»</span>`;
+        }
+        return list
+          .map((g) => {
+            const n = (g.page_row_ids || []).length;
+            return `<button type="button" class="btn-ghost btn-sm page-grp-chip" data-id="${esc(g.id)}" title="Chọn ${n} page trong nhóm">
                 📄 ${esc(g.name)} <span class="badge">${n} Page</span>
               </button>`;
-            })
-            .join("");
-          pgBox.querySelectorAll(".page-grp-chip").forEach((btn) => {
-            btn.onclick = () => applyPageGroup(btn.dataset.id);
-          });
-        }
+          })
+          .join("");
+      };
+      const list = selectionGroups.page_groups || [];
+      if (pgBox) {
+        pgBox.innerHTML = pageChipHtml(list);
+        pgBox.querySelectorAll(".page-grp-chip").forEach((btn) => {
+          btn.onclick = () => applyPageGroup(btn.dataset.id);
+        });
+      }
+      const stdBox = $("bulkStdPageGroupChips");
+      if (stdBox) {
+        stdBox.innerHTML = pageChipHtml(list);
+        stdBox.querySelectorAll(".page-grp-chip").forEach((btn) => {
+          btn.onclick = () => applyPageGroup(btn.dataset.id);
+        });
       }
     }
 
@@ -3838,15 +3903,22 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts",
       "bulkStdGapMin", "bulkStdGapMax",
       "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdForceDay",
+      "bulkStdWinAll", "bulkStdWinMorning", "bulkStdWinEvening",
+      "bulkStdAppStrategy", "bulkStdDeliveryFb", "bulkStdDeliveryDirect", "bulkStdDeliveryNow",
     ].forEach((id) => {
       const el = $(id);
       if (!el) return;
       const onEdit = () => {
-        if (id.startsWith("bulkStdAm") || id.startsWith("bulkStdPm")) {
+        if (
+          id.startsWith("bulkStdAm") ||
+          id.startsWith("bulkStdPm") ||
+          id.startsWith("bulkStdWin")
+        ) {
           syncBulkStdWindowsFromFields();
         }
         syncStandardBurstFields({ fromBulk: true });
         syncBulkStandardWindowTotal();
+        applyBulkExclusiveUi();
         runNowPlanId = null;
         runNowPlanSignature = null;
         updateBulkTimingModeBadge();
@@ -4218,7 +4290,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       return `${yr}-${pad2(mon)}-${pad2(day)}`;
     }
 
-    /** Ô giờ/số bài Chuẩn mới → textarea khung */
+    /** Ô giờ/số bài Chuẩn mới → textarea khung (theo filter Sáng/Tối) */
     function syncBulkStdWindowsFromFields() {
       const amStart = String($("bulkStdAmStart")?.value || "06:00").slice(0, 5);
       const amEnd = String($("bulkStdAmEnd")?.value || "08:00").slice(0, 5);
@@ -4226,9 +4298,26 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const pmStart = String($("bulkStdPmStart")?.value || "18:00").slice(0, 5);
       const pmEnd = String($("bulkStdPmEnd")?.value || "20:00").slice(0, 5);
       const pmPosts = Math.max(1, Math.min(12, Number($("bulkStdPmPosts")?.value) || 1));
-      const text = `Sáng | ${amStart} | ${amEnd} | ${amPosts}\nTối | ${pmStart} | ${pmEnd} | ${pmPosts}`;
+      const wf = bulkStdWindowFilter();
+      const lines = [];
+      if (wf === "all" || wf === "morning") {
+        lines.push(`Sáng | ${amStart} | ${amEnd} | ${amPosts}`);
+      }
+      if (wf === "all" || wf === "evening") {
+        lines.push(`Tối | ${pmStart} | ${pmEnd} | ${pmPosts}`);
+      }
+      const text = lines.join("\n") || `Sáng | ${amStart} | ${amEnd} | ${amPosts}`;
       if ($("bulkStdWindows")) $("bulkStdWindows").value = text;
       if ($("rotNowWindows")) $("rotNowWindows").value = text;
+      // Làm mờ ô không dùng
+      const amDim = wf === "evening";
+      const pmDim = wf === "morning";
+      ["bulkStdAmStart", "bulkStdAmEnd", "bulkStdAmPosts"].forEach((id) => {
+        if ($(id)) $(id).style.opacity = amDim ? "0.45" : "1";
+      });
+      ["bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts"].forEach((id) => {
+        if ($(id)) $(id).style.opacity = pmDim ? "0.45" : "1";
+      });
       return text;
     }
 
@@ -4261,6 +4350,9 @@ Tối | 18:00 | 21:30 | 2</textarea>
         if ($("rotNowTimePreferred")) $("rotNowTimePreferred").checked = false;
         if ($("rotTaskGapMin") && $("bulkStdGapMin")) $("rotTaskGapMin").value = $("bulkStdGapMin").value || "0";
         if ($("rotTaskGapMax") && $("bulkStdGapMax")) $("rotTaskGapMax").value = $("bulkStdGapMax").value || "0";
+        if ($("bulkStdAppStrategy") && $("rotAppStrategy")) {
+          $("rotAppStrategy").value = $("bulkStdAppStrategy").value || "interleave_apps";
+        }
       } else {
         if (rotWin && bulkWin && rotWin.value.trim()) bulkWin.value = rotWin.value;
         if ($("bulkStdSplit")) $("bulkStdSplit").checked = !!$("rotSplitPagesWindows")?.checked;
@@ -4334,6 +4426,16 @@ Tối | 18:00 | 21:30 | 2</textarea>
         settingsBody.page_row_ids = sum.ids;
       }
       settingsBody.delivery = standardDelivery();
+      settingsBody.window_filter = bulkStdWindowFilter();
+      settingsBody.force_start_now = settingsBody.delivery === "immediate";
+      settingsBody.app_rotation_mode =
+        $("bulkStdAppStrategy")?.value || settingsBody.app_rotation_mode || "interleave_apps";
+      // immediate = vẫn windows+burst nhưng bỏ chờ đầu khung
+      if (settingsBody.force_start_now) {
+        settingsBody.run_now_time_mode = "windows";
+        settingsBody.burst_same_page = true;
+        if ($("bulkStdBurst")) $("bulkStdBurst").checked = true;
+      }
       const forceDay = readBulkStdForcePlanDay();
       if (forceDay) settingsBody.force_plan_day = forceDay;
       // Gap page/admin từ ô Chuẩn mới (ưu tiên hơn rotTaskGap*)
@@ -4342,6 +4444,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if (Number.isFinite(gMin)) settingsBody.between_tasks_gap_minutes_min = Math.max(0, gMin);
       if (Number.isFinite(gMax)) settingsBody.between_tasks_gap_minutes_max = Math.max(0, gMax);
       const fb = settingsBody.delivery === "fb_scheduled";
+      const nowMode = settingsBody.delivery === "immediate";
       if (dry) {
         $("bulkResult").innerHTML = "Đang tính lịch chuẩn mới (giờ VN)…";
         try {
@@ -4352,12 +4455,19 @@ Tối | 18:00 | 21:30 | 2</textarea>
           runNowPlanId = r.plan_id || null;
           runNowPlanSignature = JSON.stringify(settingsBody);
           if ($("rotResult")) renderRunNowResult(r, false);
+          const modeTitle = fb ? "Hẹn Facebook" : nowMode ? "Đăng ngay" : "Direct Local";
+          const modeHint = fb
+            ? "Graph nhận lịch, xong tắt tool được."
+            : nowMode
+              ? "Bỏ chờ khung — bắn ngay, vẫn burst + xen App."
+              : "Không hẹn Facebook. Giữ tool/PC bật chờ khung.";
+          const previewLines = (r.plan?.preview_order || r.preview_order || [])
+            .slice(0, 12)
+            .map((p) => esc(typeof p === "string" ? p : p.label || JSON.stringify(p)))
+            .join("<br/>");
           $("bulkResult").innerHTML =
             `<div style="margin:0 0 .5rem;padding:.55rem .7rem;border-radius:10px;border:1px solid rgba(251,191,36,.45);background:rgba(251,191,36,.1)">` +
-            `<b>④ Chuẩn mới · ${fb ? "Hẹn Facebook" : "Direct Local"}</b> — ` +
-            (fb
-              ? "Graph nhận lịch, xong tắt tool được."
-              : "không hẹn Facebook. Giữ tool/PC bật.") +
+            `<b>④ Chuẩn mới · ${esc(modeTitle)}</b> — ${esc(modeHint)}` +
             `<br/>Task: <b>${r.summary?.total_final || r.job?.progress?.total || 0}</b>` +
             (r.summary?.window_page_counts
               ? ` · ${(r.summary.window_page_counts || [])
@@ -4368,6 +4478,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
                   )
                   .join(" · ")}`
               : "") +
+            (r.summary?.order_logic || r.plan?.summary?.order_logic
+              ? `<br/><span class="muted">Thứ tự: ${esc(r.summary?.order_logic || r.plan?.summary?.order_logic)}</span>`
+              : "") +
+            (previewLines ? `<div class="muted" style="margin-top:.4rem;font-size:.78rem">${previewLines}</div>` : "") +
             `</div>` +
             ($("rotResult")?.innerHTML || "");
           flash(`Preview chuẩn mới · ${r.summary?.total_final || 0} task`, true);
@@ -4383,13 +4497,19 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if (
         !confirm(
           fb
-            ? `Hẹn Facebook CHUẨN MỚI?\n${sum.ids.length} page đã tick: ${sum.text}\nKhung Sáng/Tối theo ô cấu hình (số bài = cột cuối mỗi dòng).\n\nGraph nhận lịch xong có thể tắt tool.`
-            : `Bắt đầu CHUẨN MỚI (treo tool, đăng trực tiếp)?\n${sum.ids.length} page đã tick: ${sum.text}\nKhung Sáng/Tối theo ô cấu hình (số bài = cột cuối mỗi dòng).\n\nGiữ tool/PC bật.`
+            ? `Hẹn Facebook CHUẨN MỚI?\n${sum.ids.length} page đã tick: ${sum.text}\nKhung theo filter (Sáng/Tối).\n\nGraph nhận lịch xong có thể tắt tool.`
+            : nowMode
+              ? `ĐĂNG NGAY CHUẨN MỚI?\n${sum.ids.length} page: ${sum.text}\nBỏ chờ khung — bắn ngay (burst + xen App).\n\nGiữ tool/PC bật.`
+              : `Bắt đầu CHUẨN MỚI (treo tool, đăng trực tiếp)?\n${sum.ids.length} page đã tick: ${sum.text}\nKhung theo filter.\n\nGiữ tool/PC bật.`
         )
       ) {
         return;
       }
-      $("bulkResult").innerHTML = fb ? "Đang gửi lịch hẹn Facebook…" : "Đang bắt đầu job chuẩn mới…";
+      $("bulkResult").innerHTML = fb
+        ? "Đang gửi lịch hẹn Facebook…"
+        : nowMode
+          ? "Đang bắt đầu đăng ngay…"
+          : "Đang bắt đầu job chuẩn mới…";
       try {
         const r = await api("/api/jobs/rotation/run-now", {
           method: "POST",
@@ -4405,13 +4525,17 @@ Tối | 18:00 | 21:30 | 2</textarea>
         $("bulkResult").innerHTML =
           (fb
             ? `<b>Đã hẹn Facebook · chuẩn mới</b>`
-            : `<b>Đã treo tool · chuẩn mới</b>`) +
+            : nowMode
+              ? `<b>Đã bắt đầu đăng ngay · chuẩn mới</b>`
+              : `<b>Đã treo tool · chuẩn mới</b>`) +
           ` · ${r.job?.progress?.total || 0} tác vụ` +
           (r.job?.id ? ` · job ${esc(r.job.id)}` : "");
         flash(
           fb
             ? `Đã hẹn FB · ${r.job?.progress?.total || 0} slot`
-            : `Đã bắt đầu chuẩn mới · ${r.job?.progress?.total || 0} tác vụ`,
+            : nowMode
+              ? `Đăng ngay · ${r.job?.progress?.total || 0} tác vụ`
+              : `Đã bắt đầu chuẩn mới · ${r.job?.progress?.total || 0} tác vụ`,
           true
         );
         if (r.job?.id) {
@@ -4533,7 +4657,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
         media_pattern_mode: mediaMode,
         media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
         use_caption: $("bulkUseCaption")?.checked !== false,
-        app_rotation_mode: $("rotAppStrategy")?.value || "interleave_apps",
+        window_filter: bulkStdWindowFilter(),
+        force_start_now: standardDelivery() === "immediate",
+        app_rotation_mode:
+          $("bulkStdAppStrategy")?.value || $("rotAppStrategy")?.value || "interleave_apps",
         // Cho phép 0 — không dùng `|| 15` (0 bị thành 15)
         between_tasks_gap_minutes_min: (() => {
           const n = Number($("rotTaskGapMin")?.value);
@@ -4617,11 +4744,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
         media_pattern_mode: patternMode,
         media_pattern: $("rotNowMediaPattern")?.value || "photo,video",
         use_caption: $("bulkUseCaption")?.checked !== false,
+        window_filter: bulkStdWindowFilter(),
+        force_start_now: standardDelivery() === "immediate",
         mode: timeMode === "windows" ? "windows" : "fixed_gap",
         windows,
         split_pages_across_windows: split,
         burst_same_page: burst,
-        app_rotation_mode: $("rotAppStrategy")?.value || "interleave_apps",
+        app_rotation_mode:
+          $("bulkStdAppStrategy")?.value || $("rotAppStrategy")?.value || "interleave_apps",
         // Cho phép 0 (Number("")=0; không dùng || 15 vì 0 bị thay thành 15)
         between_tasks_gap_minutes_min: (() => {
           const n = Number($("rotTaskGapMin")?.value);
@@ -4703,6 +4833,21 @@ Tối | 18:00 | 21:30 | 2</textarea>
       }
       if ($("bulkUseCaption")) {
         $("bulkUseCaption").checked = s.use_caption !== false;
+      }
+      if (s.window_filter === "morning") {
+        if ($("bulkStdWinMorning")) $("bulkStdWinMorning").checked = true;
+      } else if (s.window_filter === "evening") {
+        if ($("bulkStdWinEvening")) $("bulkStdWinEvening").checked = true;
+      } else if ($("bulkStdWinAll")) {
+        $("bulkStdWinAll").checked = true;
+      }
+      if ($("bulkStdAppStrategy") && s.app_rotation_mode) {
+        $("bulkStdAppStrategy").value =
+          s.app_rotation_mode === "per_app" ? "per_app" : "interleave_apps";
+      }
+      if (s.force_start_now && $("bulkStdDeliveryNow")) {
+        $("bulkStdDeliveryNow").checked = true;
+        syncStandardDeliveryUi();
       }
       syncRunNowMediaUi();
       if ($("rotAutoMeta")) {

@@ -198,7 +198,8 @@
       </div>`;
     document.body.appendChild(el);
     el.addEventListener("click", (e) => {
-      if (e.target === el && !busy) closePanel();
+      // Cho phép đóng overlay kể cả khi busy — tránh kẹt full màn không bấm được menu
+      if (e.target === el) closePanel();
     });
     document.getElementById("fbpsUpdateClose").onclick = () => {
       if (busy && !confirm("Đang cập nhật — đóng panel? (tiến trình vẫn chạy nền)")) return;
@@ -683,6 +684,7 @@
     ensureBanner();
     ensurePanel();
     ensureDock();
+    closePanel(); // never inherit a stuck .open from a previous session quirk
     wireNavLinks();
     await showLastUpdateError();
 

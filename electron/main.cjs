@@ -1470,7 +1470,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
-    minWidth: 960,
+    minWidth: 1100,
     minHeight: 640,
     title: `FB Page Studio v${app.getVersion()}`,
     icon,

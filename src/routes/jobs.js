@@ -226,6 +226,16 @@ router.post("/rotation/run", (req, res) => {
 router.post("/rotation/run-now", (req, res) => {
   try {
     const body = req.body || {};
+    // Đăng ngay: bỏ chờ khung, vẫn windows+burst + xen App
+    if (
+      body.delivery === "immediate" ||
+      body.delivery === "now" ||
+      body.force_start_now
+    ) {
+      body.force_start_now = true;
+      body.burst_same_page = true;
+      body.run_now_time_mode = body.run_now_time_mode || "windows";
+    }
     if (body.dry_run) {
       // Lưu gap/settings user vừa nhập (kể cả 0) để lần mở app sau không bị 15–25p cũ
       try {
@@ -251,7 +261,9 @@ router.post("/rotation/run-now", (req, res) => {
         delivery:
           delivery === "fb_scheduled" || delivery === "facebook" || delivery === "schedule"
             ? "fb_scheduled"
-            : "direct",
+            : delivery === "immediate" || delivery === "now"
+              ? "immediate"
+              : "direct",
         ...plan,
       });
     }
@@ -306,7 +318,10 @@ router.post("/rotation/run-now", (req, res) => {
       });
     }
     const continuous = !!(body.continuous ?? plan.settings?.run_now_continuous);
-    const delivery = String(body.delivery || body.delivery_mode || "direct");
+    let delivery = String(body.delivery || body.delivery_mode || "direct");
+    if (delivery === "immediate" || delivery === "now" || body.force_start_now) {
+      delivery = "immediate";
+    }
     const wantFb =
       delivery === "fb_scheduled" ||
       delivery === "facebook" ||

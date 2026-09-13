@@ -245,6 +245,25 @@ check(
     read("src/services/poster.js").includes("export function wantsCaption") &&
     read("src/services/rotationPlan.js").includes("use_caption: true")
 );
+const rotPlan = read("src/services/rotationPlan.js");
+const shellJs = read("public/js/shell.js");
+check(
+  "Runtime fetch has timeout; /api/runtime light by default",
+  shellJs.includes("AbortController") &&
+    shellJs.includes("8000") &&
+    read("src/server.js").includes('scan: "folders_only"')
+);
+check(
+  "Chuẩn mới: window_filter + force_start_now + orderPagesForBurst",
+  rotPlan.includes("window_filter") &&
+    rotPlan.includes("force_start_now") &&
+    rotPlan.includes("orderPagesForBurst") &&
+    rotPlan.includes("filterWindowsByFilter") &&
+    posting.includes("bulkStdWinMorning") &&
+    posting.includes("bulkStdDeliveryNow") &&
+    posting.includes("bulkStdAppStrategy") &&
+    posting.includes("bulkStdPageGroupChips")
+);
 const jobRunner = read("src/services/jobRunner.js");
 check(
   "Job progress tracks comment ok/fail/pending and notifies",

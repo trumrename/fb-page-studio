@@ -118,6 +118,14 @@ export const DEFAULT_ROTATION = {
    */
   use_caption: true,
   /**
+   * all = cả Sáng+Tối · morning = chỉ Sáng · evening = chỉ Tối
+   */
+  window_filter: "all",
+  /**
+   * true = bỏ chờ khung, bắn ngay (now + stagger) vẫn burst + xen App
+   */
+  force_start_now: false,
+  /**
    * Direct Local: sau khi xong 1 ngày, tự lập ngày kế tiếp (treo tool mãi
    * đến khi bấm Dừng). false = chỉ chạy 1 đợt plan.
    */
@@ -385,6 +393,16 @@ export function normalizeSettings(s) {
       out.use_caption = true;
     }
   }
+  {
+    const wf = String(out.window_filter || "all").toLowerCase();
+    out.window_filter =
+      wf === "morning" || wf === "sang" || wf === "am"
+        ? "morning"
+        : wf === "evening" || wf === "toi" || wf === "tối" || wf === "pm"
+          ? "evening"
+          : "all";
+  }
+  out.force_start_now = !!out.force_start_now;
   out.account_ids = Array.isArray(out.account_ids)
     ? out.account_ids.map(Number).filter((n) => n > 0)
     : [];
@@ -850,6 +868,68 @@ function interleaveByAccount(pages) {
   return out;
 }
 
+/** all | morning | evening — lọc khung theo tên */
+export function filterWindowsByFilter(windows, filter = "all") {
+  const list = Array.isArray(windows) ? windows : [];
+  const wf = String(filter || "all").toLowerCase();
+  if (wf === "morning" || wf === "sang" || wf === "am") {
+    return list.filter((w) => /sáng|sang|am|morning/i.test(String(w?.name || "")));
+  }
+  if (wf === "evening" || wf === "toi" || wf === "tối" || wf === "pm") {
+    return list.filter((w) => /tối|toi|pm|evening|night/i.test(String(w?.name || "")));
+  }
+  return list;
+}
+
+/**
+ * Thứ tự page cho burst: cùng logic interleave_apps / per_app
+ * (Pageᵢ AppA → Pageᵢ AppB → …) thay vì chỉ xen token.
+ */
+function orderPagesForBurst(matrix, settings) {
+  const groups = resolveGroups(settings, matrix);
+  const maxPages = Math.max(0, ...groups.map((g) => g.max_pages || 0), 0);
+  const maxAdmins = Math.max(0, ...groups.map((g) => g.admin_count || 0), 0);
+  const out = [];
+  const seen = new Set();
+  const pushPage = (g, adminIdx, pageIdx) => {
+    const admin = g.admins?.[adminIdx];
+    const page = admin?.pages?.[pageIdx];
+    if (!page) return;
+    const id = Number(page.page_row_id);
+    if (!id) return;
+    // Cùng page_row_id dưới 2 admin/app vẫn giữ 2 slot riêng (chéo App)
+    const key = `${id}|${admin.account_id}|${g.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      account_id: admin.account_id,
+      account_name: admin.account_name,
+      page_row_id: id,
+      page_id: page.page_id,
+      page_name: page.page_name,
+      group_id: g.id,
+      group_name: g.name,
+    });
+  };
+  if (settings.app_rotation_mode === "per_app") {
+    for (const g of groups) {
+      for (let pageIdx = 0; pageIdx < g.max_pages; pageIdx++) {
+        for (let adminIdx = 0; adminIdx < g.admin_count; adminIdx++) {
+          pushPage(g, adminIdx, pageIdx);
+        }
+      }
+    }
+  } else {
+    for (let pageIdx = 0; pageIdx < maxPages; pageIdx++) {
+      for (let adminIdx = 0; adminIdx < maxAdmins; adminIdx++) {
+        for (const g of groups) pushPage(g, adminIdx, pageIdx);
+      }
+    }
+  }
+  if (out.length) return out;
+  return interleaveByAccount(collectUniquePagesFromMatrix(matrix));
+}
+
 function enqueueBurstPage({
   page,
   cfg,
@@ -908,13 +988,21 @@ export function buildSplitWindowBurstSlots({
   todayVn,
   nowMs = Date.now(),
 } = {}) {
-  const pages = interleaveByAccount(collectUniquePagesFromMatrix(matrix));
-  const windows = (settings.windows || []).filter(
-    (w) => parseHm(w.start) != null && parseHm(w.end) != null
+  // Xen App (pageIdx → admin → App) — đúng kỳ vọng chống spam
+  const pages = orderPagesForBurst(matrix, settings);
+  let windows = filterWindowsByFilter(
+    (settings.windows || []).filter(
+      (w) => parseHm(w.start) != null && parseHm(w.end) != null
+    ),
+    settings.window_filter
   );
   if (!windows.length) {
     throw new Error(
-      "Cần 2 khung giờ, ví dụ:\nSáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3"
+      settings.window_filter === "morning"
+        ? "Chỉ Sáng: cần ít nhất 1 khung tên Sáng (vd Sáng | 06:00 | 08:00 | 3)."
+        : settings.window_filter === "evening"
+          ? "Chỉ Tối: cần ít nhất 1 khung tên Tối (vd Tối | 18:00 | 20:00 | 3)."
+          : "Cần khung giờ, ví dụ:\nSáng | 06:00 | 08:00 | 3\nTối | 18:00 | 20:00 | 3"
     );
   }
   const split = !!settings.split_pages_across_windows;
@@ -926,8 +1014,11 @@ export function buildSplitWindowBurstSlots({
   const orderRef = { n: 0 };
   let planDay = todayVn;
   // Burst = đăng N bài liền nhau; loại media theo settings (fixed/pattern/sequence).
-  // TRƯỚC: burst_same_page luôn ép video → chọn photo vẫn đăng video.
   const forceVideo = String(settings.post_type || "").toLowerCase() === "video";
+  const forceNow = !!settings.force_start_now;
+  if (forceNow) {
+    warnings.push("Đăng ngay: bỏ chờ đầu khung — bắt đầu ~now + stagger, vẫn burst + xen App.");
+  }
 
   for (let wi = 0; wi < windows.length; wi++) {
     const w = windows[wi];
@@ -938,7 +1029,7 @@ export function buildSplitWindowBurstSlots({
     let day = todayVn;
     let range = windowRangeUtc(day, w.start, w.end, tz);
     if (!range) continue;
-    if (nowMs >= range.endMs - 20 * 1000 && !settings.force_plan_day) {
+    if (!forceNow && nowMs >= range.endMs - 20 * 1000 && !settings.force_plan_day) {
       day = addDaysYmd(day, 1);
       range = windowRangeUtc(day, w.start, w.end, tz);
       warnings.push(
@@ -953,22 +1044,29 @@ export function buildSplitWindowBurstSlots({
       30
     ) * 1000;
     const burstSpan = (burst - 1) * burstGap;
-    const winStart = Math.max(nowMs + 8000, range.startMs);
-    const winEnd = range.endMs - burstSpan - 5000;
-    if (winEnd <= winStart) {
-      day = addDaysYmd(day, 1);
-      range = windowRangeUtc(day, w.start, w.end, tz);
-      if (day > planDay) planDay = day;
-      warnings.push(`Khung «${w.name}» không còn chỗ hôm nay → ${day}.`);
+    if (!forceNow) {
+      const winStart = Math.max(nowMs + 8000, range.startMs);
+      const winEnd = range.endMs - burstSpan - 5000;
+      if (winEnd <= winStart) {
+        day = addDaysYmd(day, 1);
+        range = windowRangeUtc(day, w.start, w.end, tz);
+        if (day > planDay) planDay = day;
+        warnings.push(`Khung «${w.name}» không còn chỗ hôm nay → ${day}.`);
+      }
     }
-    const start0 = Math.max(nowMs + 8000, range.startMs);
-    const end0 = range.endMs - burstSpan - 3000;
+    // force_start_now: bắt đầu ngay; không thì chờ đầu khung (hoặc now nếu đã trong khung)
+    const start0 = forceNow
+      ? nowMs + 8000 + wi * 60 * 1000
+      : Math.max(nowMs + 8000, range.startMs);
+    const end0 = forceNow
+      ? start0 + Math.max(group.length, 1) * 12 * 60 * 1000
+      : range.endMs - burstSpan - 3000;
     const n = group.length;
     const step =
       n <= 1 ? 0 : Math.max(45 * 1000, Math.floor((end0 - start0) / (n - 1)));
 
     warnings.push(
-      `Khung «${w.name}» ${w.start}–${w.end}: ${n} page × ${burst} video, rải ~${Math.round(step / 60000)} phút/page (2 token xen kẽ).`
+      `Khung «${w.name}» ${forceNow ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài, rải ~${Math.round(step / 60000)} phút/page (App xen kẽ).`
     );
 
     for (let i = 0; i < group.length; i++) {
@@ -1298,7 +1396,7 @@ export function buildRotationPlan(inputSettings = {}) {
  * - interleave_apps: page → admin → app
  */
 export function buildRunNowPlan(inputSettings = {}) {
-  const settings = normalizeSettings({ ...loadRotationSettings(), ...inputSettings });
+  let settings = normalizeSettings({ ...loadRotationSettings(), ...inputSettings });
   if (settings.page_target_mode === "selected" && !settings.page_row_ids.length) {
     throw new Error(
       "Chế độ «Chỉ page đã tick»: hãy tick ít nhất 1 Page ở bước 1, hoặc chọn «Tất cả page»."
@@ -1348,14 +1446,22 @@ export function buildRunNowPlan(inputSettings = {}) {
   }
 
   if (useWindows) {
+    const filteredWins = filterWindowsByFilter(settings.windows, settings.window_filter);
     const winSettings = normalizeSettings({
       ...settings,
       mode: "windows",
+      windows: filteredWins.length ? filteredWins : settings.windows,
     });
+    // Ghi lại windows đã lọc để burst/preview dùng chung
+    settings = { ...settings, windows: winSettings.windows };
     const sum = (winSettings.windows || []).reduce((n, w) => n + (Number(w.posts) || 0), 0);
     if (sum < 1) {
       throw new Error(
-        "Chế độ khung giờ Direct Local cần ít nhất 1 bài trong các dòng Sáng/Tối (ví dụ Sáng|07:30|11:30|1 và Tối|18:00|21:30|1)."
+        settings.window_filter === "morning"
+          ? "Chỉ Sáng: cần ≥1 bài trong khung Sáng."
+          : settings.window_filter === "evening"
+            ? "Chỉ Tối: cần ≥1 bài trong khung Tối."
+            : "Chế độ khung giờ Direct Local cần ít nhất 1 bài trong các dòng Sáng/Tối (ví dụ Sáng|07:30|11:30|1 và Tối|18:00|21:30|1)."
       );
     }
     rounds = clamp(sum, 1, 12);
@@ -1842,6 +1948,8 @@ export function buildRunNowPlan(inputSettings = {}) {
       media_pattern_mode: settings.media_pattern_mode,
       media_pattern: settings.media_pattern,
       use_caption: settings.use_caption !== false,
+      window_filter: settings.window_filter || "all",
+      force_start_now: !!settings.force_start_now,
       windows: settings.windows,
       app_rotation_mode: settings.app_rotation_mode,
       between_tasks_gap_minutes_min: settings.between_tasks_gap_minutes_min,

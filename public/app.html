@@ -1280,7 +1280,10 @@
     Promise.all([api("/api/version"), api("/auth/apps"), api("/api/posting/pages")]).then(([v, apps, pg]) => {
       setText("appVer", "v" + v.version);
       setText("heroMeta", `FB Page Studio · ${(apps.apps || []).length} Meta App · ${(pg.pages || []).length} Page`);
-    }).catch((e) => toast("warn", "Thông tin hệ thống", e.message));
+    }).catch((e) => {
+      setText("heroMeta", "FB Page Studio · mất kết nối hệ thống");
+      toast("warn", "Thông tin hệ thống", e.message);
+    });
     api("/api/jobs/reports/info").then((r) => {
       setText("reportPath", r.dir || "data/exports");
     }).catch(() => {});
@@ -1295,7 +1298,7 @@
     jobsTimer = setInterval(() => discoverJobs({ quiet: true }), 2500);
     historyTimer = setInterval(loadJobHistory, 12000);
     setInterval(loadLogs, 10000);
-    setInterval(loadRuntime, 3000);
+    setInterval(loadRuntime, 15000);
   </script>
 </body>
 </html>
