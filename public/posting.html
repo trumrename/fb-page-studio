@@ -505,6 +505,14 @@ see more :
                   <input type="checkbox" id="bulkCommentEnabled" checked />
                   <b>Bật auto comment</b> cho page đã tick
                 </label>
+                <label class="checks" style="display:block;margin-bottom:.45rem">
+                  <input type="checkbox" id="bulkCommentSiteCapEnabled" />
+                  <b>Anti 10 page / 1 site</b> — <b>bỏ tick</b> = comment bình thường (không giới hạn domain)
+                </label>
+                <div style="margin:0 0 .55rem;max-width:220px" id="bulkCommentSiteCapNumWrap">
+                  <label>Tối đa page / site (khi bật anti)</label>
+                  <input type="number" id="bulkCommentMaxPagesPerSite" min="1" max="500" value="10" />
+                </div>
                 <label style="display:block;margin-bottom:.35rem"><b>Khi nào gửi comment API</b></label>
                 <div style="display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;margin-bottom:.55rem">
                   <label class="checks" style="margin:0">
@@ -1331,6 +1339,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkCommentModeSeq", "bulkCommentModeRnd", "bulkCommentModeMatch",
       "bulkCommentWhenImmediate", "bulkCommentWhenPublish",
       "bulkCommentDelayMin", "bulkCommentMinLikes",
+      "bulkCommentSiteCapEnabled", "bulkCommentMaxPagesPerSite",
       "bulkStdWindows", "bulkStdBurst", "bulkStdSplit", "bulkStdDelivery",
       "bulkStdAmStart", "bulkStdAmEnd", "bulkStdAmPosts",
       "bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts",
@@ -3083,15 +3092,23 @@ Tối | 18:00 | 21:30 | 2</textarea>
           </label>
           <p class="muted" style="margin:.35rem 0 0;font-size:.74rem;line-height:1.35">
             Mode «Theo tên media»: khớp <b>slug trong link</b> (vd file <code>1-natalie-mercer.mp4</code>
-            → <code>https://profiles…/1-natalie-mercer/</code>).<br/>
-            <b>Mỗi site (domain)</b> chỉ comment tối đa <b>10 page</b> / lần chạy — site khác vẫn comment bình thường.<br/>
-            Không khớp slug → lấy <b>link khác</b> còn slot (không để comment trống URL). Mỗi site tối đa 10 page; chỉ bỏ comment khi mọi site đã đủ.
+            → <code>https://profiles…/1-natalie-mercer/</code>). Không khớp → lấy link khác còn slot.
           </p>
-          <div style="margin-top:.45rem;max-width:220px">
-            <label>Tối đa page / site (domain)</label>
-            <input type="number" id="comment_max_pages_per_site" min="0" max="500" value="${esc(
-              c.link_lists?.comment_max_pages_per_site ?? 10
-            )}" title="0 = không giới hạn. Mặc định 10: mỗi domain chỉ comment trên tối đa 10 Fanpage mỗi job." />
+          <label class="checks" style="display:block;margin-top:.45rem">
+            <input type="checkbox" id="comment_site_cap_enabled" ${
+              Number(c.link_lists?.comment_max_pages_per_site ?? 10) > 0 ? "checked" : ""
+            } />
+            <b>Anti 10 page / 1 site</b> — bật = mỗi domain tối đa N page/job · <b>tắt = comment bình thường không giới hạn site</b>
+          </label>
+          <div style="margin-top:.35rem;max-width:220px" id="commentSiteCapNumWrap">
+            <label>Tối đa page / site (khi bật)</label>
+            <input type="number" id="comment_max_pages_per_site" min="1" max="500" value="${esc(
+              (() => {
+                const n = Number(c.link_lists?.comment_max_pages_per_site);
+                if (!Number.isFinite(n) || n <= 0) return 10;
+                return n;
+              })()
+            )}" title="Chỉ dùng khi tick anti ở trên. Tắt anti = 0 (không giới hạn)." />
           </div>
         </div>
         <label><b>Câu kèm</b> (tuỳ chọn) — mỗi dòng 1 câu, random mỗi comment · <b>không cần</b> <code>{link}</code></label>
@@ -3212,6 +3229,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
         writeOneScheduleParts(new Date(Date.now() + 2 * 60 * 60 * 1000));
         ensureOneScheduleFuture({ silent: true });
       }
+      const syncSiteCapUi = () => {
+        const on = !!$("comment_site_cap_enabled")?.checked;
+        const wrap = $("commentSiteCapNumWrap");
+        if (wrap) wrap.style.opacity = on ? "1" : "0.45";
+        if ($("comment_max_pages_per_site")) $("comment_max_pages_per_site").disabled = !on;
+      };
+      $("comment_site_cap_enabled")?.addEventListener("change", syncSiteCapUi);
+      syncSiteCapUi();
       setConfigSaveState("Đã lưu trong dữ liệu", "saved");
     }
 
@@ -3271,10 +3296,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
           comment_when: when,
           comment_delay_minutes: when === "immediate" ? 0 : delayMin,
           comment_min_likes: when === "immediate" ? 0 : minLikes,
-          comment_max_pages_per_site: Math.max(
-            0,
-            Math.min(500, Number($("comment_max_pages_per_site")?.value) || 10)
-          ),
+          comment_max_pages_per_site: (() => {
+            // Tắt anti → 0 = không giới hạn site (comment bình thường)
+            if ($("comment_site_cap_enabled") && !$("comment_site_cap_enabled").checked) return 0;
+            const raw = $("comment_max_pages_per_site")?.value;
+            const n = Number(raw);
+            if (raw === "" || raw == null || !Number.isFinite(n)) return 10;
+            return Math.max(0, Math.min(500, n));
+          })(),
           story_link_mode: $("story_link_mode")?.value || "combo",
           caption_lead_enabled: leadOn ? 1 : 0,
           caption_lead_mode: leadMode === "sequential" ? "sequential" : "random",
@@ -5609,6 +5638,11 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const when = getBulkCommentWhen();
       const delayMin = Math.max(0, Math.min(10080, Number($("bulkCommentDelayMin")?.value) || 0));
       const minLikes = Math.max(0, Math.min(1_000_000, Number($("bulkCommentMinLikes")?.value) || 0));
+      const siteCapOn = !!$("bulkCommentSiteCapEnabled")?.checked;
+      const siteCapRaw = Number($("bulkCommentMaxPagesPerSite")?.value);
+      const siteCap = siteCapOn
+        ? Math.max(1, Math.min(500, Number.isFinite(siteCapRaw) ? siteCapRaw : 10))
+        : 0;
       const config = {
         comment_enabled: enabled ? 1 : 0,
         comment_templates: templates,
@@ -5625,6 +5659,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
           // delay/likes chỉ có ý khi after_publish
           comment_delay_minutes: when === "immediate" ? 0 : delayMin,
           comment_min_likes: when === "immediate" ? 0 : minLikes,
+          // 0 = tắt anti site → comment bình thường mọi page
+          comment_max_pages_per_site: siteCap,
         },
       };
       try {
@@ -5640,7 +5676,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         }
         flash(
           enabled
-            ? `Đã áp comment · ${r.updated} Page · ${when === "immediate" ? "comment NGAY sau hẹn" : "sau publish"} · ${mode === "sequential" ? "link theo thứ tự bài" : "random link"} · ${linkLines.length} URL`
+            ? `Đã áp comment · ${r.updated} Page · ${when === "immediate" ? "comment NGAY sau hẹn" : "sau publish"} · ${mode === "sequential" ? "link theo thứ tự bài" : mode === "match_media" ? "theo tên media" : "random link"} · ${linkLines.length} URL · anti site: ${siteCapOn ? `${siteCap} page/site` : "TẮT"}`
             : `Đã tắt auto comment trên ${r.updated} Page`,
           true
         );
@@ -5657,6 +5693,15 @@ Tối | 18:00 | 21:30 | 2</textarea>
         flash(e.message, false);
       }
     }
+
+    function syncBulkCommentSiteCapUi() {
+      const on = !!$("bulkCommentSiteCapEnabled")?.checked;
+      const wrap = $("bulkCommentSiteCapNumWrap");
+      if (wrap) wrap.style.opacity = on ? "1" : "0.45";
+      if ($("bulkCommentMaxPagesPerSite")) $("bulkCommentMaxPagesPerSite").disabled = !on;
+    }
+    $("bulkCommentSiteCapEnabled")?.addEventListener("change", syncBulkCommentSiteCapUi);
+    syncBulkCommentSiteCapUi();
 
     if ($("btnBulkApplyComment")) {
       $("btnBulkApplyComment").onclick = () =>

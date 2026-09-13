@@ -561,11 +561,18 @@ export function createCommentSiteTracker(maxPagesPerSite = 10) {
 }
 
 export function getCommentMaxPagesPerSite(linkLists = {}, fallback = 10) {
-  const n = Number(
-    linkLists?.comment_max_pages_per_site ??
-      linkLists?.max_pages_per_site ??
-      fallback
-  );
+  // Explicit 0 = tắt anti site (comment mọi page bình thường)
+  if (
+    Object.prototype.hasOwnProperty.call(linkLists || {}, "comment_max_pages_per_site") ||
+    Object.prototype.hasOwnProperty.call(linkLists || {}, "max_pages_per_site")
+  ) {
+    const raw =
+      linkLists.comment_max_pages_per_site ?? linkLists.max_pages_per_site;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(500, n));
+  }
+  const n = Number(fallback);
   if (!Number.isFinite(n)) return 10;
   return Math.max(0, Math.min(500, n));
 }
