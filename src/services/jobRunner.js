@@ -611,16 +611,16 @@ export function startJob({
 } = {}) {
   trimJobs();
   const id = nanoid(10);
-  // Comment site budget: mỗi domain (site) tối đa N page trong job này
-  let commentSiteMax = 10;
+  // Comment site budget: mặc định TẮT (0). Chỉ bật khi page config set N > 0.
+  let commentSiteMax = 0;
   try {
     const firstPage = (tasks || []).map((t) => Number(t.page_row_id)).find((n) => n > 0);
     if (firstPage) {
       const cfg0 = getPagePostConfig(firstPage);
-      commentSiteMax = getCommentMaxPagesPerSite(cfg0?.link_lists || {}, 10);
+      commentSiteMax = getCommentMaxPagesPerSite(cfg0?.link_lists || {}, 0);
     }
   } catch {
-    /* keep default 10 */
+    /* keep default 0 = không giới hạn */
   }
   const job = {
     id,
@@ -985,12 +985,12 @@ async function runJob(jobId) {
   const job = jobs.get(jobId);
   if (!job) return;
   if (!job._commentSiteTracker) {
-    let max = 10;
+    let max = 0;
     try {
       const pid = (job.tasks || []).map((t) => Number(t.page_row_id)).find((n) => n > 0);
-      if (pid) max = getCommentMaxPagesPerSite(getPagePostConfig(pid)?.link_lists || {}, 10);
+      if (pid) max = getCommentMaxPagesPerSite(getPagePostConfig(pid)?.link_lists || {}, 0);
     } catch {
-      /* default */
+      /* default 0 = tắt anti */
     }
     job._commentSiteTracker = createCommentSiteTracker(max);
   }

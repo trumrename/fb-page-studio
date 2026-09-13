@@ -560,8 +560,9 @@ export function createCommentSiteTracker(maxPagesPerSite = 10) {
   };
 }
 
-export function getCommentMaxPagesPerSite(linkLists = {}, fallback = 10) {
-  // Explicit 0 = tắt anti site (comment mọi page bình thường)
+export function getCommentMaxPagesPerSite(linkLists = {}, fallback = 0) {
+  // Explicit 0 / thiếu field = TẮT anti site (comment bình thường mọi page).
+  // Chỉ giới hạn khi user bật và set N > 0.
   if (
     Object.prototype.hasOwnProperty.call(linkLists || {}, "comment_max_pages_per_site") ||
     Object.prototype.hasOwnProperty.call(linkLists || {}, "max_pages_per_site")
@@ -569,11 +570,11 @@ export function getCommentMaxPagesPerSite(linkLists = {}, fallback = 10) {
     const raw =
       linkLists.comment_max_pages_per_site ?? linkLists.max_pages_per_site;
     const n = Number(raw);
-    if (!Number.isFinite(n)) return fallback;
+    if (!Number.isFinite(n)) return Math.max(0, Number(fallback) || 0);
     return Math.max(0, Math.min(500, n));
   }
   const n = Number(fallback);
-  if (!Number.isFinite(n)) return 10;
+  if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(500, n));
 }
 
@@ -889,7 +890,7 @@ export function assignCommentForPost(cfg = {}) {
   const pageRowId = Number(cfg.page_row_id) || 0;
   const siteTracker = cfg.comment_site_tracker || null;
   const maxPagesPerSite =
-    siteTracker?.maxPagesPerSite ?? getCommentMaxPagesPerSite(ll0, 10);
+    siteTracker?.maxPagesPerSite ?? getCommentMaxPagesPerSite(ll0, 0);
   const linkSiteOk = (url) => {
     if (!siteTracker || !maxPagesPerSite) return true;
     const site = extractCommentSite(url);

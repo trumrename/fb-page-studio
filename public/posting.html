@@ -507,7 +507,7 @@ see more :
                 </label>
                 <label class="checks" style="display:block;margin-bottom:.45rem">
                   <input type="checkbox" id="bulkCommentSiteCapEnabled" />
-                  <b>Anti 10 page / 1 site</b> — <b>bỏ tick</b> = comment bình thường (không giới hạn domain)
+                  <b>Anti N page / 1 site</b> — mặc định <b>tắt</b>. Chỉ tick nếu muốn giới hạn (vd 10 page/domain)
                 </label>
                 <div style="margin:0 0 .55rem;max-width:220px" id="bulkCommentSiteCapNumWrap">
                   <label>Tối đa page / site (khi bật anti)</label>
@@ -3096,9 +3096,9 @@ Tối | 18:00 | 21:30 | 2</textarea>
           </p>
           <label class="checks" style="display:block;margin-top:.45rem">
             <input type="checkbox" id="comment_site_cap_enabled" ${
-              Number(c.link_lists?.comment_max_pages_per_site ?? 10) > 0 ? "checked" : ""
+              Number(c.link_lists?.comment_max_pages_per_site) > 0 ? "checked" : ""
             } />
-            <b>Anti 10 page / 1 site</b> — bật = mỗi domain tối đa N page/job · <b>tắt = comment bình thường không giới hạn site</b>
+            <b>Anti N page / 1 site</b> — mặc định <b>TẮT</b> (comment mọi page). Chỉ tick khi muốn giới hạn domain.
           </label>
           <div style="margin-top:.35rem;max-width:220px" id="commentSiteCapNumWrap">
             <label>Tối đa page / site (khi bật)</label>
