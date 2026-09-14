@@ -291,7 +291,7 @@ if (setupSrc) {
   fs.writeFileSync(path.join(out, `${setupName}.sha256.txt`), `${sh}  ${setupName}\n`, "utf8");
   console.log("Copied Setup installer:", setupDest);
 } else {
-  console.warn("⚠ Chưa có Setup NSIS — chạy npm run build:desktop (nsis+portable)");
+  console.warn("⚠ Chưa có Setup NSIS — chạy npm run build:desktop (chỉ Setup / nsis)");
 }
 
 const cap = path.join(out, "media-sample", "captions", "captions.txt");

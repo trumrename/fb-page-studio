@@ -1,15 +1,14 @@
 /**
- * Build desktop EXE/Setup trên ổ còn chỗ (mặc định F:).
+ * Build Setup (NSIS) trên ổ F: only.
  * Tránh ổ C đầy → NSIS "can't write ... bytes to output".
  *
- *   node scripts/build-desktop.mjs --nsis
- *   node scripts/build-desktop.mjs --portable
+ *   node scripts/build-desktop.mjs --nsis          (mặc định — bản Setup)
+ *   node scripts/build-desktop.mjs --portable      (tuỳ chọn)
  *   node scripts/build-desktop.mjs --nsis --portable
  *
  * Env:
  *   FBPS_BUILD_OUT=F:/FB-Page-Studio/dist-desktop-oauth
  *   FBPS_BUILD_TEMP=F:/FB-Page-Studio/temp
- *   FBPS_BUILD_OUT=E:/FB-Page-Studio/dist-desktop-oauth  (đổi sang E)
  */
 import { spawnSync } from "child_process";
 import fs from "fs";
@@ -23,22 +22,17 @@ const wantPortable = args.includes("--portable");
 
 function pickOutDir() {
   if (process.env.FBPS_BUILD_OUT) return path.resolve(process.env.FBPS_BUILD_OUT);
-  // Prefer F, then E, then project-relative
+  // Chỉ F: (không mirror E:)
   for (const candidate of [
     "F:/FB-Page-Studio/dist-desktop-oauth",
-    "E:/FB-Page-Studio/dist-desktop-oauth",
     path.join(root, "dist-desktop-oauth"),
   ]) {
-    const drive = path.parse(candidate).root;
     try {
-      if (drive && drive.length >= 2) {
-        // ensure parent exists / writable
-        fs.mkdirSync(candidate, { recursive: true });
-        const test = path.join(candidate, ".write-test");
-        fs.writeFileSync(test, "ok");
-        fs.unlinkSync(test);
-        return candidate;
-      }
+      fs.mkdirSync(candidate, { recursive: true });
+      const test = path.join(candidate, ".write-test");
+      fs.writeFileSync(test, "ok");
+      fs.unlinkSync(test);
+      return candidate;
     } catch {
       /* try next */
     }
@@ -142,20 +136,23 @@ for (const name of fs.readdirSync(outDir)) {
   console.log(`   ${p}  (${(st.size / 1024 / 1024).toFixed(1)} MB)`);
 }
 
-// Mirror Setup copy to E: if F was used and E exists
+// Setup-only: copy bản Setup sang F:\FB-Page-Studio\Setup\ (1 chỗ lấy file)
 try {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const setupName = `FB-Page-Studio-Setup-v${pkg.version}.exe`;
   const setupSrc = path.join(outDir, setupName);
-  if (fs.existsSync(setupSrc) && /^[Ff]:/.test(outDir)) {
-    const eDir = "E:\\FB-Page-Studio\\dist-desktop-oauth";
-    fs.mkdirSync(eDir, { recursive: true });
-    const eDest = path.join(eDir, setupName);
-    fs.copyFileSync(setupSrc, eDest);
-    console.log(`\n📎 Copy sang E: ${eDest}`);
+  if (fs.existsSync(setupSrc)) {
+    const setupDir = "F:\\FB-Page-Studio\\Setup";
+    fs.mkdirSync(setupDir, { recursive: true });
+    const dest = path.join(setupDir, setupName);
+    fs.copyFileSync(setupSrc, dest);
+    const stable = path.join(setupDir, "FB-Page-Studio-Setup.exe");
+    fs.copyFileSync(setupSrc, stable);
+    console.log(`\n📎 Setup (lấy tại đây): ${dest}`);
+    console.log(`   Stable latest: ${stable}`);
   }
 } catch (e) {
-  console.warn("Mirror E skipped:", e.message);
+  console.warn("Copy Setup folder skipped:", e.message);
 }
 
 console.log("\nDone.\n");

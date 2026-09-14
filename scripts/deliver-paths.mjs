@@ -1,6 +1,6 @@
 /**
  * Deliverable packs live under "Tổng Hợp Tool/" for a clean project root.
- * Desktop build artifacts: prefer F:/ then E:/ (ổ C hay đầy).
+ * Build artifacts: CHỈ ổ F: (không còn mirror E:/C).
  */
 import fs from "fs";
 import path from "path";
@@ -23,33 +23,31 @@ export const adminDir = () => path.join(DELIVER_ROOT, "Admin-Quan-Ly");
 /** Một ổ gom mọi EXE/ZIP phiên bản cũ (không rải trong pack-*) */
 export const archiveVaultDir = () => path.join(DELIVER_ROOT, "Luu-Tru-Ban-Cu");
 
-/** Thư mục chứa Setup/Portable (F → E → project) */
+/** Thư mục xuất Setup — chỉ F: */
+export const DIST_DESKTOP_DEFAULT = "F:/FB-Page-Studio/dist-desktop-oauth";
+
+/** Thư mục lấy Setup nhanh (1 chỗ) */
+export const SETUP_HANDOFF_DIR = "F:/FB-Page-Studio/Setup";
+
 export function distDesktopDir() {
   if (process.env.FBPS_BUILD_OUT) {
     return path.resolve(process.env.FBPS_BUILD_OUT);
   }
-  const candidates = [
-    "F:/FB-Page-Studio/dist-desktop-oauth",
-    "E:/FB-Page-Studio/dist-desktop-oauth",
-    path.join(PROJECT_ROOT, "dist-desktop-oauth"),
-  ];
-  for (const c of candidates) {
-    try {
-      if (fs.existsSync(c)) return path.resolve(c);
-    } catch {
-      /* */
-    }
+  const preferred = path.resolve(DIST_DESKTOP_DEFAULT);
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    return preferred;
+  } catch {
+    return path.join(PROJECT_ROOT, "dist-desktop-oauth");
   }
-  // default preferred write target
-  return path.resolve("F:/FB-Page-Studio/dist-desktop-oauth");
 }
 
-/** Tìm file artifact theo tên (thử nhiều ổ) */
+/** Tìm file artifact theo tên (chỉ F: + project fallback) */
 export function findDistArtifact(...names) {
   const dirs = [
     process.env.FBPS_BUILD_OUT && path.resolve(process.env.FBPS_BUILD_OUT),
-    "F:/FB-Page-Studio/dist-desktop-oauth",
-    "E:/FB-Page-Studio/dist-desktop-oauth",
+    DIST_DESKTOP_DEFAULT,
+    SETUP_HANDOFF_DIR,
     path.join(PROJECT_ROOT, "dist-desktop-oauth"),
   ].filter(Boolean);
   for (const dir of dirs) {
