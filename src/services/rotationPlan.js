@@ -103,6 +103,9 @@ export const DEFAULT_ROTATION = {
   burst_gap_sec_max: 30,
   page_burst_gap_sec_min: 15,
   page_burst_gap_sec_max: 30,
+  /** Tắt dồn liền: khoảng cách random (phút) giữa các video cùng page trong 1 khung. 0 = rải đều unique mốc. */
+  same_page_video_gap_min_minutes: 0,
+  same_page_video_gap_max_minutes: 0,
   /**
    * fixed = post_type cố định (photo|video|text)
    * page_sequence = sequence từng page (post_type auto cũ)
@@ -369,6 +372,16 @@ export function normalizeSettings(s) {
     out.page_burst_gap_sec_min,
     300
   );
+  {
+    const gmin = Number(out.same_page_video_gap_min_minutes);
+    out.same_page_video_gap_min_minutes = clamp(Number.isFinite(gmin) ? gmin : 0, 0, 180);
+    const gmax = Number(out.same_page_video_gap_max_minutes);
+    out.same_page_video_gap_max_minutes = clamp(
+      Number.isFinite(gmax) ? gmax : out.same_page_video_gap_min_minutes,
+      out.same_page_video_gap_min_minutes,
+      180
+    );
+  }
   out.run_now_continuous = !!out.run_now_continuous;
   out.force_plan_day =
     out.force_plan_day && /^\d{4}-\d{2}-\d{2}$/.test(String(out.force_plan_day))
@@ -813,6 +826,9 @@ function windowRangeUtc(dayYmd, startHm, endHm, tz) {
   };
 }
 
+/** Chuẩn mới: rải ~40 page trong tối đa 2 giờ, kể cả khi khung textarea dài hơn (vd 22:50–12:30 qua đêm). */
+export const BURST_STAGGER_MAX_MS = 120 * 60 * 1000;
+
 function collectUniquePagesFromMatrix(matrix) {
   const out = [];
   const seen = new Set();
@@ -944,17 +960,20 @@ function enqueueBurstPage({
   wi,
   slots,
   orderRef,
+  postRound = null,
+  clustered = true,
 }) {
   for (let v = 0; v < burst; v++) {
     const when = new Date(startMs + v * burstGap);
     orderRef.n += 1;
+    const round = postRound != null ? postRound : v + 1;
     const plannedPostType = forceVideo
       ? "video"
-      : resolvePlannedPostType(settings, cfg, v);
+      : resolvePlannedPostType(settings, cfg, round - 1);
     slots.push({
       order: orderRef.n,
       immediate: when.getTime() <= nowMs + 8000,
-      post_round: v + 1,
+      post_round: round,
       page_index: v + 1,
       group_id: `win-${wi + 1}`,
       group_name: w.name,
@@ -968,9 +987,9 @@ function enqueueBurstPage({
       iso: when.toISOString(),
       local_label: formatLocal(when, settings.tz_offset_minutes),
       plan_day: day,
-      time_mode: "windows_split_burst",
+      time_mode: clustered ? "windows_split_burst" : "windows_spread",
       window_name: w.name,
-      burst: true,
+      burst: clustered && burst > 1,
     });
   }
 }
@@ -1059,35 +1078,123 @@ export function buildSplitWindowBurstSlots({
       ? nowMs + 8000 + wi * 60 * 1000
       : Math.max(nowMs + 8000, range.startMs);
     const end0 = forceNow
-      ? start0 + Math.max(group.length, 1) * 12 * 60 * 1000
+      ? start0 + BURST_STAGGER_MAX_MS
       : range.endMs - burstSpan - 3000;
     const n = group.length;
-    const step =
-      n <= 1 ? 0 : Math.max(45 * 1000, Math.floor((end0 - start0) / (n - 1)));
-
-    warnings.push(
-      `Khung «${w.name}» ${forceNow ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài, rải ~${Math.round(step / 60000)} phút/page (App xen kẽ).`
+    const rawSpan = Math.max(0, end0 - start0);
+    const staggerSpan = Math.min(rawSpan, BURST_STAGGER_MAX_MS);
+    const cluster = settings.burst_same_page === true;
+    const total = Math.max(1, n * burst);
+    const slotStep =
+      total <= 1
+        ? 0
+        : Math.max(20 * 1000, Math.floor(staggerSpan / Math.max(1, total - 1)));
+    const pageStep =
+      n <= 1 ? 0 : Math.max(45 * 1000, Math.floor(staggerSpan / Math.max(1, n - 1)));
+    const stepMin = Math.round((cluster ? pageStep : slotStep) / 60000);
+    const slotSec = Math.round(slotStep / 1000);
+    if (rawSpan > BURST_STAGGER_MAX_MS + 60 * 1000) {
+      warnings.push(
+        `Khung «${w.name}» ${w.start}–${w.end} dài ~${(rawSpan / 3600000).toFixed(1)} giờ. ` +
+          `Chỉ rải trong 2 giờ đầu. Muốn đúng 2 tiếng: 06:00–08:00 / 18:00–20:00.`
+      );
+    }
+    const vGapMin = clamp(Number(settings.same_page_video_gap_min_minutes) || 0, 0, 180);
+    const vGapMax = clamp(
+      Number(settings.same_page_video_gap_max_minutes) || vGapMin,
+      vGapMin,
+      180
     );
+    const useRandomVideoGap = !cluster && vGapMax > 0;
 
-    for (let i = 0; i < group.length; i++) {
-      const page = group[i];
-      const cfg = pageConfigs?.get(page.page_row_id);
-      const startMs = start0 + i * step;
-      enqueueBurstPage({
-        page,
-        cfg,
-        settings,
-        forceVideo,
-        startMs,
-        burst,
-        burstGap,
-        nowMs,
-        day,
-        w,
-        wi,
-        slots,
-        orderRef,
-      });
+    if (cluster) {
+      warnings.push(
+        `Khung «${w.name}» ${forceNow ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài dồn ≤30s, ~${stepMin} phút/page (App xen kẽ).`
+      );
+      for (let i = 0; i < group.length; i++) {
+        const page = group[i];
+        enqueueBurstPage({
+          page,
+          cfg: pageConfigs?.get(page.page_row_id),
+          settings,
+          forceVideo,
+          startMs: start0 + i * pageStep,
+          burst,
+          burstGap,
+          nowMs,
+          day,
+          w,
+          wi,
+          slots,
+          orderRef,
+          clustered: true,
+        });
+      }
+    } else if (useRandomVideoGap) {
+      const avgGapMs = ((vGapMin + vGapMax) / 2) * 60 * 1000;
+      const extraMs = Math.max(0, (burst - 1) * avgGapMs);
+      const pageSpan = Math.max(45 * 1000, staggerSpan - extraMs);
+      const pStep = n <= 1 ? 0 : pageSpan / Math.max(1, n - 1);
+      warnings.push(
+        `Khung «${w.name}» ${forceNow ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài, xen App ~${Math.round(pStep / 60000)} phút/page, ` +
+          `video cùng page random ${vGapMin}–${vGapMax} phút.`
+      );
+      for (let i = 0; i < group.length; i++) {
+        let t = start0 + i * pStep;
+        for (let r = 0; r < burst; r++) {
+          const at = Math.min(end0, Math.max(start0, t));
+          enqueueBurstPage({
+            page: group[i],
+            cfg: pageConfigs?.get(group[i].page_row_id),
+            settings,
+            forceVideo,
+            startMs: at,
+            burst: 1,
+            burstGap,
+            nowMs,
+            day,
+            w,
+            wi,
+            slots,
+            orderRef,
+            postRound: r + 1,
+            clustered: false,
+          });
+          if (r < burst - 1) {
+            t += randBetween(vGapMin, vGapMax) * 60 * 1000;
+          }
+        }
+      }
+    } else {
+      const samePageGapMin = n > 0 ? Math.round((n * slotStep) / 60000) : 0;
+      warnings.push(
+        `Khung «${w.name}» ${forceNow ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài = ${total} mốc, ` +
+          `rải ~${slotSec}s/mốc (lấp 2 giờ, không trùng giờ page), xen App. ` +
+          `2 bài cùng page cách ~${samePageGapMin} phút.`
+      );
+      // Round-major: hết vòng bài 1 mọi page (xen App) rồi mới vòng 2 → cùng page cách ~1/2 khung.
+      for (let r = 0; r < burst; r++) {
+        for (let i = 0; i < group.length; i++) {
+          const page = group[i];
+          enqueueBurstPage({
+            page,
+            cfg: pageConfigs?.get(page.page_row_id),
+            settings,
+            forceVideo,
+            startMs: start0 + (r * n + i) * slotStep,
+            burst: 1,
+            burstGap,
+            nowMs,
+            day,
+            w,
+            wi,
+            slots,
+            orderRef,
+            postRound: r + 1,
+            clustered: false,
+          });
+        }
+      }
     }
   }
 
@@ -1095,14 +1202,18 @@ export function buildSplitWindowBurstSlots({
   const numbered = slots.map((s, i) => ({ ...s, order: i + 1 }));
   const burstCount = Math.max(
     1,
-    ...windows.map((w) => Number(w.posts) || 1),
-    3
+    ...windows.map((w) => Number(w.posts) || 1)
+  );
+  const postsPerPageDay = windows.reduce(
+    (s, w) => s + clamp(Number(w.posts) || 1, 1, 12),
+    0
   );
   return {
     slots: numbered,
     planDay,
     warnings,
     burstCount,
+    postsPerPageDay,
     window_page_counts: windows.map((w, i) => ({
       name: w.name,
       start: w.start,
@@ -1616,7 +1727,7 @@ export function buildRunNowPlan(inputSettings = {}) {
   const quotaDay = planDay; // always follow planDay (may be shifted to tomorrow)
   let usedBurstPlan = false;
   let burstMeta = null;
-  if (useWindows && settings.burst_same_page === true) {
+  if (useWindows) {
     burstMeta = buildSplitWindowBurstSlots({
       settings,
       matrix,
@@ -1628,7 +1739,7 @@ export function buildRunNowPlan(inputSettings = {}) {
     for (const s of burstMeta.slots) slots.push(s);
     usedBurstPlan = true;
     planDay = burstMeta.planDay || planDay;
-    rounds = burstMeta.burstCount || rounds;
+    rounds = burstMeta.postsPerPageDay || burstMeta.burstCount || rounds;
     for (const w of burstMeta.warnings || []) warnings.push(w);
     const mediaHint =
       String(settings.media_pattern_mode || "") === "fixed"
@@ -1641,7 +1752,9 @@ export function buildRunNowPlan(inputSettings = {}) {
       .join(" · ");
     if (parts) {
       warnings.push(
-        `Burst theo khung (mỗi page ${rounds} bài liền · media: ${mediaHint}): ${parts}.`
+        settings.burst_same_page
+          ? `Dồn bài trong khung (mỗi page ${rounds} bài liền ≤30s · media: ${mediaHint}): ${parts}.`
+          : `Rải đều trong khung (mỗi page đủ số bài, mốc khác giờ · xen App · media: ${mediaHint}): ${parts}.`
       );
     }
   }

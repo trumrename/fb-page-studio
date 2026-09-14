@@ -374,6 +374,24 @@ check(
     rot.includes("buildSplitWindowBurstSlots")
 );
 check(
+  "Chuẩn mới caps page stagger to 2 hours even on overnight windows",
+  rot.includes("BURST_STAGGER_MAX_MS") &&
+    rot.includes("120 * 60 * 1000")
+);
+check(
+  "Chuẩn mới spread 2 videos across window without overlapping pages",
+  rot.includes("windows_spread") &&
+    rot.includes("rải ~${slotSec}s/mốc") &&
+    posting.includes("Dồn N bài liền")
+);
+check(
+  "Chuẩn mới random same-page video gap minutes",
+  rot.includes("same_page_video_gap_min_minutes") &&
+    rot.includes("useRandomVideoGap") &&
+    posting.includes("bulkStdVideoGapMin") &&
+    posting.includes("random trong khoảng")
+);
+check(
   "UI bulk schedule 4th mode Chuẩn mới Sáng/Tối",
   posting.includes("bulkModeStandard") &&
     posting.includes("standard_burst") &&

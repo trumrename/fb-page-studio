@@ -81,7 +81,10 @@ export async function connectFromUserToken(userToken, opts = {}) {
 
   let me;
   try {
-    me = await getMe(token, { appSecret: appSecretForProof });
+    me = await getMe(token, {
+      appSecret: appSecretForProof,
+      skipAppsecretProof: !!opts.skipAppsecretProof,
+    });
   } catch (e) {
     if (/appsecret_proof/i.test(e.message || "")) {
       throw new Error(
@@ -164,6 +167,7 @@ export async function connectFromUserToken(userToken, opts = {}) {
 
   const pages = await syncPagesForAccount(accountId, token, {
     appSecret: appSecretForProof,
+    skipAppsecretProof: !!opts.skipAppsecretProof,
   });
 
   // Connect xong: lấy follow + avatar ngay (page còn thiếu)
@@ -247,6 +251,7 @@ export async function importFromAccessToken(rawToken, opts = {}) {
   const graphOpts = {
     appSecret: String(app.appSecret || "").trim() || undefined,
     metaAppKey,
+    skipAppsecretProof: true,
   };
 
   const results = [];
@@ -264,6 +269,7 @@ export async function importFromAccessToken(rawToken, opts = {}) {
         metaAppKey,
         app,
         label,
+        skipAppsecretProof: true,
       });
       results.push({
         kind: "system_or_user",
@@ -272,6 +278,7 @@ export async function importFromAccessToken(rawToken, opts = {}) {
         fb_id: classified.me.id,
         account_id: connected.account?.id,
         page_count: connected.pages?.length || 0,
+        hint: connected.sync_summary?.hint || connected.account?.last_error || null,
         sync_summary: connected.sync_summary || null,
       });
     } else {
@@ -279,6 +286,7 @@ export async function importFromAccessToken(rawToken, opts = {}) {
         metaAppKey,
         app,
         label,
+        skipAppsecretProof: true,
       });
       results.push({
         kind: "page",
@@ -292,10 +300,20 @@ export async function importFromAccessToken(rawToken, opts = {}) {
   }
 
   const pageCount = results.reduce((n, r) => n + (r.page_count || 0), 0);
+  const hints = results.map((r) => r.hint).filter(Boolean);
+  const noSecret = !String(app.appSecret || "").trim();
+  if (pageCount === 0 && noSecret) {
+    hints.unshift(
+      "Máy này chưa có FB_APP_SECRET (gói Setup khách để trống). " +
+        "Token System User phải Generate từ đúng App — điền App ID + Secret của App đó ở Bước 1 (không nhầm App OAuth relay). " +
+        "Hoặc tắt Require App Secret Proof trên Meta App. Máy cũ đủ Page vì đã có secret khớp."
+    );
+  }
   return {
     ok: true,
     imported: results.length,
     page_count: pageCount,
+    hint: hints[0] || null,
     results,
   };
 }
@@ -325,6 +343,7 @@ async function importSystemUserToken(token, me, opts = {}) {
       app,
       upgradeLongLived: false,
       label,
+      skipAppsecretProof: true,
     });
   }
 
@@ -340,6 +359,7 @@ async function importSystemUserToken(token, me, opts = {}) {
       app,
       upgradeLongLived: false,
       label,
+      skipAppsecretProof: true,
     });
   }
 
@@ -572,6 +592,7 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
       appSecret,
       metaAppKey: metaKey,
       appId: row.meta_app_id || process.env.FB_APP_ID || config.facebook?.appId,
+      skipAppsecretProof: !!opts.skipAppsecretProof,
     });
   } catch (e) {
     db.prepare(

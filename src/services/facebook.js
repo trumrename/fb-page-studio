@@ -130,11 +130,16 @@ async function graphGet(path, accessToken, query = {}, opts = {}) {
     return res.json();
   };
 
-  let data = await tryOnce(true);
-  // Customer packs may have wrong/stale secret → invalid proof. Retry without proof
-  // when Meta does not require it (common for gói khách).
+  let data = opts.skipAppsecretProof ? await tryOnce(false) : await tryOnce(true);
+  // Sai secret (gói khách / máy mới) → bỏ proof. App bật Require proof → thử kèm secret.
   if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
     data = await tryOnce(false);
+  } else if (
+    data?.error &&
+    opts.skipAppsecretProof &&
+    /appsecret_proof/i.test(String(data.error.message || ""))
+  ) {
+    data = await tryOnce(true);
   }
   if (data.error) {
     const err = new Error(data.error.message || "Graph API error");
@@ -173,9 +178,15 @@ async function graphFetchAbsolute(absoluteUrl, accessToken, opts = {}) {
     return res.json();
   };
 
-  let data = await tryOnce(true);
+  let data = opts.skipAppsecretProof ? await tryOnce(false) : await tryOnce(true);
   if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
     data = await tryOnce(false);
+  } else if (
+    data?.error &&
+    opts.skipAppsecretProof &&
+    /appsecret_proof/i.test(String(data.error.message || ""))
+  ) {
+    data = await tryOnce(true);
   }
   if (data.error) {
     const err = new Error(data.error.message || "Graph API error");
@@ -219,7 +230,11 @@ export async function exchangeLongLivedUserToken(shortLivedToken, appCreds = nul
 
 /** Profile of the connected user / System User / Page (page token → Page node). */
 export async function getMe(userToken, opts = {}) {
-  const graphOpts = { appSecret: opts.appSecret, metaAppKey: opts.metaAppKey };
+  const graphOpts = {
+    appSecret: opts.appSecret,
+    metaAppKey: opts.metaAppKey,
+    skipAppsecretProof: !!opts.skipAppsecretProof,
+  };
   try {
     return await graphGet(
       "/me",
@@ -323,7 +338,11 @@ export async function getAllPages(userToken, opts = {}) {
   const onPage = typeof opts === "function" ? opts : opts.onPage;
   const appSecret = typeof opts === "object" && opts ? opts.appSecret : undefined;
   const metaAppKey = typeof opts === "object" && opts ? opts.metaAppKey : undefined;
-  const graphOpts = { appSecret, metaAppKey };
+  const graphOpts = {
+    appSecret,
+    metaAppKey,
+    skipAppsecretProof: !!opts.skipAppsecretProof,
+  };
   const byId = new Map();
   const meta = {
     me_accounts: 0,

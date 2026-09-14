@@ -1524,7 +1524,9 @@ router.post("/accounts/:id/sync", async (req, res) => {
     const token = getUserToken(id);
     if (!token) return res.status(400).json({ error: "No user token stored" });
 
-    const pages = await syncPagesForAccount(id, token);
+    const pages = await syncPagesForAccount(id, token, {
+      skipAppsecretProof: true,
+    });
     // Tự lấy follow + avatar cho page còn thiếu (profile only — không chờ bấm Sync details)
     let profile_enrich = null;
     try {

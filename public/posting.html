@@ -367,7 +367,7 @@
           <div class="panel-body">
             <div style="margin:0 0 .75rem;padding:.7rem .85rem;border-radius:12px;border:1px solid rgba(251,191,36,.45);background:rgba(251,191,36,.1);font-size:.86rem;line-height:1.5">
               <b>4 chế độ (chọn 1):</b><br/>
-              <b>④ Chuẩn mới</b> — Sáng 06:00–08:00 + Tối 18:00–20:00 · rải ~40 page / 2 giờ · mỗi page 3 video ≤30s · chọn <b>hẹn Facebook</b> hoặc treo tool<br/>
+              <b>④ Chuẩn mới</b> — Sáng 06:00–08:00 + Tối 18:00–20:00 · 40 page rải 2 giờ, xen App · mỗi page 2 video sáng + 2 tối (tắt «dồn liền» = không trùng giờ)<br/>
               <b>① Chỉ nhập giờ</b> — viết <code>09:00</code> / <code>19:00</code> mỗi dòng · hẹn Facebook<br/>
               <b>② Theo ngày</b> — Start at + số ngày + số bài/ngày · hẹn Facebook<br/>
               <b>③ Giờ tích cực</b> — giờ ưa thích từng page × số ngày · hẹn Facebook
@@ -385,7 +385,7 @@
                 <input type="radio" name="bulkModeRadio" id="bulkModeStandard" value="standard_burst" checked />
                 <span>
                   <b>④ Chuẩn mới · Sáng/Tối <span class="rec-badge">Khuyên dùng</span></b>
-                  <small>06:00–08:00 + 18:00–20:00 · rải 40 page / 2 giờ<br/>Mỗi page 3 video ≤30s · hẹn Facebook hoặc treo tool</small>
+                  <small>06:00–08:00 + 18:00–20:00 · 40 page / 2 giờ xen App<br/>2 video sáng + 2 tối / page · không trùng giờ</small>
                 </span>
               </label>
               <label class="bulk-mode-card">
@@ -820,7 +820,7 @@ full album:
                   </label>
                   <label class="sched-date-field">
                     <span>Sáng · số bài</span>
-                    <input type="number" id="bulkStdAmPosts" min="1" max="12" value="1" inputmode="numeric" />
+                    <input type="number" id="bulkStdAmPosts" min="1" max="12" value="2" inputmode="numeric" />
                   </label>
                 </div>
                 <div class="sched-extra-row" style="margin-top:.35rem">
@@ -834,7 +834,7 @@ full album:
                   </label>
                   <label class="sched-date-field">
                     <span>Tối · số bài</span>
-                    <input type="number" id="bulkStdPmPosts" min="1" max="12" value="1" inputmode="numeric" />
+                    <input type="number" id="bulkStdPmPosts" min="1" max="12" value="2" inputmode="numeric" />
                   </label>
                 </div>
                 <div class="sched-extra-row" style="margin-top:.35rem">
@@ -851,12 +851,26 @@ full album:
                   Khung (đồng bộ tự động từ ô trên — vẫn sửa tay được)
                   <span class="hint-inline">Tên | bắt đầu | kết thúc | số bài</span>
                 </label>
-                <textarea id="bulkStdWindows" rows="3" placeholder="Sáng | 06:00 | 08:00 | 1&#10;Tối | 18:00 | 20:00 | 1">Sáng | 06:00 | 08:00 | 1
-Tối | 18:00 | 20:00 | 1</textarea>
+                <textarea id="bulkStdWindows" rows="3" placeholder="Sáng | 06:00 | 08:00 | 2&#10;Tối | 18:00 | 20:00 | 2">Sáng | 06:00 | 08:00 | 2
+Tối | 18:00 | 20:00 | 2</textarea>
                 <label class="checks" style="display:block;margin-top:.55rem">
                   <input type="checkbox" id="bulkStdBurst" />
-                  Đăng liền trong khung (số bài = ô «số bài» / cột cuối, không ép 3)
+                  Dồn N bài liền ≤30s trên 1 page (số bài = ô Sáng/Tối · số bài)
                 </label>
+                <div class="sched-extra-row" id="bulkStdVideoGapRow" style="margin-top:.4rem">
+                  <label class="sched-date-field">
+                    <span>Cách video cùng page min (phút)</span>
+                    <input type="number" id="bulkStdVideoGapMin" min="0" max="180" value="0" inputmode="numeric"
+                      title="Tắt dồn liền. 0–0 = rải đều unique mốc trong 2 giờ. VD 15–25 = random 15 đến 25 phút giữa 2 video cùng page." />
+                  </label>
+                  <label class="sched-date-field">
+                    <span>max (phút) · random trong khoảng</span>
+                    <input type="number" id="bulkStdVideoGapMax" min="0" max="180" value="0" inputmode="numeric" />
+                  </label>
+                </div>
+                <p class="muted" style="margin:.25rem 0 .35rem;font-size:.76rem;line-height:1.4">
+                  Tick «Dồn liền» = 2 (hoặc N) video gần như cùng lúc. Bỏ tick + min/max &gt; 0 = từng video cách nhau random phút đó. 0–0 = rải đều lấp khung, không trùng giờ page.
+                </p>
                 <label class="checks" style="display:block">
                   <input type="checkbox" id="bulkStdSplit" />
                   Chỉ chia nửa page sáng / nửa tối (tắt = cả list chạy cả 2 khung)
@@ -1344,6 +1358,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkStdAmStart", "bulkStdAmEnd", "bulkStdAmPosts",
       "bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts",
       "bulkStdGapMin", "bulkStdGapMax",
+      "bulkStdVideoGapMin", "bulkStdVideoGapMax",
       "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdForceDay",
       "bulkStdWinAll", "bulkStdWinMorning", "bulkStdWinEvening",
       "bulkStdAppStrategy", "bulkStdDeliveryNow",
@@ -1764,6 +1779,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         syncBulkStdFieldsFromWindows();
         syncStandardDeliveryUi();
         syncStandardBurstFields({ fromBulk: true });
+        if (typeof syncBulkStdVideoGapEnabled === "function") syncBulkStdVideoGapEnabled();
         // Mở khóa khung Direct Local (tránh is-dim còn sót khi chuyển từ gap_chain)
         applyRotNowTimeExclusiveUi();
         syncRunNowMediaUi();
@@ -1790,6 +1806,13 @@ Tối | 18:00 | 21:30 | 2</textarea>
           mediaT === "video" || mediaT === "photo" || mediaT === "text" || mediaT === "story"
             ? mediaT
             : "auto/sequence";
+        const vMin = Number($("bulkStdVideoGapMin")?.value) || 0;
+        const vMax = Number($("bulkStdVideoGapMax")?.value) || vMin;
+        const gapLbl = burst
+          ? "dồn liền ≤30s"
+          : vMax > 0
+            ? `video cùng page random ${vMin}–${vMax} phút`
+            : "rải đều unique mốc";
         const capLbl = $("bulkUseCaption")?.checked !== false ? "có caption" : "không caption";
         const appLbl =
           ($("bulkStdAppStrategy")?.value || "interleave_apps") === "per_app" ? "hết AppA" : "xen App";
@@ -1801,7 +1824,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
               : "treo tool chờ khung";
         el.innerHTML =
           `<span class="ok">④ Chuẩn mới</span> · <b>${esc(wfLbl)}</b> · ` +
-          `bài/page=<b>${esc(postsHint)}</b> · loại=<b>${esc(mediaLbl)}</b> · <b>${esc(capLbl)}</b> · ${esc(appLbl)}${burst ? " · đăng liền" : ""} · ` +
+          `bài/page=<b>${esc(postsHint)}</b> · loại=<b>${esc(mediaLbl)}</b> · <b>${esc(capLbl)}</b> · ${esc(appLbl)} · ${esc(gapLbl)} · ` +
           `<b>${esc(delLbl)}</b>`;
         if (box) box.style.borderColor = "rgba(251,191,36,.65)";
         return;
@@ -3907,11 +3930,19 @@ Tối | 18:00 | 21:30 | 2</textarea>
         queueWorkspaceSave(200);
       });
     });
+    function syncBulkStdVideoGapEnabled() {
+      const on = !$("bulkStdBurst")?.checked;
+      ["bulkStdVideoGapMin", "bulkStdVideoGapMax"].forEach((id) => {
+        if ($(id)) $(id).disabled = !on;
+      });
+      if ($("bulkStdVideoGapRow")) $("bulkStdVideoGapRow").style.opacity = on ? "1" : "0.45";
+    }
     ["bulkStdWindows", "bulkStdBurst", "bulkStdSplit"].forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.addEventListener("change", () => {
         if (id === "bulkStdWindows") syncBulkStdFieldsFromWindows();
+        if (id === "bulkStdBurst") syncBulkStdVideoGapEnabled();
         syncStandardBurstFields({ fromBulk: true });
         syncBulkStandardWindowTotal();
         runNowPlanId = null;
@@ -3931,6 +3962,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkStdAmStart", "bulkStdAmEnd", "bulkStdAmPosts",
       "bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts",
       "bulkStdGapMin", "bulkStdGapMax",
+      "bulkStdVideoGapMin", "bulkStdVideoGapMax",
       "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdForceDay",
       "bulkStdWinAll", "bulkStdWinMorning", "bulkStdWinEvening",
       "bulkStdAppStrategy", "bulkStdDeliveryFb", "bulkStdDeliveryDirect", "bulkStdDeliveryNow",
@@ -4300,7 +4332,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       }
       return windows;
     }
-    const DEFAULT_STANDARD_WINDOWS = "Sáng | 06:00 | 08:00 | 1\nTối | 18:00 | 20:00 | 1";
+    const DEFAULT_STANDARD_WINDOWS = "Sáng | 06:00 | 08:00 | 2\nTối | 18:00 | 20:00 | 2";
 
     function ensureBulkStdPlanDayDefaults() {
       const now = new Date();
@@ -4406,10 +4438,34 @@ Tối | 18:00 | 21:30 | 2</textarea>
         const burst = !!$("bulkStdBurst")?.checked;
         const split = !!$("bulkStdSplit")?.checked;
         const postsLbl = windows.map((w) => `${w.posts || 1}`).join("+");
-        box.innerHTML = split
+        const hmToMin = (hm) => {
+          const m = String(hm || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+          if (!m) return null;
+          return Number(m[1]) * 60 + Number(m[2]);
+        };
+        const longWins = windows.filter((w) => {
+          const a = hmToMin(w.start);
+          const b0 = hmToMin(w.end);
+          if (a == null || b0 == null) return false;
+          const b = b0 <= a ? b0 + 1440 : b0;
+          return b - a > 150;
+        });
+        const longHint = longWins.length
+          ? `<div class="fail" style="margin-top:.35rem">⚠ Khung ${longWins
+              .map((w) => {
+                const a = hmToMin(w.start);
+                let b = hmToMin(w.end);
+                if (b <= a) b += 1440;
+                const h = ((b - a) / 60).toFixed(1);
+                return `«${esc(w.name)}» ${esc(w.start)}–${esc(w.end)} = ${h} giờ`;
+              })
+              .join(" · ")}. Tool rải ~40 page trong <b>2 giờ đầu</b> (~3 phút/page), không rải hết khung. Muốn đúng 2 tiếng: kết thúc = bắt đầu + 2h (vd 22:50 → 00:50, không phải 12:30).</div>`
+          : `<div class="muted" style="margin-top:.3rem;font-size:.78rem">~40 page / 2 giờ → cách ~3 phút/page. Burst 3 video trên 1 page vẫn ≤30s.</div>`;
+        box.innerHTML = (split
           ? `→ Nửa page sáng / nửa tối · mỗi page <b>${windows[0]?.posts || 1} bài</b>${burst ? " (đăng liền)" : ""}.`
           : `→ Cả list chạy <b>cả 2 khung</b> · bài/page=<b>${esc(postsLbl)}</b>${burst ? " · đăng liền" : ""} ` +
-            `(${windows.map((w) => esc(w.name) + " " + w.start + "–" + w.end + " ×" + (w.posts || 1)).join(" · ")}).`;
+            `(${windows.map((w) => esc(w.name) + " " + w.start + "–" + w.end + " ×" + (w.posts || 1)).join(" · ")}).`) +
+          longHint;
       } catch (e) {
         box.innerHTML = `<span class="fail">${esc(e.message)}</span>`;
       }
@@ -4779,6 +4835,14 @@ Tối | 18:00 | 21:30 | 2</textarea>
         windows,
         split_pages_across_windows: split,
         burst_same_page: burst,
+        same_page_video_gap_min_minutes: (() => {
+          const n = Number($("bulkStdVideoGapMin")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
+        same_page_video_gap_max_minutes: (() => {
+          const n = Number($("bulkStdVideoGapMax")?.value);
+          return Number.isFinite(n) ? Math.max(0, n) : 0;
+        })(),
         app_rotation_mode:
           $("bulkStdAppStrategy")?.value || $("rotAppStrategy")?.value || "interleave_apps",
         // Cho phép 0 (Number("")=0; không dùng || 15 vì 0 bị thay thành 15)

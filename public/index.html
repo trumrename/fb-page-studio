@@ -165,13 +165,14 @@
           <div class="panel-body">
             <p class="muted" style="margin-top:0">
               Đăng bài bằng <b>Page token / System User token</b> — Graph API, không add Page vào nick via.
-              Một token System User trong Business Manager kéo được mọi Page đã gán <b>CREATE_CONTENT</b> cho user đó.
+              <b>Không cần điền App ID/Secret</b> để Import (giống LoHa: dán token là lấy Page).
+              Bước 1 App chỉ dùng khi Connect OAuth via.
             </p>
             <ol class="muted" style="margin:.35rem 0 .85rem;padding-left:1.2rem;font-size:.84rem;line-height:1.55">
-              <li>Business Settings → <b>Users → System users</b> → tạo System User (Admin) nếu chưa có.</li>
-              <li>Assign assets → chọn Page (có thể chọn hàng loạt) → quyền <b>Content / Full control</b>.</li>
-              <li>Generate token trên <b>app Meta của bạn</b>: <code>pages_show_list</code>, <code>pages_manage_posts</code>, <code>pages_read_engagement</code>, <code>business_management</code>.</li>
-              <li>Dán token vào ô dưới → Import. Không dán token lấy từ web lạ.</li>
+              <li>Business Settings → <b>Users → System users</b> → tạo <b>Employee</b> (token đăng). Admin SU chỉ để gán quyền.</li>
+              <li>Assign assets → chọn Page (hàng loạt) → quyền <b>Content / Full control</b>.</li>
+              <li>Generate token: <code>pages_show_list</code>, <code>pages_manage_posts</code>, <code>pages_read_engagement</code>, <code>business_management</code>.</li>
+              <li>Dán token vào ô dưới → Import. Không dán token web lạ. Vẫn 0 Page → Chẩn đoán 0 Page.</li>
             </ol>
             <label style="display:block">Token (một System User, hoặc nhiều Page token — mỗi dòng một token)
               <textarea id="importTokenText" rows="4" placeholder="EAAB… hoặc dán nhiều token, mỗi dòng một cái" style="width:100%;margin-top:.35rem;font-family:ui-monospace,monospace;font-size:.8rem;resize:vertical" autocomplete="off"></textarea>
@@ -189,8 +190,8 @@
               <span id="importTokenStatus" class="muted" style="font-size:.84rem"></span>
             </div>
             <p class="muted" style="margin:.4rem 0 0;font-size:.78rem">
-              Chỉ đặt tên để phân biệt 2 token trên máy (vd. Token 1 / Token 2).
-              <b>Không</b> chọn App OAuth 1/2 — Graph luôn dùng App 1 đã lưu ở Bước 1.
+              Tên chỉ để phân biệt Token 1 / Token 2 trên máy.
+              Import gọi Graph bằng token, <b>không</b> bắt buộc App 1.
             </p>
           </div>
         </section>
@@ -1097,10 +1098,20 @@
         );
         status.textContent = `OK · ${r.imported} token · ${r.page_count} Page.`;
         $("importTokenText").value = "";
+        const hint =
+          r.hint ||
+          (r.results || []).map((x) => x.hint).find(Boolean) ||
+          "";
         alert(
           `Đã import ${r.imported} token, ${r.page_count} Page.\n` +
             (lines.join("\n") || "") +
-            "\n\nKhông cần add page vào via. Vào Publish để đăng."
+            (r.page_count === 0
+              ? "\n\n⚠ 0 Page trên máy mới thường do App ID/Secret không khớp app đã Generate token (gói khách để trống secret)."
+              : "") +
+            (hint ? `\n\n${hint}` : "") +
+            (r.page_count === 0
+              ? "\n\nChọn dòng account → Chẩn đoán 0 Page. Máy cũ đủ Page vì đã lưu đúng secret."
+              : "\n\nKhông cần add page vào via. Vào Publish để đăng.")
         );
         await refreshAll();
       } catch (e) {
