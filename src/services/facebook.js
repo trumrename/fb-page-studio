@@ -249,7 +249,7 @@ export async function getMe(userToken, opts = {}) {
 }
 
 const PAGE_LIST_FIELDS =
-  "id,name,category,access_token,tasks,followers_count,fan_count,link,picture.type(large)";
+  "id,name,category,access_token,tasks,permitted_tasks,followers_count,fan_count,link,picture.type(large)";
 
 /** Soft-paginate a Graph edge (BM partner/client pages etc.). */
 async function graphGetEdgeAllSoft(path, accessToken, query = {}, opts = {}, maxPages = 40) {
@@ -346,6 +346,7 @@ export async function getAllPages(userToken, opts = {}) {
   const byId = new Map();
   const meta = {
     me_accounts: 0,
+    su_assigned: 0,
     bm_businesses: 0,
     bm_owned: 0,
     bm_client: 0,
@@ -355,20 +356,59 @@ export async function getAllPages(userToken, opts = {}) {
     bm_errors: [],
   };
 
-  // --- 1) Classic page roles ---
-  let data = await graphGet(
-    "/me/accounts",
-    userToken,
-    { fields: PAGE_LIST_FIELDS, limit: 100 },
-    graphOpts
-  );
-  while (true) {
-    for (const p of data.data || []) {
-      if (mergePageIntoMap(byId, p, "me/accounts")) meta.me_accounts++;
+  async function ingestPaged(firstData, source, counterKey) {
+    let data = firstData;
+    while (data) {
+      for (const p of data.data || []) {
+        if (mergePageIntoMap(byId, p, source)) meta[counterKey] += 1;
+      }
+      const next = data.paging?.next;
+      if (!next) break;
+      try {
+        data = await graphFetchAbsolute(next, userToken, graphOpts);
+      } catch (e) {
+        meta.bm_errors.push(`${source} paging: ${e.message || e}`);
+        break;
+      }
     }
-    const next = data.paging?.next;
-    if (!next) break;
-    data = await graphFetchAbsolute(next, userToken, graphOpts);
+  }
+
+  // --- 1) Classic page roles — SOFT: token System User hay lỗi edge này (trước đây throw → 0 Page) ---
+  {
+    const accRes = await graphGetSoft(
+      "/me/accounts",
+      userToken,
+      { fields: PAGE_LIST_FIELDS, limit: 100 },
+      graphOpts
+    );
+    if (accRes.ok) {
+      await ingestPaged(accRes.data, "me/accounts", "me_accounts");
+    } else if (accRes.error) {
+      meta.bm_errors.push(`me/accounts: ${accRes.error}`);
+    }
+  }
+
+  // --- 1b) System User / business-scoped user: /me/assigned_pages + /{id}/assigned_pages ---
+  {
+    const meRes = await graphGetSoft("/me", userToken, { fields: "id,name" }, graphOpts);
+    const meId = meRes.ok ? String(meRes.data?.id || "") : "";
+    const assignedPaths = ["/me/assigned_pages"];
+    if (meId) assignedPaths.push(`/${meId}/assigned_pages`);
+    for (const path of assignedPaths) {
+      const assigned = await graphGetEdgeAllSoft(
+        path,
+        userToken,
+        { fields: PAGE_LIST_FIELDS, limit: 100 },
+        graphOpts
+      );
+      if (!assigned.ok && assigned.error) {
+        meta.bm_errors.push(`${path}: ${assigned.error}`);
+        continue;
+      }
+      for (const p of assigned.data || []) {
+        if (mergePageIntoMap(byId, p, "su:assigned_pages")) meta.su_assigned++;
+      }
+    }
   }
 
   // --- 2+3) Business Manager / partner client pages ---

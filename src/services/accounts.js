@@ -382,6 +382,19 @@ async function importSystemUserToken(token, me, opts = {}) {
     (slot && slot.name) ||
     `${me.name || "System User"} · token ${slotCount + 1}`;
 
+  const finishExtra = async (accountId) => {
+    const pages = await syncPagesForAccount(accountId, token, {
+      appSecret: String(app.appSecret || "").trim() || undefined,
+      skipAppsecretProof: true,
+    });
+    return {
+      extra_slot: true,
+      account: getAccountPublic(accountId),
+      pages: listPages({ accountId, limit: 5000 }),
+      sync_summary: pages.sync_summary || null,
+    };
+  };
+
   if (slot) {
     db.prepare(
       `UPDATE fb_accounts SET
@@ -389,11 +402,7 @@ async function importSystemUserToken(token, me, opts = {}) {
         status = 'active', last_error = NULL, updated_at = datetime('now')
        WHERE id = ?`
     ).run(slotName, picture, encryptToken(token), slot.id);
-    return {
-      extra_slot: true,
-      account: getAccountPublic(slot.id),
-      pages: listPages({ accountId: slot.id, limit: 5000 }),
-    };
+    return finishExtra(slot.id);
   }
 
   const n = db
@@ -417,11 +426,7 @@ async function importSystemUserToken(token, me, opts = {}) {
       metaAppKey,
       app.appId || null
     );
-  return {
-    extra_slot: true,
-    account: getAccountPublic(info.lastInsertRowid),
-    pages: [],
-  };
+  return finishExtra(info.lastInsertRowid);
 }
 
 function getOrCreatePageTokenImportAccount(metaAppKey, appId) {
@@ -732,7 +737,7 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
       const granularN = Number(diag?.page_target_ids?.length || graphMeta?.granular_page_ids || 0);
       const parts = [];
       parts.push(
-        "Graph không trả Page nào (me/accounts + BM + page đã chọn lúc login)."
+        "Graph không trả Page nào (me/accounts + assigned_pages System User + BM)."
       );
       if (diag && !diag.me_ok) {
         parts.push(
@@ -759,9 +764,8 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
         );
       } else {
         parts.push(
-          "Không thấy Page nào trong token. Kiểm tra: (1) Meta App Development → thêm nick vào Roles (Admin/Developer/Tester) hoặc bật App Live + Advanced Access; " +
-            "(2) Share đối tác Full ≠ quyền đăng API — gán Page CREATE_CONTENT cho nick; " +
-            "(3) Connect lại, bấm Edit access, chọn đủ Page, không bỏ quyền."
+          "Không thấy Page trên token System User. Kiểm tra: (1) BM → System users → Assign assets → Page → Content; " +
+            "(2) Generate token có pages_show_list; (3) App Live + Advanced Access pages_show_list nếu list > vài Page (Standard hay chỉ ~vài Page)."
         );
       }
       if (declined) parts.push(`Quyền bị từ chối: ${declined}.`);
@@ -818,6 +822,7 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
     graph: graphMeta
       ? {
           me_accounts: meAcc,
+          su_assigned: Number(graphMeta.su_assigned || 0),
           bm_businesses: bmBiz,
           bm_owned: bmOwned,
           bm_client: bmClient,
