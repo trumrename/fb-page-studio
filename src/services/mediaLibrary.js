@@ -901,6 +901,49 @@ export function pickLinkByMediaOrdinal(rawLines, mediaPathOrName) {
         slug: stemKey,
       };
     }
+
+    // 4) Số đầu DÒNG list: "9. https://dailyscope…/9Zvzpa" (URL không có số sạch trong path)
+    const byLine = entries.filter(
+      (e) => e.lineOrdinal === mediaOrd && (e.pathNumber == null || e.pathNumber === mediaOrd)
+    );
+    if (byLine.length === 1) {
+      const e = byLine[0];
+      const idx = urls.findIndex((u) => String(u).trim() === String(e.url).trim());
+      return {
+        url: e.url,
+        ordinal: mediaOrd,
+        used_link_index: idx >= 0 ? idx : null,
+        matched: true,
+        reason: "line_ordinal",
+        slug: e.slug,
+      };
+    }
+    if (byLine.length > 1) {
+      // Nhiều dòng cùng số — lấy dòng đầu (ổn định)
+      const e = byLine[0];
+      const idx = urls.findIndex((u) => String(u).trim() === String(e.url).trim());
+      return {
+        url: e.url,
+        ordinal: mediaOrd,
+        used_link_index: idx >= 0 ? idx : null,
+        matched: true,
+        reason: "line_ordinal_first",
+        slug: e.slug,
+      };
+    }
+    // map từ buildOrdinalLinkMap (lineOrdinal hoặc pathNumber)
+    if (map.has(mediaOrd)) {
+      const url = map.get(mediaOrd);
+      const idx = urls.findIndex((u) => String(u).trim() === String(url).trim());
+      return {
+        url,
+        ordinal: mediaOrd,
+        used_link_index: idx >= 0 ? idx : null,
+        matched: true,
+        reason: "ordinal_map",
+        slug: stemKey,
+      };
+    }
   }
 
   return {
@@ -910,6 +953,59 @@ export function pickLinkByMediaOrdinal(rawLines, mediaPathOrName) {
     matched: false,
     reason: "no_slug_or_number_match",
     slug: stemKey,
+  };
+}
+
+/**
+ * Parse dòng câu kèm: "9. Critics …" hoặc "9. Critics … https://…"
+ * @returns {{ ordinal: number|null, text: string, url: string, raw: string }}
+ */
+export function parseNumberedCommentTemplate(line) {
+  const raw = String(line || "").trim();
+  if (!raw) return { ordinal: null, text: "", url: "", raw: "" };
+  const ord = extractLeadingNumber(raw);
+  const urlMatch = raw.match(/(https?:\/\/\S+)/i);
+  const url = urlMatch ? urlMatch[1].replace(/[.,;:!?)]+$/, "") : "";
+  let text = raw;
+  if (url) text = text.replace(urlMatch[0], "").trim();
+  // Bỏ tiền tố số "9." / "9)" khi gửi comment (giữ câu sạch)
+  text = text.replace(/^\s*0*\d{1,4}\s*[.\)\-:\]]\s*/, "").trim();
+  return { ordinal: ord, text: text || raw, url, raw };
+}
+
+/**
+ * Chọn câu kèm theo số media (giống link).
+ */
+export function pickCommentTemplateByMediaOrdinal(templates, mediaPathOrName) {
+  const list = normalizeLineList(templates);
+  const mediaOrd = extractOrdinalFromName(mediaPathOrName);
+  if (mediaOrd == null || !list.length) {
+    return { template: "", text: "", url: "", ordinal: mediaOrd, matched: false, reason: "no_ordinal_or_empty" };
+  }
+  for (const line of list) {
+    const parsed = parseNumberedCommentTemplate(line);
+    if (parsed.ordinal === mediaOrd) {
+      return {
+        template: line,
+        text: parsed.text,
+        url: parsed.url,
+        ordinal: mediaOrd,
+        matched: true,
+        reason: "template_ordinal",
+      };
+    }
+  }
+  // Fallback index 0-based (ord-1) nếu không có dòng đánh số
+  const idx = Math.min(Math.max(mediaOrd - 1, 0), list.length - 1);
+  const line = list[idx];
+  const parsed = parseNumberedCommentTemplate(line);
+  return {
+    template: line,
+    text: parsed.text || line,
+    url: parsed.url,
+    ordinal: mediaOrd,
+    matched: false,
+    reason: "template_index_fallback",
   };
 }
 
@@ -1010,29 +1106,34 @@ export function assignCommentForPost(cfg = {}) {
   }
 
   let tpl = "";
+  let tplText = ""; // câu sạch (đã bỏ "9." và URL nếu có trên cùng dòng)
+  let tplEmbeddedUrl = "";
   let tplNext = Number(ll0.comment_tpl_next) || 0;
   if (templates.length) {
-    // Templates: match_media → sequential by same ordinal when possible, else random
+    // Templates: match_media → khớp số đầu câu kèm với số media (9. Critics… ↔ 9-video.mp4)
     if (mode === "match_media") {
       const mediaRef = cfg.media_path || cfg.media_name || "";
-      const ord = extractOrdinalFromName(mediaRef);
-      if (ord != null && templates.length) {
-        const idx = Math.min(Math.max(ord - 1, 0), templates.length - 1);
-        // Prefer template that starts with same number if present
-        const numbered = templates.findIndex((t) => {
-          const o = extractOrdinalFromName(String(t).replace(/\s+/g, " "));
-          return o === ord;
-        });
-        tpl = templates[numbered >= 0 ? numbered : idx];
+      const pickedTpl = pickCommentTemplateByMediaOrdinal(templates, mediaRef);
+      if (pickedTpl.template) {
+        tpl = pickedTpl.template;
+        tplText = pickedTpl.text || pickedTpl.template;
+        tplEmbeddedUrl = pickedTpl.url || "";
         tplNext = tplNext + 1;
       } else {
         const p = pickFromList(templates, "random", tplNext);
         tpl = p.item;
+        const parsed = parseNumberedCommentTemplate(tpl);
+        tplText = parsed.text || tpl;
+        tplEmbeddedUrl = parsed.url || "";
         tplNext = p.nextIndex;
       }
     } else {
       const p = pickFromList(templates, mode === "sequential" ? "sequential" : "random", tplNext);
       tpl = p.item;
+      const parsed = parseNumberedCommentTemplate(tpl);
+      // random/sequential: giữ nguyên câu (kể cả số) trừ khi có URL nhúng
+      tplText = parsed.url ? parsed.text : tpl;
+      tplEmbeddedUrl = parsed.url || "";
       tplNext = p.nextIndex;
     }
   }
@@ -1042,7 +1143,15 @@ export function assignCommentForPost(cfg = {}) {
   let usedLinkIndex = null;
   let matchMeta = null;
   let siteSkipReason = null;
-  if (links.length || rawLinkLines.length) {
+  // URL nhúng trong câu kèm (cùng dòng) — ưu tiên nếu site còn slot
+  if (tplEmbeddedUrl && linkSiteOk(tplEmbeddedUrl)) {
+    link = tplEmbeddedUrl;
+    matchMeta = {
+      url: link,
+      reason: "template_embedded_url",
+      ordinal: extractOrdinalFromName(cfg.media_path || cfg.media_name || ""),
+    };
+  } else if (links.length || rawLinkLines.length) {
     if (mode === "match_media") {
       const mediaRef = cfg.media_path || cfg.media_name || "";
       const picked = pickLinkByMediaOrdinal(rawLinkLines.length ? rawLinkLines : links, mediaRef);
@@ -1103,10 +1212,12 @@ export function assignCommentForPost(cfg = {}) {
   };
 
   let text = "";
-  if (tpl) {
+  // match_media: dùng câu đã bỏ "9." (+ URL nhúng nếu có) — tplText
+  const bodyTpl = (tplText || tpl || "").trim();
+  if (bodyTpl) {
     const hasPh =
-      /\{see_more\}|\{full_album\}|\{link\}|\{link:[a-zA-Z0-9_]+\}/.test(tpl);
-    text = tpl
+      /\{see_more\}|\{full_album\}|\{link\}|\{link:[a-zA-Z0-9_]+\}/.test(bodyTpl);
+    text = bodyTpl
       .replace(/\{link:([a-zA-Z0-9_]+)\}/g, (_, key) => pickKey(key) || link || "")
       .replace(/\{see_more\}/g, () => pickKey("see_more") || link || "")
       .replace(/\{full_album\}/g, () => pickKey("full_album") || link || "")

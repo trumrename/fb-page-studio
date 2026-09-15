@@ -609,7 +609,7 @@ see more :
                   không khớp → lấy link khác còn slot (tối đa 10 page/site). Không để comment trống URL.
                   <b>Phải bấm «Áp dụng»</b> sau khi dán list.
                 </p>
-                <label for="bulkCommentTemplates"><b>Câu kèm</b> (mỗi dòng 1 câu — random mỗi comment · <b>không cần</b> ghi <code>{link}</code>)</label>
+                <label for="bulkCommentTemplates"><b>Câu kèm</b> (mỗi dòng 1 câu · mode «Theo tên media» = số đầu khớp link/media, vd <code>9. Critics…</code>)</label>
                 <textarea
                   id="bulkCommentTemplates"
                   rows="5"
@@ -3260,8 +3260,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
             )}" title="Chỉ dùng khi tick anti ở trên. Tắt anti = 0 (không giới hạn)." />
           </div>
         </div>
-        <label><b>Câu kèm</b> (tuỳ chọn) — mỗi dòng 1 câu, random mỗi comment · <b>không cần</b> <code>{link}</code></label>
-        <textarea id="comment_templates" rows="4" placeholder="see more :&#10;full album:&#10;xem full:">${esc(tpls)}</textarea>
+        <label><b>Câu kèm</b> (tuỳ chọn) — mỗi dòng 1 câu. Mode «Theo tên media»: đánh số khớp link, vd <code>9. Critics who doubted…</code> (có thể kèm URL cùng dòng)</label>
+        <textarea id="comment_templates" rows="4" placeholder="9. Critics who doubted the strategy fell into sudden silence.&#10;1. see more :&#10;2. full album:">${esc(tpls)}</textarea>
         <p class="muted" style="margin:.2rem 0 .35rem;font-size:.76rem;line-height:1.4">
           Dán kiểu <code>see more :</code> / <code>full album:</code> — tool tự thêm link xuống dòng.
           <b>Trống</b> = comment chỉ link từ kho.
