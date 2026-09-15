@@ -439,6 +439,34 @@
               <b>Dùng caption</b> từ kho — <b>bỏ tick</b> = ảnh/video đăng <b>không caption</b> (không chặn thiếu/trùng caption). Bài text vẫn cần caption.
             </label>
 
+            <div class="panel section-gap" style="margin-top:.6rem;border-color:rgba(251,191,36,.35)">
+              <h2 class="panel-hd" style="font-size:.9rem">Gắn thẻ @[ID] — caption / comment</h2>
+              <div class="panel-body">
+                <label class="checks" style="display:block;margin-bottom:.4rem">
+                  <input type="checkbox" id="bulkMentionEnabled" />
+                  <b>Bật gắn thẻ</b> cho page đã tick (chèn đầu chữ)
+                </label>
+                <label>Danh sách ID (mỗi dòng 1 Page ID hoặc PSID)</label>
+                <textarea id="bulkMentionIds" rows="3" placeholder="1000444… | Fanpage A&#10;1000555…"></textarea>
+                <div class="row2" style="margin-top:.4rem">
+                  <div>
+                    <label>Gắn vào</label>
+                    <select id="bulkMentionTarget">
+                      <option value="both" selected>Caption + Comment</option>
+                      <option value="caption">Chỉ caption</option>
+                      <option value="comment">Chỉ comment</option>
+                    </select>
+                  </div>
+                  <div style="align-self:end">
+                    <button type="button" class="btn-ok btn-sm" id="btnBulkApplyMention">Áp dụng gắn thẻ</button>
+                    <button type="button" class="btn-ghost btn-sm" id="btnBulkMentionOff">Tắt gắn thẻ</button>
+                  </div>
+                </div>
+                <p class="muted" style="margin:.4rem 0 0;font-size:.74rem">Cú pháp trong caption: <code>@[ID]</code> hoặc <code>{tag}</code>. Meta hạn chế mention tùy ý.</p>
+                <span id="bulkMentionStatus" class="muted" style="font-size:.8rem"></span>
+              </div>
+            </div>
+
             <div class="panel section-gap" style="margin-top:.6rem">
               <h2 class="panel-hd" style="font-size:.9rem">Kho ảnh / caption cho các page đã tick</h2>
               <div class="panel-body">
@@ -467,6 +495,17 @@
                       <button type="button" class="btn-ghost btn-sm" id="btnBulkPickCaptions">Chọn</button>
                     </div>
                   </div>
+                </div>
+                <div style="margin-top:.55rem;padding:.55rem .7rem;border:1px solid rgba(96,165,250,.35);border-radius:10px">
+                  <label style="font-weight:700;display:block;margin-bottom:.35rem">Cách lấy media trong kho</label>
+                  <label class="checks" style="display:block">
+                    <input type="radio" name="bulkMediaReuse" id="bulkMediaReuseOnce" value="once" checked />
+                    <b>Random file chưa đăng</b> — mỗi bài 1 file, xong <b>chuyển sang posted</b> (mặc định)
+                  </label>
+                  <label class="checks" style="display:block">
+                    <input type="radio" name="bulkMediaReuse" id="bulkMediaReuseAll" value="all_pages" />
+                    <b>1 video/ảnh cho mọi page</b> — random 1 file lúc bắt đầu job, đăng full list, <b>giữ trong kho</b> (không chuyển posted)
+                  </label>
                 </div>
                 <div class="actions" style="margin-top:.4rem">
                   <button type="button" class="btn-ok btn-sm" id="btnBulkApplyFolders">Áp dụng 3 kho cho page đã tick</button>
@@ -803,11 +842,19 @@ full album:
                       <span>Năm</span>
                       <input type="number" id="bulkStdYear" class="sched-year" min="2024" max="2100" inputmode="numeric" />
                     </label>
+                    <label class="sched-date-field">
+                      <span>Số ngày hẹn</span>
+                      <input type="number" id="bulkStdDays" min="1" max="30" value="1" inputmode="numeric"
+                        title="Hẹn Facebook: lặp khung Sáng/Tối mỗi ngày. VD 7 = 7 ngày. Meta tối đa ~30 ngày tới." />
+                    </label>
                     <label class="checks" style="align-self:end;margin:0 0 .35rem">
                       <input type="checkbox" id="bulkStdForceDay" />
                       Ép đúng ngày này
                     </label>
                   </div>
+                  <p class="muted" style="margin:.35rem 0 0;font-size:.76rem;line-height:1.4">
+                    Số ngày hẹn = lặp Sáng+Tối mỗi ngày (vd 7 ngày × 2 khung × 2 bài/page). Không mất mode ② — ④ giờ cũng có ô này.
+                  </p>
                 </div>
                 <div class="sched-extra-row" style="margin-top:.55rem">
                   <label class="sched-date-field">
@@ -1354,14 +1401,16 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkCommentWhenImmediate", "bulkCommentWhenPublish",
       "bulkCommentDelayMin", "bulkCommentMinLikes",
       "bulkCommentSiteCapEnabled", "bulkCommentMaxPagesPerSite",
+      "bulkMentionEnabled", "bulkMentionIds", "bulkMentionTarget",
       "bulkStdWindows", "bulkStdBurst", "bulkStdSplit", "bulkStdDelivery",
       "bulkStdAmStart", "bulkStdAmEnd", "bulkStdAmPosts",
       "bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts",
       "bulkStdGapMin", "bulkStdGapMax",
       "bulkStdVideoGapMin", "bulkStdVideoGapMax",
-      "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdForceDay",
+      "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdDays", "bulkStdForceDay",
       "bulkStdWinAll", "bulkStdWinMorning", "bulkStdWinEvening",
       "bulkStdAppStrategy", "bulkStdDeliveryNow",
+      "bulkMediaReuseOnce", "bulkMediaReuseAll",
     ];
     const rotationWorkspaceControlIds = [
       "rotMode", "rotDays", "rotPostType", "rotAppStrategy", "rotNowPerDay",
@@ -1824,7 +1873,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
               : "treo tool chờ khung";
         el.innerHTML =
           `<span class="ok">④ Chuẩn mới</span> · <b>${esc(wfLbl)}</b> · ` +
-          `bài/page=<b>${esc(postsHint)}</b> · loại=<b>${esc(mediaLbl)}</b> · <b>${esc(capLbl)}</b> · ${esc(appLbl)} · ${esc(gapLbl)} · ` +
+          `bài/page=<b>${esc(postsHint)}</b> · <b>${esc($("bulkStdDays")?.value || "1")} ngày</b> · loại=<b>${esc(mediaLbl)}</b> · <b>${esc(capLbl)}</b> · ${esc(appLbl)} · ${esc(gapLbl)} · ` +
           `<b>${esc(delLbl)}</b>`;
         if (box) box.style.borderColor = "rgba(251,191,36,.65)";
         return;
@@ -2993,6 +3042,58 @@ Tối | 18:00 | 21:30 | 2</textarea>
         </p>
         <label>Captions inline (tiêu đề / nội dung bài — mỗi dòng 1 caption)</label>
         <textarea id="captions">${esc(caps)}</textarea>
+        <div style="margin:.55rem 0;padding:.65rem .75rem;border:1px solid rgba(251,191,36,.4);border-radius:12px;background:rgba(251,191,36,.08)">
+          <label class="checks" style="display:flex;align-items:flex-start;gap:.45rem;margin:0 0 .4rem">
+            <input type="checkbox" id="mention_enabled" ${
+              c.link_lists?.mention_enabled == 1 ||
+              c.link_lists?.mention_enabled === true ||
+              String(c.link_lists?.mention_enabled || "") === "1" ||
+              (c.link_lists?.mention_ids && String(c.link_lists.mention_ids).trim())
+                ? "checked"
+                : ""
+            } />
+            <span><b>Gắn thẻ (mention)</b> Fanpage / tài khoản theo ID — chèn <code>@[ID]</code> vào <b>đầu</b> caption hoặc comment</span>
+          </label>
+          <p class="muted" style="margin:0 0 .4rem;font-size:.74rem;line-height:1.4">
+            Mỗi dòng 1 ID (Page ID hoặc PSID). Có thể ghi <code>123456789 | Tên</code>.<br/>
+            Trong caption/comment có thể viết sẵn <code>@[123]</code> hoặc placeholder <code>{tag}</code>.<br/>
+            <b>Giới hạn FB:</b> mention Page khác cần App Review «Page Mentioning»; mention người thường chỉ khi họ đã tương tác Page.
+          </p>
+          <label>Danh sách ID gắn thẻ</label>
+          <textarea id="mention_ids" rows="3" placeholder="1000444… | Fanpage A&#10;1000555… | Fanpage B">${esc(
+            c.link_lists?.mention_ids || ""
+          )}</textarea>
+          <div class="row2" style="margin-top:.4rem;gap:.5rem">
+            <div>
+              <label>Gắn vào</label>
+              <select id="mention_target">
+                <option value="both" ${
+                  (c.link_lists?.mention_target || "both") === "both" ? "selected" : ""
+                }>Caption + Comment</option>
+                <option value="caption" ${
+                  c.link_lists?.mention_target === "caption" ? "selected" : ""
+                }>Chỉ caption / tiêu đề bài</option>
+                <option value="comment" ${
+                  c.link_lists?.mention_target === "comment" ? "selected" : ""
+                }>Chỉ comment</option>
+              </select>
+            </div>
+            <div>
+              <label>Vị trí khi không có {tag}</label>
+              <select id="mention_position">
+                <option value="prefix" ${
+                  (c.link_lists?.mention_position || "prefix") === "prefix" ? "selected" : ""
+                }>Đầu chữ (mặc định)</option>
+                <option value="suffix" ${
+                  c.link_lists?.mention_position === "suffix" ? "selected" : ""
+                }>Cuối chữ</option>
+                <option value="placeholder_only" ${
+                  c.link_lists?.mention_position === "placeholder_only" ? "selected" : ""
+                }>Chỉ khi có {tag} / @[ID]</option>
+              </select>
+            </div>
+          </div>
+        </div>
         <div style="margin:.55rem 0;padding:.65rem .75rem;border:1px solid rgba(125,211,252,.28);border-radius:12px;background:rgba(0,0,0,.18)">
           <label class="checks" style="display:flex;align-items:flex-start;gap:.45rem;margin:0 0 .45rem">
             <input type="checkbox" id="caption_lead_enabled" ${
@@ -3296,6 +3397,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
       }
       const videoTitleOn = !!$("video_title_enabled")?.checked;
       const useCaption = $("use_caption")?.checked !== false;
+      const mentionOn = !!$("mention_enabled")?.checked;
+      const mentionIds = ($("mention_ids")?.value || "").trim();
       return {
         enabled: $("enabled").checked ? 1 : 0,
         comment_enabled: $("comment_enabled").checked ? 1 : 0,
@@ -3310,6 +3413,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
         captions_folder: $("captions_folder").value.trim(),
         captions: $("captions").value,
         use_caption: useCaption,
+        mention_enabled: mentionOn,
+        mention_ids: mentionIds,
+        mention_target: $("mention_target")?.value || "both",
+        mention_position: $("mention_position")?.value || "prefix",
         comment_templates: $("comment_templates")?.value || "",
         link_lists: {
           comment_links: linkLines,
@@ -3335,6 +3442,10 @@ Tối | 18:00 | 21:30 | 2</textarea>
           video_title_enabled: videoTitleOn ? 1 : 0,
           video_titles_path: ($("video_titles_path")?.value || "").trim(),
           use_caption: useCaption,
+          mention_enabled: mentionOn ? 1 : 0,
+          mention_ids: mentionIds,
+          mention_target: $("mention_target")?.value || "both",
+          mention_position: $("mention_position")?.value || "prefix",
         },
       };
     }
@@ -3490,6 +3601,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         mode,
         post_type: $("bulkPostType").value,
         use_caption: $("bulkUseCaption")?.checked !== false,
+        media_reuse: $("bulkMediaReuseAll")?.checked ? "all_pages" : "once",
         tz_offset_minutes: Number($("bulkTz").value) || 420,
         dry_run: !!dryRun,
         ignore_page_quota: $("bulkIgnoreQuota")?.checked || false,
@@ -3963,7 +4075,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkStdPmStart", "bulkStdPmEnd", "bulkStdPmPosts",
       "bulkStdGapMin", "bulkStdGapMax",
       "bulkStdVideoGapMin", "bulkStdVideoGapMax",
-      "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdForceDay",
+      "bulkStdDay", "bulkStdMonth", "bulkStdYear", "bulkStdDays", "bulkStdForceDay",
       "bulkStdWinAll", "bulkStdWinMorning", "bulkStdWinEvening",
       "bulkStdAppStrategy", "bulkStdDeliveryFb", "bulkStdDeliveryDirect", "bulkStdDeliveryNow",
     ].forEach((id) => {
@@ -4823,6 +4935,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
       return {
         posts_per_page_per_day:
           timeMode === "windows" && windowPostsSum > 0 ? windowPostsSum : perDayInput,
+        days_ahead: Math.min(30, Math.max(1, Number($("bulkStdDays")?.value || $("rotDays")?.value) || 1)),
+        media_reuse: $("bulkMediaReuseAll")?.checked ? "all_pages" : "once",
         post_type: postType,
         page_target_mode: target,
         run_now_time_mode: timeMode,
@@ -5779,6 +5893,62 @@ Tối | 18:00 | 21:30 | 2</textarea>
         applyBulkCommentToSelected({ enabled: false });
       };
     }
+
+    async function applyBulkMentionToSelected({ enabled }) {
+      const ids = selectedPageIds();
+      if (!ids.length) return flash("Tick ít nhất một Page", false);
+      const mentionIds = ($("bulkMentionIds")?.value || "").trim();
+      if (enabled && !mentionIds) {
+        return flash("Cần danh sách ID gắn thẻ (mỗi dòng 1 Page ID / PSID)", false);
+      }
+      const config = {
+        mention_enabled: enabled ? 1 : 0,
+        mention_ids: enabled ? mentionIds : "",
+        mention_target: $("bulkMentionTarget")?.value || "both",
+        mention_position: "prefix",
+        link_lists: {
+          mention_enabled: enabled ? 1 : 0,
+          mention_ids: enabled ? mentionIds : "",
+          mention_target: $("bulkMentionTarget")?.value || "both",
+          mention_position: "prefix",
+        },
+      };
+      try {
+        const r = await api("/api/posting/config-bulk", {
+          method: "PUT",
+          body: JSON.stringify({ page_row_ids: ids, config }),
+        });
+        const st = $("bulkMentionStatus");
+        if (st) {
+          st.innerHTML = enabled
+            ? `<span class="ok">Đã bật gắn thẻ @[ID] cho <b>${r.updated}</b> Page (đầu caption/comment).</span>`
+            : `<span class="ok">Đã tắt gắn thẻ trên <b>${r.updated}</b> Page.</span>`;
+        }
+        flash(
+          enabled
+            ? `Đã áp gắn thẻ · ${r.updated} Page · ${$("bulkMentionTarget")?.value || "both"}`
+            : `Đã tắt gắn thẻ · ${r.updated} Page`,
+          true
+        );
+        queueWorkspaceSave(100);
+        if (selectedId && ids.includes(Number(selectedId))) {
+          try {
+            await loadConfig(selectedId);
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch (e) {
+        flash(e.message, false);
+      }
+    }
+    $("btnBulkApplyMention")?.addEventListener("click", () =>
+      applyBulkMentionToSelected({ enabled: !!$("bulkMentionEnabled")?.checked })
+    );
+    $("btnBulkMentionOff")?.addEventListener("click", () => {
+      if ($("bulkMentionEnabled")) $("bulkMentionEnabled").checked = false;
+      applyBulkMentionToSelected({ enabled: false });
+    });
     $("btnBulkLinksParse")?.addEventListener("click", () => {
       renderBulkLinksFreeList();
       flash(`Đã tách ${parseBulkCommentLinks().length} link lẻ`, true);

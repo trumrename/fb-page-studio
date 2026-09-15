@@ -29,6 +29,7 @@ import {
 } from "./mediaLibrary.js";
 import * as mediaLibrary from "./mediaLibrary.js";
 import { pickNextVideoTitle } from "./videoTitlePool.js";
+import { applyMentionsToText } from "./mentions.js";
 import { appendPostCsv } from "./postLogCsv.js";
 import {
   assertCanPublish,
@@ -224,6 +225,27 @@ export function savePagePostConfig(pageRowId, body) {
     linkLists.use_caption = !!body.use_caption;
   } else if (Object.prototype.hasOwnProperty.call(bodyLl, "use_caption")) {
     linkLists.use_caption = !!bodyLl.use_caption;
+  }
+  // Gắn thẻ @[ID] — lưu trong link_lists
+  if (Object.prototype.hasOwnProperty.call(body || {}, "mention_enabled")) {
+    linkLists.mention_enabled = !!body.mention_enabled;
+  } else if (Object.prototype.hasOwnProperty.call(bodyLl, "mention_enabled")) {
+    linkLists.mention_enabled = !!bodyLl.mention_enabled;
+  }
+  if (Object.prototype.hasOwnProperty.call(body || {}, "mention_ids")) {
+    linkLists.mention_ids = String(body.mention_ids || "");
+  } else if (Object.prototype.hasOwnProperty.call(bodyLl, "mention_ids")) {
+    linkLists.mention_ids = String(bodyLl.mention_ids || "");
+  }
+  if (Object.prototype.hasOwnProperty.call(body || {}, "mention_target")) {
+    linkLists.mention_target = String(body.mention_target || "both");
+  } else if (Object.prototype.hasOwnProperty.call(bodyLl, "mention_target")) {
+    linkLists.mention_target = String(bodyLl.mention_target || "both");
+  }
+  if (Object.prototype.hasOwnProperty.call(body || {}, "mention_position")) {
+    linkLists.mention_position = String(body.mention_position || "prefix");
+  } else if (Object.prototype.hasOwnProperty.call(bodyLl, "mention_position")) {
+    linkLists.mention_position = String(bodyLl.mention_position || "prefix");
   }
   next.link_lists = linkLists;
   next.use_caption = linkLists.use_caption !== false;
@@ -451,7 +473,12 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       kind,
       "random_spaced",
       slot,
-      cfg.posted_folder
+      cfg.posted_folder,
+      {
+        reuseAllPages: opts.media_reuse === "all_pages",
+        reuseBag: opts.shared_media,
+        reuseKey: kind,
+      }
     );
     mediaPath = picked.path;
     mediaSkipped += picked.skipped || 0;
@@ -463,6 +490,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       ignore_quota: !!opts.ignore_quota,
       ignore_interval: !!opts.ignore_interval,
       burst: !!opts.burst,
+      reuse_all_pages: opts.media_reuse === "all_pages",
     });
     if (!gate.ok) {
       releaseInflightMedia(mediaPath);
@@ -495,7 +523,12 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
           kind,
           "random_spaced",
           slot + attempt,
-          cfg.posted_folder
+          cfg.posted_folder,
+          {
+            reuseAllPages: opts.media_reuse === "all_pages",
+            reuseBag: opts.shared_media,
+            reuseKey: kind,
+          }
         );
         mediaPath = picked.path;
         mediaSkipped += picked.skipped || 0;
@@ -508,6 +541,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         ignore_quota: !!opts.ignore_quota,
         ignore_interval: !!opts.ignore_interval,
         burst: !!opts.burst,
+        reuse_all_pages: opts.media_reuse === "all_pages",
       });
       if (gate.ok && caption) break;
       if (gate.ok && !caption) {
@@ -566,6 +600,8 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
   if (leadPack.link_lists) {
     cfg = { ...cfg, link_lists: leadPack.link_lists };
   }
+  // Gắn thẻ @[PageID]/[PSID] — đầu caption (hoặc {tag} trong chữ)
+  caption = applyMentionsToText(caption, cfg, "caption");
 
   const dayIndex = (cfg.posts_today || 0) + 1;
   let movedPath = null;
@@ -594,6 +630,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         mediaPath,
         ignore_quota: !!opts.ignore_quota,
         ignore_interval: !!opts.ignore_interval,
+        reuse_all_pages: opts.media_reuse === "all_pages",
       });
       if (!gate2.ok) throw new Error(gate2.error);
       result = await publishPhoto(
@@ -616,6 +653,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         mediaPath,
         ignore_quota: !!opts.ignore_quota,
         ignore_interval: !!opts.ignore_interval,
+        reuse_all_pages: opts.media_reuse === "all_pages",
       });
       if (!gate2.ok) throw new Error(gate2.error);
       // Title Meta tùy chọn: tick kho title → xoay vòng; hết thì xáo random lại
@@ -660,6 +698,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         mediaPath,
         ignore_quota: !!opts.ignore_quota,
         ignore_interval: !!opts.ignore_interval,
+        reuse_all_pages: opts.media_reuse === "all_pages",
       });
       if (!gate2.ok) throw new Error(gate2.error);
 
@@ -735,6 +774,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       page_id: page.page_id,
       fb_post_id: result?.post_id,
       caption,
+      keep_in_inbox: opts.media_reuse === "all_pages",
     });
     releaseInflightMedia(mediaPath);
     movedPath = fin.movedPath;
@@ -753,6 +793,9 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       });
       commentText = assigned.text;
       commentLinkLists = assigned.link_lists || cfg.link_lists;
+      if (commentText) {
+        commentText = applyMentionsToText(commentText, { ...cfg, link_lists: commentLinkLists }, "comment");
+      }
       if (commentText) {
         try {
           const c = await publishComment(

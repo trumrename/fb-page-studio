@@ -24,6 +24,7 @@ import {
 } from "./mediaLibrary.js";
 import { pickNextVideoTitle } from "./videoTitlePool.js";
 import { getCaptionStats, getPagePostConfig, savePagePostConfig, wantsCaption } from "./poster.js";
+import { applyMentionsToText } from "./mentions.js";
 import {
   getActiveTimesForPageRow,
   buildSlotsFromActiveHours,
@@ -316,7 +317,12 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       kind,
       "random_spaced",
       slot,
-      cfg.posted_folder
+      cfg.posted_folder,
+      {
+        reuseAllPages: opts.media_reuse === "all_pages",
+        reuseBag: opts.shared_media,
+        reuseKey: kind,
+      }
     );
     mediaPath = picked.path;
     usedPoolCaption = false;
@@ -329,6 +335,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       ignore_interval: false,
       isSchedule: true,
       scheduledAtUnix: unix,
+      reuse_all_pages: opts.media_reuse === "all_pages",
     });
     if (!gate.ok) throw new Error(gate.error || "Không hẹn được (anti-spam / quota)");
   } else {
@@ -363,7 +370,12 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
           kind,
           "random_spaced",
           slot + attempt,
-          cfg.posted_folder
+          cfg.posted_folder,
+          {
+            reuseAllPages: opts.media_reuse === "all_pages",
+            reuseBag: opts.shared_media,
+            reuseKey: kind,
+          }
         );
         mediaPath = picked.path;
       }
@@ -425,6 +437,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
   if (leadPack.link_lists) {
     cfg = { ...cfg, link_lists: leadPack.link_lists };
   }
+  caption = applyMentionsToText(caption, cfg, "caption");
 
   const pageToken = decryptToken(page.page_token_enc);
   const schedule = { scheduled_publish_time: unix };
@@ -485,6 +498,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         page_id: page.page_id,
         fb_post_id: result?.post_id,
         caption,
+        keep_in_inbox: opts.media_reuse === "all_pages",
       });
       movedPath = fin.movedPath;
     } else if (caption) {
@@ -516,6 +530,13 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
       });
       pendingComment = assigned.text;
       commentLinkLists = assigned.link_lists || cfg.link_lists;
+      if (pendingComment) {
+        pendingComment = applyMentionsToText(
+          pendingComment,
+          { ...cfg, link_lists: commentLinkLists },
+          "comment"
+        );
+      }
       // Default IMMEDIATE — thiếu field trên page cũ = comment ngay (đúng “sau khi đăng API”)
       const whenRaw = String(
         commentLinkLists?.comment_when || cfg.link_lists?.comment_when || "immediate"
@@ -1380,6 +1401,13 @@ async function applyPendingCommentForLog(row, token, fbStatus = null) {
     message = assigned.text;
     if (assigned.link_lists) {
       savePagePostConfig(row.page_row_id, { ...cfg, link_lists: assigned.link_lists });
+    }
+    if (message) {
+      message = applyMentionsToText(
+        message,
+        { ...cfg, link_lists: assigned.link_lists || cfg.link_lists },
+        "comment"
+      );
     }
   }
   if (!message || !row.fb_post_id) {

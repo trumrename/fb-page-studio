@@ -251,6 +251,11 @@ function normalizeConfigBody(input) {
       "caption_lead_link_next",
       "video_title_enabled",
       "video_titles_path",
+      "mention_enabled",
+      "mention_ids",
+      "mention_target",
+      "mention_position",
+      "use_caption",
     ]);
     for (const [k, v] of Object.entries(body.link_lists)) {
       if (scalarKeys.has(k)) {
@@ -265,7 +270,12 @@ function normalizeConfigBody(input) {
         ) {
           const n = Number(Array.isArray(v) ? v[0] : v);
           out[k] = Number.isFinite(n) ? Math.max(0, Math.min(500, n)) : 0;
-        } else if (k === "caption_lead_enabled" || k === "video_title_enabled") {
+        } else if (
+          k === "caption_lead_enabled" ||
+          k === "video_title_enabled" ||
+          k === "mention_enabled" ||
+          k === "use_caption"
+        ) {
           const raw = Array.isArray(v) ? v[0] : v;
           const s = String(raw ?? "").trim().toLowerCase();
           out[k] =
