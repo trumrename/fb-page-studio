@@ -1,8 +1,8 @@
 FB Page Studio — gói khách (không secret)
-version=1.4.39
-built_at=2026-09-15T17:15:12.458Z
+version=1.4.40
+built_at=2026-09-15T17:30:39.040Z
 github=trumrename/fb-page-studio
-asset=FB-Page-Studio-Desktop-v1.4.39.exe
-setup=FB-Page-Studio-Setup-v1.4.39.exe
+asset=FB-Page-Studio-Desktop-v1.4.40.exe
+setup=FB-Page-Studio-Setup-v1.4.40.exe
 oauth_relay=1
 app_id_set=no

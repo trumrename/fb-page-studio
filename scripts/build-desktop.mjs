@@ -96,8 +96,10 @@ const finalArgs = [
   "--win",
 ];
 if (wantNsis && wantPortable) {
+  // yml có thể chỉ còn nsis — ép cả 2 target trên CLI
   finalArgs.push("--x64");
-  // use yml both targets — already in electron-builder.yml
+  finalArgs.push("--config.win.target=nsis");
+  finalArgs.push("--config.win.target=portable");
 } else if (wantNsis) {
   finalArgs.push("nsis", "--x64");
 } else if (wantPortable) {
