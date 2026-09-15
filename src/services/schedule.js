@@ -107,12 +107,19 @@ function resolvePlannedPostType(cfg, slotIndex, forceType) {
 }
 
 /**
- * Kiểm tra đủ media (ảnh/video chưa dùng) cho toàn bộ slot kế hoạch.
- * Nhiều page dùng chung 1 folder → cộng dồn required theo folder|kind.
+ * Kiểm tra đủ media cho toàn bộ slot kế hoạch.
+ * - once: cộng dồn required theo folder|kind (mỗi slot 1 file)
+ * - all_pages: chỉ cần N file theo số slot/page (cùng bộ mọi page), đếm theo total trên đĩa
  */
-function assessMediaForPlan(finalPlan, { postType, bodyPostType } = {}) {
+function assessMediaForPlan(finalPlan, { postType, bodyPostType, mediaReuse } = {}) {
   const force = postType || (bodyPostType && bodyPostType !== "auto" ? bodyPostType : null);
+  const reuseAll =
+    String(mediaReuse || "").toLowerCase() === "all_pages" ||
+    mediaReuse === true ||
+    mediaReuse === 1;
   const mediaNeeds = new Map(); // key folder|kind
+  /** @type {Map<string, Set<number>>} */
+  const roundSets = new Map(); // folder|kind → set of slot index within page
   const pageNotes = [];
   let totalSlots = 0;
   let mediaSlots = 0;
@@ -148,10 +155,17 @@ function assessMediaForPlan(finalPlan, { postType, bodyPostType } = {}) {
           required: 0,
           available: 0,
           page_names: [],
+          reuse_all_pages: reuseAll,
         });
+        roundSets.set(key, new Set());
       }
       const need = mediaNeeds.get(key);
-      need.required += 1;
+      if (reuseAll) {
+        // Cùng index slot trên mỗi page = cùng file trong bộ shared
+        roundSets.get(key).add(i);
+      } else {
+        need.required += 1;
+      }
       if (!need.page_names.includes(p.page_name)) {
         need.page_names.push(p.page_name);
       }
@@ -165,6 +179,13 @@ function assessMediaForPlan(finalPlan, { postType, bodyPostType } = {}) {
       need_text: pageText,
       media_folder: folder || null,
     });
+  }
+
+  if (reuseAll) {
+    for (const [key, rounds] of roundSets.entries()) {
+      const need = mediaNeeds.get(key);
+      if (need) need.required = rounds.size;
+    }
   }
 
   const pools = [];
@@ -188,7 +209,8 @@ function assessMediaForPlan(finalPlan, { postType, bodyPostType } = {}) {
         inv = { total: 0, unused: 0, used: 0, protect_used: false };
       }
     }
-    const available = Number(inv.unused) || 0;
+    // all_pages: tái dùng file / giữ kho → đếm total trên đĩa, bỏ qua hash đã dùng
+    const available = reuseAll ? Number(inv.total) || 0 : Number(inv.unused) || 0;
     need.available = available;
     need.total_on_disk = Number(inv.total) || 0;
     need.used_hashes = Number(inv.used) || 0;
@@ -203,12 +225,19 @@ function assessMediaForPlan(finalPlan, { postType, bodyPostType } = {}) {
           `Thiếu folder media cho ${need.page_names.slice(0, 4).join(", ")}` +
             `${need.page_names.length > 4 ? "…" : ""} — cần ${need.required} ${kindLabel}`
         );
+      } else if (reuseAll) {
+        messages.push(
+          `Mode cùng bộ media: cần ${need.required} ${kindLabel} (theo số bài/page), kho có ${inv.total} trong ${need.folder}` +
+            (need.page_names.length
+              ? ` (page: ${need.page_names.slice(0, 5).join(", ")}${need.page_names.length > 5 ? "…" : ""})`
+              : "")
+        );
       } else if (inv.total > 0 && inv.used > 0 && available === 0) {
         // Case phổ biến: folder còn file nhưng hash đã đăng (media_once_forever)
         messages.push(
           `Kho còn ${inv.total} ${kindLabel} trên đĩa nhưng 0 chưa dùng (đã ghi hash ${inv.used} file — rule «1 file = 1 lần» / media_once_forever). ` +
             `Folder: ${need.folder}. ` +
-            `Cách xử lý: Anti-spam → tắt «1 ảnh/video = 1 lần đời» hoặc «Xóa hash media» cho folder này, rồi Xem kế hoạch lại.` +
+            `Cách xử lý: chọn «Cùng bộ media cho mọi page», hoặc Anti-spam → tắt «1 ảnh/video = 1 lần đời» / «Xóa hash media».` +
             (need.page_names.length
               ? ` (page: ${need.page_names.slice(0, 5).join(", ")}${need.page_names.length > 5 ? "…" : ""})`
               : "")
@@ -229,14 +258,17 @@ function assessMediaForPlan(finalPlan, { postType, bodyPostType } = {}) {
     ok,
     total_slots: totalSlots,
     media_slots: mediaSlots,
+    media_reuse: reuseAll ? "all_pages" : "once",
     pools,
     shortfalls,
     messages,
     pages: pageNotes,
     summary: ok
-      ? totalSlots
-        ? `Đủ media cho ${mediaSlots} slot cần ảnh/video (${totalSlots} slot tổng).`
-        : "Không có slot để kiểm tra media."
+      ? reuseAll
+        ? `Đủ media (cùng bộ): cần ${pools.map((p) => `${p.required} ${p.kind}`).join(", ") || "0"} · mọi page dùng chung · ${totalSlots} slot.`
+        : totalSlots
+          ? `Đủ media cho ${mediaSlots} slot cần ảnh/video (${totalSlots} slot tổng).`
+          : "Không có slot để kiểm tra media."
       : `THIẾU media — ${shortfalls.length} kho không đủ. ${messages[0] || ""}`,
   };
 }
@@ -1157,6 +1189,7 @@ export async function scheduleBulk(body = {}) {
   const mediaCheck = assessMediaForPlan(finalPlan, {
     postType,
     bodyPostType: body.post_type,
+    mediaReuse: body.media_reuse || body.mediaReuse,
   });
 
   if (dryRun) {
