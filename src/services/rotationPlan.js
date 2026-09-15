@@ -125,6 +125,11 @@ export const DEFAULT_ROTATION = {
    */
   window_filter: "all",
   /**
+   * once = mỗi bài 1 file rồi chuyển posted
+   * all_pages = cùng bộ N file (theo post_round) cho mọi page, giữ kho
+   */
+  media_reuse: "once",
+  /**
    * true = bỏ chờ khung, bắn ngay (now + stagger) vẫn burst + xen App
    */
   force_start_now: false,
@@ -417,6 +422,8 @@ export function normalizeSettings(s) {
           : "all";
   }
   out.force_start_now = !!out.force_start_now;
+  out.media_reuse =
+    String(out.media_reuse || "").toLowerCase() === "all_pages" ? "all_pages" : "once";
   out.account_ids = Array.isArray(out.account_ids)
     ? out.account_ids.map(Number).filter((n) => n > 0)
     : [];
@@ -1945,14 +1952,20 @@ export function buildRunNowPlan(inputSettings = {}) {
 
   // (Direct Local: không cắt max/quota — theo đúng cài UI)
 
-  // Media/caption requirements are aggregated by shared pool. Multiple Pages
-  // pointing at one caption folder consume one common sequential pool.
+  // Media/caption requirements are aggregated by shared pool.
+  // media_reuse=all_pages: chỉ cần N file theo số vòng bài (post_round), không × số page.
+  const reuseAllPages = settings.media_reuse === "all_pages";
   const mediaNeeds = new Map();
   const captionNeeds = new Map();
   const captionStatsByPool = new Map();
+  /** @type {Map<string, Set<number>>} */
+  const mediaRounds = new Map();
+  /** @type {Map<string, Set<number>>} */
+  const captionRounds = new Map();
   for (const s of finalSlots) {
     const cfg = pageConfigs.get(s.page_row_id);
     const type = String(s.planned_post_type || "text").toLowerCase();
+    const round = Math.max(1, Number(s.post_round) || 1);
     const identity = captionPoolIdentity({
       captionsFolder: cfg?.captions_folder,
       captions: cfg?.captions,
@@ -1984,29 +1997,71 @@ export function buildRunNowPlan(inputSettings = {}) {
           total: Number(stats?.total) || 0,
           used_recent: Number(stats?.used_recent) || 0,
           duplicate_window_hours: Number(stats?.duplicate_window_hours) || 0,
+          reuse_all_pages: reuseAllPages,
         });
+        captionRounds.set(identity.key, new Set());
       }
       const need = captionNeeds.get(identity.key);
-      need.required += 1;
+      if (reuseAllPages) {
+        captionRounds.get(identity.key).add(round);
+      } else {
+        need.required += 1;
+      }
       if (!need.page_names.includes(s.page_name)) need.page_names.push(s.page_name);
     }
     if (type === "text" || !["photo", "image", "video"].includes(type)) continue;
     const kind = type === "video" ? "video" : "photo";
     const folder = cfg?.media_folder || "";
     const key = `${path.resolve(folder || ".").toLowerCase()}|${kind}`;
-    if (!mediaNeeds.has(key)) mediaNeeds.set(key, { folder, kind, required: 0, available: 0 });
-    mediaNeeds.get(key).required += 1;
+    if (!mediaNeeds.has(key)) {
+      mediaNeeds.set(key, {
+        folder,
+        kind,
+        required: 0,
+        available: 0,
+        reuse_all_pages: reuseAllPages,
+      });
+      mediaRounds.set(key, new Set());
+    }
+    if (reuseAllPages) {
+      mediaRounds.get(key).add(round);
+      const nm = mediaNeeds.get(key);
+      if (!nm.page_names) nm.page_names = [];
+      if (s.page_name && !nm.page_names.includes(s.page_name)) nm.page_names.push(s.page_name);
+    } else {
+      mediaNeeds.get(key).required += 1;
+    }
+  }
+  if (reuseAllPages) {
+    for (const [key, rounds] of mediaRounds.entries()) {
+      const need = mediaNeeds.get(key);
+      if (need) need.required = rounds.size;
+    }
+    for (const [key, rounds] of captionRounds.entries()) {
+      const need = captionNeeds.get(key);
+      if (need) {
+        need.required = rounds.size;
+        // Cùng bộ caption lặp mọi page → đủ theo total kho, không trừ used_recent × page
+        need.available = Number(need.total) || need.available;
+      }
+    }
   }
   for (const need of mediaNeeds.values()) {
     const inv = inspectMediaFolder(need.folder, need.kind);
-    need.available = inv.unused;
+    // all_pages: giữ file trong kho / tái dùng → đếm theo tổng file trên đĩa, không theo hash đã dùng
+    need.available = reuseAllPages ? inv.total : inv.unused;
     need.total_on_disk = inv.total;
     need.used_hashes = inv.used;
     if (need.available < need.required) {
-      if (inv.total > 0 && inv.used > 0 && inv.unused === 0) {
+      if (!reuseAllPages && inv.total > 0 && inv.used > 0 && inv.unused === 0) {
         blockers.push(
           `Thiếu ${need.kind}: cần ${need.required} — folder còn ${inv.total} file nhưng cả ${inv.used} đã dùng hash (media_once_forever). ` +
-            `Vào Anti-spam → Xóa hash media / tắt «1 file = 1 lần». ${need.folder || ""}`
+            `Vào Anti-spam → Xóa hash media / tắt «1 file = 1 lần» — hoặc chọn mode «Cùng bộ media cho mọi page». ${need.folder || ""}`
+        );
+      } else if (reuseAllPages) {
+        blockers.push(
+          `Mode cùng bộ media: cần ${need.required} file ${need.kind} (theo số bài/page), kho có ${inv.total} trong ${need.folder || "(chưa chọn folder)"}. ` +
+            `Thêm media đánh số 1…${need.required}-…`
         );
       } else {
         blockers.push(
@@ -2018,9 +2073,11 @@ export function buildRunNowPlan(inputSettings = {}) {
   for (const need of captionNeeds.values()) {
     if (need.available < need.required) {
       blockers.push(
-        `Thiếu caption chưa dùng trong kho chung: cần ${need.required}, hiện còn ${need.available}/${need.total} ` +
-          `trong ${need.folder || "(chưa chọn folder)"}. Đã note ${need.used_recent} caption ` +
-          `trong ${need.duplicate_window_hours || 48}h cho ${need.page_names.length} Page.`
+        reuseAllPages
+          ? `Mode cùng bộ: cần ${need.required} caption (theo số bài), kho có ${need.total} trong ${need.folder || "(chưa chọn)"}.`
+          : `Thiếu caption chưa dùng trong kho chung: cần ${need.required}, hiện còn ${need.available}/${need.total} ` +
+              `trong ${need.folder || "(chưa chọn folder)"}. Đã note ${need.used_recent} caption ` +
+              `trong ${need.duplicate_window_hours || 48}h cho ${need.page_names.length} Page.`
       );
     }
   }
@@ -2095,6 +2152,7 @@ export function buildRunNowPlan(inputSettings = {}) {
       media_pattern_mode: settings.media_pattern_mode,
       media_pattern: settings.media_pattern,
       use_caption: settings.use_caption !== false,
+      media_reuse: settings.media_reuse === "all_pages" ? "all_pages" : "once",
       window_filter: settings.window_filter || "all",
       force_start_now: !!settings.force_start_now,
       windows: settings.windows,
