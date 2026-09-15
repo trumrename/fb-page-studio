@@ -860,11 +860,12 @@ full album:
                     </label>
                     <label class="checks" style="align-self:end;margin:0 0 .35rem">
                       <input type="checkbox" id="bulkStdForceDay" />
-                      Ép đúng ngày này
+                      Ép đúng ngày bắt đầu
                     </label>
                   </div>
                   <p class="muted" style="margin:.35rem 0 0;font-size:.76rem;line-height:1.4">
-                    Số ngày hẹn = lặp Sáng+Tối mỗi ngày (vd 7 ngày × 2 khung × 2 bài/page). Không mất mode ② — ④ giờ cũng có ô này.
+                    <b>Số ngày hẹn</b> = lặp Sáng+Tối <b>mỗi ngày</b> từ Ngày/Tháng/Năm.
+                    VD: <b>7</b> ngày × Sáng 2 bài + Tối 2 bài = 28 bài/page. Meta tối đa ~30 ngày tới.
                   </p>
                 </div>
                 <div class="sched-extra-row" style="margin-top:.55rem">
@@ -4475,14 +4476,24 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if ($("bulkStdYear") && !$("bulkStdYear").value) $("bulkStdYear").value = String(now.getFullYear());
     }
 
-    function readBulkStdForcePlanDay() {
-      if (!$("bulkStdForceDay")?.checked) return null;
+    /** Đọc ô Ngày/Tháng/Năm Chuẩn mới → YYYY-MM-DD (null nếu thiếu) */
+    function readBulkStdPlanStartDay() {
       const day = Number($("bulkStdDay")?.value);
       const mon = Number($("bulkStdMonth")?.value);
       const yr = Number($("bulkStdYear")?.value);
       if (!Number.isFinite(day) || !Number.isFinite(mon) || !Number.isFinite(yr)) return null;
       if (day < 1 || day > 31 || mon < 1 || mon > 12 || yr < 2024) return null;
       return `${yr}-${pad2(mon)}-${pad2(day)}`;
+    }
+
+    function readBulkStdForcePlanDay() {
+      // Tick «Ép đúng ngày» → force_plan_day (không tự đẩy ngày mai)
+      if (!$("bulkStdForceDay")?.checked) return null;
+      return readBulkStdPlanStartDay();
+    }
+
+    function readBulkStdDaysAhead() {
+      return Math.min(30, Math.max(1, Number($("bulkStdDays")?.value) || 1));
     }
 
     /** Ô giờ/số bài Chuẩn mới → textarea khung (theo filter Sáng/Tối) */
@@ -4655,8 +4666,18 @@ Tối | 18:00 | 21:30 | 2</textarea>
         settingsBody.burst_same_page = true;
         if ($("bulkStdBurst")) $("bulkStdBurst").checked = true;
       }
+      // Nhiều ngày: lặp Sáng/Tối mỗi ngày (1–30)
+      settingsBody.days_ahead = readBulkStdDaysAhead();
+      if ($("rotDays")) $("rotDays").value = String(settingsBody.days_ahead);
+      const startDay = readBulkStdPlanStartDay();
       const forceDay = readBulkStdForcePlanDay();
-      if (forceDay) settingsBody.force_plan_day = forceDay;
+      if (forceDay) {
+        settingsBody.force_plan_day = forceDay;
+      } else if (startDay) {
+        // Ô Ngày/Tháng/Năm = ngày bắt đầu chuỗi N ngày (không cần tick «Ép»)
+        settingsBody.plan_start_day = startDay;
+        if (settingsBody.days_ahead > 1) settingsBody.force_plan_day = startDay;
+      }
       // Gap page/admin từ ô Chuẩn mới (ưu tiên hơn rotTaskGap*)
       const gMin = Number($("bulkStdGapMin")?.value);
       const gMax = Number($("bulkStdGapMax")?.value);
@@ -4680,6 +4701,11 @@ Tối | 18:00 | 21:30 | 2</textarea>
             : nowMode
               ? "Bỏ chờ khung — bắn ngay, vẫn burst + xen App."
               : "Không hẹn Facebook. Giữ tool/PC bật chờ khung.";
+          const daysN = r.summary?.days_ahead || settingsBody.days_ahead || 1;
+          const dayRange =
+            daysN > 1
+              ? `${r.summary?.plan_start_day || "?"} → ${r.summary?.plan_end_day || "?"} (${daysN} ngày)`
+              : r.summary?.plan_day || settingsBody.force_plan_day || "1 ngày";
           const previewLines = (r.plan?.preview_order || r.preview_order || [])
             .slice(0, 12)
             .map((p) => esc(typeof p === "string" ? p : p.label || JSON.stringify(p)))
@@ -4688,12 +4714,15 @@ Tối | 18:00 | 21:30 | 2</textarea>
             `<div style="margin:0 0 .5rem;padding:.55rem .7rem;border-radius:10px;border:1px solid rgba(251,191,36,.45);background:rgba(251,191,36,.1)">` +
             `<b>④ Chuẩn mới · ${esc(modeTitle)}</b> — ${esc(modeHint)}` +
             `<br/>Task: <b>${r.summary?.total_final || r.job?.progress?.total || 0}</b>` +
+            ` · <b>${esc(String(dayRange))}</b>` +
             (r.summary?.window_page_counts
               ? ` · ${(r.summary.window_page_counts || [])
                   .map((w) =>
                     typeof w === "string"
                       ? esc(w)
-                      : `${esc(w.name || "")} ${w.pages ?? "?"} page × ${w.videos_each ?? 3}`
+                      : `${esc(w.name || "")} ${w.pages ?? "?"} page × ${w.videos_each ?? 3}${
+                          Number(w.days) > 1 ? ` × ${w.days} ngày` : ""
+                        }`
                   )
                   .join(" · ")}`
               : "") +

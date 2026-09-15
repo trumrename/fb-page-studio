@@ -297,7 +297,8 @@ export function normalizeSettings(s) {
     const ppd = Number(out.posts_per_page_per_day);
     out.posts_per_page_per_day = clamp(Number.isFinite(ppd) && ppd > 0 ? ppd : 1, 1, 12);
   }
-  out.days_ahead = clamp(Number(out.days_ahead) || 1, 1, 14);
+  // Meta scheduled window ~30 ngày — cho phép 1–30
+  out.days_ahead = clamp(Number(out.days_ahead) || 1, 1, 30);
   out.tz_offset_minutes = Number.isFinite(Number(out.tz_offset_minutes))
     ? Number(out.tz_offset_minutes)
     : 420;
@@ -1039,21 +1040,45 @@ export function buildSplitWindowBurstSlots({
     warnings.push("Đăng ngay: bỏ chờ đầu khung — bắt đầu ~now + stagger, vẫn burst + xen App.");
   }
 
+  const daysAhead = clamp(Number(settings.days_ahead) || 1, 1, 30);
+  // Ngày bắt đầu: force_plan_day (ép) hoặc plan_start_day (ô Ngày/Tháng/Năm) hoặc hôm nay VN
+  const startDay =
+    settings.force_plan_day ||
+    (settings.plan_start_day && /^\d{4}-\d{2}-\d{2}$/.test(String(settings.plan_start_day))
+      ? String(settings.plan_start_day)
+      : null) ||
+    todayVn;
+  const endDay = addDaysYmd(startDay, daysAhead - 1);
+  if (daysAhead > 1) {
+    warnings.push(
+      `Hẹn ${daysAhead} ngày (${startDay} → ${endDay}): mỗi ngày lặp khung Sáng/Tối · Meta tối đa ~30 ngày tới.`
+    );
+  }
+
+  for (let d = 0; d < daysAhead; d++) {
+  const forceNowToday = forceNow && d === 0;
   for (let wi = 0; wi < windows.length; wi++) {
     const w = windows[wi];
     const burst = clamp(Number(w.posts) || 1, 1, 12);
     const group = buckets[wi] || [];
     if (!group.length) continue;
 
-    let day = todayVn;
+    let day = addDaysYmd(startDay, d);
     let range = windowRangeUtc(day, w.start, w.end, tz);
     if (!range) continue;
-    if (!forceNow && nowMs >= range.endMs - 20 * 1000 && !settings.force_plan_day) {
-      day = addDaysYmd(day, 1);
-      range = windowRangeUtc(day, w.start, w.end, tz);
-      warnings.push(
-        `Khung «${w.name}» hôm nay đã hết → ${group.length} page sang ${day} ${w.start}–${w.end}.`
-      );
+    // Khung đã hết giờ: nhiều ngày → bỏ khung ngày đó; 1 ngày → đẩy sang ngày mai (trừ khi ép đúng ngày)
+    if (!forceNowToday && nowMs >= range.endMs - 20 * 1000) {
+      if (daysAhead > 1) {
+        warnings.push(`Bỏ khung «${w.name}» ngày ${day} (đã hết giờ) — các ngày sau vẫn hẹn.`);
+        continue;
+      }
+      if (!settings.force_plan_day) {
+        day = addDaysYmd(day, 1);
+        range = windowRangeUtc(day, w.start, w.end, tz);
+        warnings.push(
+          `Khung «${w.name}» hôm nay đã hết → ${group.length} page sang ${day} ${w.start}–${w.end}.`
+        );
+      }
     }
     if (day > planDay) planDay = day;
 
@@ -1063,21 +1088,25 @@ export function buildSplitWindowBurstSlots({
       30
     ) * 1000;
     const burstSpan = (burst - 1) * burstGap;
-    if (!forceNow) {
+    if (!forceNowToday) {
       const winStart = Math.max(nowMs + 8000, range.startMs);
       const winEnd = range.endMs - burstSpan - 5000;
       if (winEnd <= winStart) {
+        if (daysAhead > 1) {
+          warnings.push(`Bỏ khung «${w.name}» ngày ${day} (không còn chỗ).`);
+          continue;
+        }
         day = addDaysYmd(day, 1);
         range = windowRangeUtc(day, w.start, w.end, tz);
         if (day > planDay) planDay = day;
         warnings.push(`Khung «${w.name}» không còn chỗ hôm nay → ${day}.`);
       }
     }
-    // force_start_now: bắt đầu ngay; không thì chờ đầu khung (hoặc now nếu đã trong khung)
-    const start0 = forceNow
+    // force_start_now: bắt đầu ngay (chỉ ngày 1); không thì chờ đầu khung
+    const start0 = forceNowToday
       ? nowMs + 8000 + wi * 60 * 1000
       : Math.max(nowMs + 8000, range.startMs);
-    const end0 = forceNow
+    const end0 = forceNowToday
       ? start0 + BURST_STAGGER_MAX_MS
       : range.endMs - burstSpan - 3000;
     const n = group.length;
@@ -1109,7 +1138,7 @@ export function buildSplitWindowBurstSlots({
 
     if (cluster) {
       warnings.push(
-        `Khung «${w.name}» ${forceNow ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài dồn ≤30s, ~${stepMin} phút/page (App xen kẽ).`
+        `Khung «${w.name}» ${day} ${forceNowToday ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài dồn ≤30s, ~${stepMin} phút/page (App xen kẽ).`
       );
       for (let i = 0; i < group.length; i++) {
         const page = group[i];
@@ -1136,7 +1165,7 @@ export function buildSplitWindowBurstSlots({
       const pageSpan = Math.max(45 * 1000, staggerSpan - extraMs);
       const pStep = n <= 1 ? 0 : pageSpan / Math.max(1, n - 1);
       warnings.push(
-        `Khung «${w.name}» ${forceNow ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài, xen App ~${Math.round(pStep / 60000)} phút/page, ` +
+        `Khung «${w.name}» ${day} ${forceNowToday ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài, xen App ~${Math.round(pStep / 60000)} phút/page, ` +
           `video cùng page random ${vGapMin}–${vGapMax} phút.`
       );
       for (let i = 0; i < group.length; i++) {
@@ -1168,7 +1197,7 @@ export function buildSplitWindowBurstSlots({
     } else {
       const samePageGapMin = n > 0 ? Math.round((n * slotStep) / 60000) : 0;
       warnings.push(
-        `Khung «${w.name}» ${forceNow ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài = ${total} mốc, ` +
+        `Khung «${w.name}» ${day} ${forceNowToday ? "ĐĂNG NGAY" : `${w.start}–${w.end}`}: ${n} page × ${burst} bài = ${total} mốc, ` +
           `rải ~${slotSec}s/mốc (lấp 2 giờ, không trùng giờ page), xen App. ` +
           `2 bài cùng page cách ~${samePageGapMin} phút.`
       );
@@ -1197,6 +1226,7 @@ export function buildSplitWindowBurstSlots({
       }
     }
   }
+  }
 
   slots.sort((a, b) => a.unix - b.unix || a.order - b.order);
   const numbered = slots.map((s, i) => ({ ...s, order: i + 1 }));
@@ -1214,12 +1244,16 @@ export function buildSplitWindowBurstSlots({
     warnings,
     burstCount,
     postsPerPageDay,
+    days_ahead: daysAhead,
+    plan_start_day: startDay,
+    plan_end_day: endDay,
     window_page_counts: windows.map((w, i) => ({
       name: w.name,
       start: w.start,
       end: w.end,
       pages: (buckets[i] || []).length,
       videos_each: clamp(Number(w.posts) || 1, 1, 12),
+      days: daysAhead,
     })),
   };
 }
@@ -2082,6 +2116,9 @@ export function buildRunNowPlan(inputSettings = {}) {
       pages_missing_list: missingPages.slice(0, 30),
       anti_spam_trimmed: false,
       plan_day: planDay,
+      days_ahead: settings.days_ahead || burstMeta?.days_ahead || 1,
+      plan_start_day: burstMeta?.plan_start_day || planDay,
+      plan_end_day: burstMeta?.plan_end_day || planDay,
       today_vn: todayVn,
       overdue_today: overdueToday,
       plan_day_shifted: planDayShifted,
@@ -2100,7 +2137,9 @@ export function buildRunNowPlan(inputSettings = {}) {
         ? "vòng bài# → từng App → pageIndex → toàn bộ admin của App"
         : "vòng bài# → pageIndex → adminIndex → App 1/App 2 so le",
       wait_logic: useWindows
-        ? `Khung Sáng/Tối ngày ${planDay} (VN) · gap Page/Admin khác ~${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max}p · gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours}h (theo UI, không ép anti)`
+        ? `Khung Sáng/Tối ${(burstMeta?.days_ahead || settings.days_ahead || 1) > 1
+            ? `${burstMeta?.plan_start_day || planDay} → ${burstMeta?.plan_end_day || planDay} (${burstMeta?.days_ahead || settings.days_ahead} ngày)`
+            : `ngày ${planDay}`} (VN) · gap Page/Admin khác ~${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max}p · gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours}h`
         : `Bài 1 gần ngay · gap Page/Admin khác ${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max}p · gap cùng Page ${effectiveGapMinHours}–${effectiveGapMaxHours}h (theo UI, không ép anti/quota)`,
       gap_same_page: `${effectiveGapMinHours}–${effectiveGapMaxHours} giờ (cùng 1 Page giữa 2 vòng bài · theo cài UI)`,
       gap_other_page: `${settings.between_tasks_gap_minutes_min}–${settings.between_tasks_gap_minutes_max} phút (Page/Admin khác · theo cài UI)`,
