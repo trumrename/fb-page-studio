@@ -618,12 +618,17 @@
         const sp = finished.progress?.setup_path || "";
         setUiProgress({
           percent: 100,
-          text: finished.progress?.setup_mode
-            ? "Đang tắt app → cài Setup → mở bản mới…"
-            : "Đang tắt app → thay EXE → mở bản mới…",
+          text: finished.progress?.localappdata_mode
+            ? "Đang tắt app → cập nhật LocalAppData → sửa shortcut → mở bản mới…"
+            : finished.progress?.setup_mode
+              ? "Đang tắt app → cài Setup → mở bản mới…"
+              : "Đang tắt app → thay EXE → mở bản mới…",
           log:
             (finished.progress?.message || "") +
             (sp ? `\nSetup: ${sp}` : "") +
+            (finished.progress?.localappdata_mode
+              ? "\n→ %LOCALAPPDATA%\\FB-Page-Studio (không cần Setup)"
+              : "") +
             "\n\nCửa sổ app sẽ đóng trong vài giây. Chờ bản mới tự mở.",
         });
         // Keep busy — Electron parent should exit after BAT starts

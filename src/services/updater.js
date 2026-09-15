@@ -275,6 +275,18 @@ function isProtectedInstallDir(dir) {
   return !isDirWritable(dir);
 }
 
+/** Cài/ cập nhật portable không UAC — mở icon luôn ra bản mới */
+export function getLocalAppStudioDir() {
+  const local = process.env.LOCALAPPDATA || "";
+  return path.join(local, "FB-Page-Studio");
+}
+
+function isUnderLocalAppStudio(exePath) {
+  const local = getLocalAppStudioDir().toLowerCase();
+  const p = path.resolve(String(exePath || "")).toLowerCase();
+  return Boolean(local) && p.startsWith(local);
+}
+
 /**
  * True when running the NSIS-installed app (Start Menu "FB Page Studio"),
  * not the portable Desktop.exe next to user files.
@@ -375,6 +387,141 @@ export function backupUserDataBeforeUpdate(userDir, label = "pre-update") {
     /* ignore */
   }
   return { ok: true, dir: bakDir, copied };
+}
+
+/**
+ * Portable update into %LOCALAPPDATA%\FB-Page-Studio + refresh Desktop/Start Menu shortcuts.
+ * No Setup, no UAC. Opening the icon always launches the latest EXE.
+ */
+function writeLocalAppDataUpdateScript({
+  localDir,
+  destNew,
+  finalName,
+  stableName,
+  currentExe,
+  fromVersion,
+  toVersion,
+}) {
+  const psPath = path.join(localDir, "_apply_update.ps1");
+  const batPath = path.join(localDir, "_apply_update.bat");
+  const targetExe = path.join(localDir, finalName);
+  const stableExe = path.join(localDir, stableName);
+  const destNewEsc = String(destNew).replace(/'/g, "''");
+  const localEsc = String(localDir).replace(/'/g, "''");
+  const finalEsc = String(finalName).replace(/'/g, "''");
+  const stableEsc = String(stableName).replace(/'/g, "''");
+  const currentEsc = String(currentExe || "").replace(/'/g, "''");
+  const fromEsc = String(fromVersion || "").replace(/'/g, "''");
+  const toEsc = String(toVersion || "").replace(/'/g, "''");
+
+  const ps = `# FB Page Studio LocalAppData update (ASCII). No Setup / no UAC.
+$ErrorActionPreference = 'Continue'
+$localDir = '${localEsc}'
+$destNew = '${destNewEsc}'
+$finalName = '${finalEsc}'
+$stableName = '${stableEsc}'
+$currentExe = '${currentEsc}'
+$fromVersion = '${fromEsc}'
+$toVersion = '${toEsc}'
+$finalExe = Join-Path $localDir $finalName
+$stableExe = Join-Path $localDir $stableName
+$log = Join-Path $localDir '_update-log.txt'
+$status = Join-Path $localDir '_update-status.txt'
+$errFile = Join-Path $localDir '_update-error.txt'
+
+function Log([string]$m) {
+  $line = "{0} {1}" -f (Get-Date -Format o), $m
+  try { Add-Content -LiteralPath $log -Value $line -Encoding UTF8 } catch {}
+}
+function Set-Status([string]$m) {
+  try { Set-Content -LiteralPath $status -Value $m -Encoding UTF8 } catch {}
+  Log $m
+}
+function Fail([string]$m) {
+  try { Set-Content -LiteralPath $errFile -Value $m -Encoding UTF8 } catch {}
+  Log ("FAIL: " + $m)
+  exit 1
+}
+function Set-Shortcut([string]$lnkPath, [string]$exePath, [string]$workDir) {
+  try {
+    $dir = Split-Path -Parent $lnkPath
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $w = New-Object -ComObject WScript.Shell
+    $s = $w.CreateShortcut($lnkPath)
+    $s.TargetPath = $exePath
+    $s.WorkingDirectory = $workDir
+    $s.Description = 'FB Page Studio'
+    $s.Save()
+    Log ("Shortcut OK " + $lnkPath)
+  } catch { Log ("Shortcut warn: " + $_.Exception.Message) }
+}
+
+try { Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue } catch {}
+try { Set-Content -LiteralPath $log -Value ("{0} localappdata update from={1} to={2}" -f (Get-Date -Format o), $fromVersion, $toVersion) -Encoding UTF8 } catch {}
+
+Set-Status "Stopping old app..."
+for ($i = 0; $i -lt 12; $i++) {
+  Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | ForEach-Object {
+    try { $_.CloseMainWindow() | Out-Null } catch {}
+  }
+  Start-Sleep -Milliseconds 350
+}
+Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -ErrorAction SilentlyContinue | Where-Object {
+  $_.Path -and ($_.Path -ieq $currentExe -or $_.Path -like ($localDir + '\\*'))
+} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
+if (-not (Test-Path -LiteralPath $destNew)) { Fail 'LOI: thieu file .new (download that bai).' }
+
+Set-Status "Installing into LocalAppData..."
+New-Item -ItemType Directory -Force -Path $localDir | Out-Null
+# Remove other Desktop EXEs in this folder (keep only new)
+Get-ChildItem -LiteralPath $localDir -Filter 'FB-Page-Studio-Desktop*.exe' -ErrorAction SilentlyContinue | ForEach-Object {
+  if ($_.FullName -ne $destNew) {
+    try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue } catch {}
+  }
+}
+try { Move-Item -LiteralPath $destNew -Destination $finalExe -Force } catch { Fail ('LOI: khong doi ten .new: ' + $_.Exception.Message) }
+if (-not (Test-Path -LiteralPath $finalExe)) { Fail 'LOI: thieu EXE sau khi move.' }
+Copy-Item -LiteralPath $finalExe -Destination $stableExe -Force -ErrorAction SilentlyContinue
+Log ("Installed " + $finalExe)
+
+Set-Status "Updating shortcuts..."
+$startMenu = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs'
+$desktop = [Environment]::GetFolderPath('Desktop')
+foreach ($lnk in @(
+  (Join-Path $startMenu 'FB Page Studio.lnk'),
+  (Join-Path $desktop 'FB Page Studio.lnk')
+)) {
+  Set-Shortcut $lnk $finalExe $localDir
+}
+
+Set-Status "Starting new version..."
+try {
+  Start-Process -FilePath $finalExe -WorkingDirectory $localDir
+  Log ("Launched " + $finalExe)
+} catch {
+  Fail ('LOI: khong mo duoc app: ' + $_.Exception.Message)
+}
+
+Start-Sleep -Seconds 2
+try { Remove-Item -LiteralPath $status -Force -ErrorAction SilentlyContinue } catch {}
+Log "SUCCESS localappdata update to=$toVersion exe=$finalExe"
+try { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue } catch {}
+exit 0
+`;
+
+  fs.writeFileSync(psPath, "\uFEFF" + ps, "utf8");
+  const bat = [
+    "@echo off",
+    "title FB Page Studio - Cap nhat LocalAppData",
+    `cd /d "${localDir.replace(/"/g, "")}"`,
+    `powershell -NoProfile -ExecutionPolicy Bypass -File "${psPath.replace(/"/g, "")}"`,
+    "exit /b %ERRORLEVEL%",
+  ].join("\r\n");
+  fs.writeFileSync(batPath, bat, "utf8");
+  return { batPath, psPath, targetExe };
 }
 
 /**
@@ -901,9 +1048,109 @@ export async function applyUpdate() {
     process.env.FB_EXE_DIR ||
     getExeDir();
   const protectedInstall = isProtectedInstallDir(exeDir);
+  const nsisApp = isNsisInstalledApp(currentExe, exeDir);
+  const localDir = getLocalAppStudioDir();
+  const canUseLocalApp =
+    Boolean(process.env.LOCALAPPDATA) &&
+    (isDirWritable(localDir) || isDirWritable(path.dirname(localDir)));
 
-  // ── NSIS / Start Menu install: cannot swap EXE while running → Setup + quit + relaunch ──
-  if (protectedInstall || isNsisInstalledApp(currentExe, exeDir)) {
+  // ── Ưu tiên: cập nhật portable vào %LOCALAPPDATA%\FB-Page-Studio (không Setup / không UAC)
+  //    Shortcut Desktop + Start Menu trỏ vào đây → mở icon = bản mới nhất.
+  if (canUseLocalApp && (protectedInstall || nsisApp || !isUnderLocalAppStudio(currentExe))) {
+    const finalName = `FB-Page-Studio-Desktop-v${check.latest_version}.exe`;
+    const stableName = "FB-Page-Studio-Desktop.exe";
+    fs.mkdirSync(localDir, { recursive: true });
+    const destNew = path.join(localDir, `${finalName}.new`);
+    const checksumFile = `${destNew}.sha256.txt`;
+
+    setUpdateProgress({
+      state: "downloading",
+      from: check.current_version,
+      to: check.latest_version,
+      bytes: 0,
+      total: Number(check.asset.size) || 0,
+      percent: 0,
+      message: `Cập nhật vào LocalAppData — đang tải ${finalName}…`,
+    });
+    try {
+      await downloadFile(check.asset.download_url, destNew, (bytes, total) => {
+        const expected = total || Number(check.asset.size) || 0;
+        setUpdateProgress({
+          state: "downloading",
+          bytes,
+          total: expected,
+          percent: expected ? Math.min(100, Math.floor((bytes / expected) * 100)) : 0,
+          message: `Đang tải v${check.latest_version} → %LOCALAPPDATA%\\FB-Page-Studio…`,
+        });
+      });
+    } catch (e) {
+      const err = `${e.message || e}\n\nMở trang tải tay:\n${MANUAL_RELEASE}`;
+      setUpdateProgress({ state: "error", error: err, message: "Tải update thất bại" });
+      return { ok: false, error: err, manual_url: MANUAL_RELEASE, ...check };
+    }
+    if (Number(check.asset.size) > 0 && fs.statSync(destNew).size !== Number(check.asset.size)) {
+      throw new Error("File update tải về không đủ dung lượng");
+    }
+    await downloadFile(check.checksum_asset.download_url, checksumFile);
+    const checksumText = fs.readFileSync(checksumFile, "utf8");
+    const expectedHash = checksumText.match(/\b[a-f0-9]{64}\b/i)?.[0]?.toLowerCase();
+    const actualHash = crypto.createHash("sha256").update(fs.readFileSync(destNew)).digest("hex");
+    try {
+      fs.unlinkSync(checksumFile);
+    } catch {
+      /* */
+    }
+    if (!expectedHash || actualHash !== expectedHash) {
+      try {
+        fs.unlinkSync(destNew);
+      } catch {
+        /* */
+      }
+      throw new Error(`SHA-256 không khớp; hủy cập nhật. Cần ${expectedHash}, nhận ${actualHash}.`);
+    }
+
+    backupUserDataBeforeUpdate(userWritable || getExeDir(), "pre-localappdata-update");
+    const { batPath, psPath, targetExe } = writeLocalAppDataUpdateScript({
+      localDir,
+      destNew,
+      finalName,
+      stableName,
+      currentExe,
+      fromVersion: check.current_version,
+      toVersion: check.latest_version,
+    });
+
+    setUpdateProgress({
+      state: "ready",
+      percent: 100,
+      message: `Đã tải v${check.latest_version} → LocalAppData. Tắt app → thay EXE → cập nhật shortcut → mở bản mới…`,
+      from: check.current_version,
+      to: check.latest_version,
+      setup_mode: false,
+      localappdata_mode: true,
+      will_restart: true,
+      target_exe: targetExe,
+    });
+    return {
+      ok: true,
+      updated: true,
+      setup_mode: false,
+      localappdata_mode: true,
+      bat: batPath,
+      ps1: psPath,
+      target_exe: targetExe,
+      will_restart: true,
+      preserves: ["%APPDATA%\\fb-page-studio\\data", ".env", "license"],
+      message:
+        `Đã tải v${check.latest_version} vào %LOCALAPPDATA%\\FB-Page-Studio.\n` +
+        `Không cần Setup / UAC. App tắt → thay EXE → sửa shortcut Desktop/Start Menu → mở bản mới.\n` +
+        `Lần sau mở icon = bản mới nhất.`,
+      ...check,
+    };
+  }
+
+  // ── Fallback NSIS Setup (chỉ khi không ghi được LocalAppData) ──
+  if (protectedInstall || nsisApp) {
     const setupName = `FB-Page-Studio-Setup-v${check.latest_version}.exe`;
     let setupUrl = null;
     let setupSize = 0;
@@ -917,7 +1164,6 @@ export async function applyUpdate() {
       setupUrl = check.setup_asset.download_url;
       setupSize = Number(check.setup_asset.size) || 0;
     }
-    // Stable latest name also on GH
     const setupUrlStable = `https://github.com/${getUpdateConfig().github_repo}/releases/latest/download/FB-Page-Studio-Setup.exe`;
 
     const stageDir = path.join(userWritable, "updates");
@@ -938,7 +1184,7 @@ export async function applyUpdate() {
       bytes: 0,
       total: setupSize || 0,
       percent: 0,
-      message: `Bản cài Setup — đang tải ${setupName}…`,
+      message: `Fallback Setup — đang tải ${setupName}…`,
     });
     try {
       await downloadFile(setupUrl || setupUrlStable, destSetup, (bytes, total) => {
@@ -970,7 +1216,6 @@ export async function applyUpdate() {
       }
     }
 
-    // Snapshot data first — Setup only replaces Program Files, never AppData.
     const dataBackup = backupUserDataBeforeUpdate(userWritable, "pre-nsis-update");
     const { batPath, psPath, launchList } = writeNsisUpdateScript({
       userWritable,
@@ -983,7 +1228,7 @@ export async function applyUpdate() {
     setUpdateProgress({
       state: "ready",
       percent: 100,
-      message: `Đã tải Setup v${check.latest_version}. Đã backup data → tắt app → cài đè (giữ AppData)…`,
+      message: `Đã tải Setup v${check.latest_version}. Backup data → tắt app → cài đè…`,
       from: check.current_version,
       to: check.latest_version,
       setup_mode: true,
@@ -1004,8 +1249,7 @@ export async function applyUpdate() {
       preserves: ["%APPDATA%\\fb-page-studio\\data", ".env", "license"],
       message:
         `Đã tải Setup v${check.latest_version}.\n` +
-        `App sẽ TẮT → UAC (nếu Program Files) → cài ĐÈ đúng thư mục đang chạy → mở bản mới.\n` +
-        `Data/license/token giữ nguyên trong %APPDATA%\\fb-page-studio (không xóa).\n` +
+        `App tắt → cài đè → mở bản mới. Data giữ trong %APPDATA%\\fb-page-studio.\n` +
         (dataBackup?.dir ? `Backup: ${dataBackup.dir}` : ""),
       ...check,
     };
