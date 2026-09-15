@@ -485,8 +485,10 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         reuseAllPages: opts.media_reuse === "all_pages",
         reuseBag: opts.shared_media,
         reuseKey: kind,
+        postRound: opts.post_round || opts.postRound || 1,
       }
     );
+    if (picked?.error) throw new Error(picked.error);
     mediaPath = picked.path;
     mediaSkipped += picked.skipped || 0;
     const gate = assertCanPublish({
@@ -532,8 +534,10 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
             reuseAllPages: opts.media_reuse === "all_pages",
             reuseBag: opts.shared_media,
             reuseKey: kind,
+            postRound: opts.post_round || opts.postRound || 1,
           }
         );
+        if (picked?.error) throw new Error(picked.error);
         mediaPath = picked.path;
         mediaSkipped += picked.skipped || 0;
       }

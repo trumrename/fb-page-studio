@@ -17,7 +17,22 @@ import {
   ensureDir,
   moveToPosted,
   listMediaFiles as listMediaFilesSync,
+  extractLeadingNumber,
 } from "./mediaLibrary.js";
+
+/** Sắp media theo số đầu tên (1-, 2-, 14-…) rồi tên file — dùng cho reuse all_pages */
+function sortMediaByOrdinal(files) {
+  return [...(files || [])].sort((a, b) => {
+    const na = path.basename(String(a || ""));
+    const nb = path.basename(String(b || ""));
+    const oa = extractLeadingNumber(na);
+    const ob = extractLeadingNumber(nb);
+    const va = oa == null ? 1e9 : oa;
+    const vb = ob == null ? 1e9 : ob;
+    if (va !== vb) return va - vb;
+    return na.localeCompare(nb, undefined, { numeric: true, sensitivity: "base" });
+  });
+}
 
 /** Recommended defaults (safe-ish for multi-page organic) */
 export const SAFE_PRESET = {
@@ -418,6 +433,7 @@ export function assertCanPublish({
   burst = false,
   isSchedule = false,
   scheduledAtUnix,
+  reuse_all_pages = false,
 } = {}) {
   ensureAntiSpamTables();
   const s = getAntiSpamSettings();
@@ -598,7 +614,12 @@ export function assertCanPublish({
   }
 
   // Media hash once
-  if (s.block_duplicate_media && mediaPath && fs.existsSync(mediaPath)) {
+  if (
+    s.block_duplicate_media &&
+    mediaPath &&
+    fs.existsSync(mediaPath) &&
+    !reuse_all_pages
+  ) {
     try {
       const hash = fileSha256(mediaPath);
       if (isMediaHashUsed(hash)) {
@@ -633,6 +654,7 @@ export function finalizeMediaAfterSuccess({
   page_id,
   fb_post_id,
   caption,
+  keep_in_inbox = false,
 }) {
   const s = getAntiSpamSettings();
   let movedPath = null;
@@ -647,6 +669,11 @@ export function finalizeMediaAfterSuccess({
       hash = fileSha256(mediaPath);
     } catch {
       hash = null;
+    }
+    if (keep_in_inbox) {
+      logEvent("media_kept", `${originalName} giữ trong kho (reuse mọi page)`);
+      if (caption) recordCaption(caption, page_row_id, page_id);
+      return { movedPath: null, hash, moveError: null, kept: true };
     }
     const destDir = postedFolder || path.join(path.dirname(mediaPath), "..", "posted");
     try {
@@ -702,12 +729,59 @@ export function releaseInflightMedia(filePath) {
 /**
  * Pick media skipping already-used hashes. Moves dups out of inbox → posted.
  */
-export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder) {
+export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder, extra = {}) {
   const s = getAntiSpamSettings();
+  const reuseAll = extra.reuseAllPages === true;
+  const reuseBag = extra.reuseBag && typeof extra.reuseBag === "object" ? extra.reuseBag : null;
+  const reuseKey = extra.reuseKey || kind;
+  // all_pages: mỗi vòng bài (post_round) 1 file cố định, mọi page dùng chung sequence
+  const postRound = Math.max(1, Number(extra.postRound) || 1);
+  const roundKey = `${reuseKey}__r${postRound}`;
+  if (reuseAll && reuseBag && reuseBag[roundKey] && fs.existsSync(reuseBag[roundKey])) {
+    return { path: reuseBag[roundKey], skipped: 0, reused: true, post_round: postRound };
+  }
+  // Legacy single-file key (bản cũ chỉ random 1 file) — chỉ dùng khi không có postRound
+  if (
+    reuseAll &&
+    reuseBag &&
+    !extra.postRound &&
+    reuseBag[reuseKey] &&
+    fs.existsSync(reuseBag[reuseKey])
+  ) {
+    return { path: reuseBag[reuseKey], skipped: 0, reused: true };
+  }
+
   const files = listMediaFilesSync(folder, kind).filter(
-    (f) => !inflightMedia.has(path.resolve(f))
+    (f) => reuseAll || !inflightMedia.has(path.resolve(f))
   );
   if (!files.length) return { path: null, skipped: 0 };
+
+  if (reuseAll) {
+    const poolKey = `${reuseKey}__pool`;
+    if (!Array.isArray(reuseBag?.[poolKey]) || !reuseBag[poolKey].length) {
+      const pool = sortMediaByOrdinal(files).filter((f) => fs.existsSync(f));
+      if (reuseBag) reuseBag[poolKey] = pool;
+    }
+    const pool = (reuseBag && reuseBag[poolKey]) || sortMediaByOrdinal(files);
+    const idx = postRound - 1;
+    if (idx >= pool.length) {
+      return {
+        path: null,
+        skipped: 0,
+        error:
+          `Mode «media chung mọi page»: cần ≥ ${postRound} file ${kind} (theo số bài/page). ` +
+          `Kho đang có ${pool.length}. Thêm media (đánh số 1…${postRound}-…) hoặc giảm số bài.`,
+        post_round: postRound,
+      };
+    }
+    const picked = pool[idx];
+    if (picked && reuseBag) {
+      reuseBag[roundKey] = picked;
+      // giữ legacy key = file vòng 1 (tương thích chỗ đọc cũ)
+      if (postRound === 1) reuseBag[reuseKey] = picked;
+    }
+    return { path: picked, skipped: 0, reused: false, post_round: postRound };
+  }
 
   const protectUsed = Boolean(s.media_once_forever || (s.enabled && s.block_duplicate_media));
   if (!protectUsed) {

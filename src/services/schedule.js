@@ -323,8 +323,10 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         reuseAllPages: opts.media_reuse === "all_pages",
         reuseBag: opts.shared_media,
         reuseKey: kind,
+        postRound: opts.post_round || opts.postRound || 1,
       }
     );
+    if (picked?.error) throw new Error(picked.error);
     mediaPath = picked.path;
     usedPoolCaption = false;
     const gate = assertCanPublish({
@@ -369,8 +371,10 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
             reuseAllPages: opts.media_reuse === "all_pages",
             reuseBag: opts.shared_media,
             reuseKey: kind,
+            postRound: opts.post_round || opts.postRound || 1,
           }
         );
+        if (picked?.error) throw new Error(picked.error);
         mediaPath = picked.path;
       }
       caption =

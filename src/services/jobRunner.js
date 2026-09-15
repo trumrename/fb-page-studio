@@ -608,6 +608,7 @@ export function startJob({
   next_plan_day = null,
   pages_expected = null,
   pages_planned = null,
+  media_reuse = "once",
 } = {}) {
   trimJobs();
   const id = nanoid(10);
@@ -637,6 +638,9 @@ export function startJob({
     paused: false,
     /** Shared across tasks — limit comment links per domain to N pages */
     _commentSiteTracker: createCommentSiteTracker(commentSiteMax),
+    /** once = random file chưa đăng rồi MOVE posted · all_pages = 1 file cho mọi page, giữ kho */
+    media_reuse: media_reuse === "all_pages" ? "all_pages" : "once",
+    _sharedMedia: {},
     /** Direct Local: replan next day after finishing */
     continuous: !!continuous,
     continuous_settings: continuous_settings || null,
@@ -1251,6 +1255,7 @@ async function runJob(jobId) {
             post_type: s.planned_post_type,
             run_at: s.iso,
             use_caption: job.continuous_settings?.use_caption !== false,
+            post_round: s.post_round || 1,
           },
         });
       }
@@ -1454,7 +1459,10 @@ async function executeTask(task, job = null) {
       post_type: task.opts.post_type,
       delivery_mode: deliveryMode,
       use_caption: task.opts.use_caption,
+      post_round: task.opts.post_round || 1,
       comment_site_tracker: job?._commentSiteTracker || null,
+      media_reuse: job?.media_reuse || "once",
+      shared_media: job?._sharedMedia || null,
     });
   }
   if (kind === "schedule") {
@@ -1464,7 +1472,10 @@ async function executeTask(task, job = null) {
       post_type: task.opts.post_type,
       caption: task.opts.caption,
       use_caption: task.opts.use_caption,
+      post_round: task.opts.post_round || 1,
       comment_site_tracker: job?._commentSiteTracker || null,
+      media_reuse: job?.media_reuse || "once",
+      shared_media: job?._sharedMedia || null,
     });
   }
   throw new Error(`Unknown task kind: ${kind}`);
@@ -1626,6 +1637,7 @@ export function startBulkScheduleJob({
   title,
   pages_expected = null,
   pages_planned = null,
+  media_reuse = "once",
 } = {}) {
   // kind=schedule → hẹn giờ Facebook (Graph). Ảnh/video/text đều qua path này.
   // Mode «chờ giờ đăng trực tiếp» là kind=post + run_at (job khác / rotation), không gộp vào đây.
@@ -1639,6 +1651,7 @@ export function startBulkScheduleJob({
       scheduled_publish_time: s.unix || s.scheduled_publish_time,
       post_type: s.post_type,
       use_caption: s.use_caption,
+      post_round: s.post_round || 1,
     },
   }));
   const uniquePages = [
@@ -1650,5 +1663,6 @@ export function startBulkScheduleJob({
     tasks,
     pages_expected: pages_expected != null ? pages_expected : uniquePages.length,
     pages_planned: pages_planned != null ? pages_planned : uniquePages.length,
+    media_reuse,
   });
 }

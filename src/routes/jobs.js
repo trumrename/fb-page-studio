@@ -346,6 +346,7 @@ router.post("/rotation/run-now", (req, res) => {
           local_label: `${s.order || ""}. ${s.window_name || s.group_name || ""} · ${s.page_name} · bài${s.post_round || 1} · ${s.local_label || unix}`,
           post_type: s.planned_post_type || body.post_type || "video",
           use_caption: plan.settings?.use_caption !== false && body.use_caption !== false,
+          post_round: s.post_round || 1,
         });
       }
       if (!slots.length) {
@@ -360,6 +361,7 @@ router.post("/rotation/run-now", (req, res) => {
         title: `Chuẩn mới · Hẹn FB · ${slots.length} slot · ${plan.summary?.pages_planned || 0} page`,
         pages_expected: plan.summary?.pages_requested ?? null,
         pages_planned: plan.summary?.pages_planned ?? null,
+        media_reuse: body.media_reuse === "all_pages" ? "all_pages" : "once",
       });
       return res.json({
         ok: true,
@@ -387,10 +389,12 @@ router.post("/rotation/run-now", (req, res) => {
         post_type: s.planned_post_type,
         run_at: s.iso,
         use_caption: plan.settings?.use_caption !== false && body.use_caption !== false,
+        post_round: s.post_round || 1,
       },
     }));
     const job = startJob({
       type: "rotation_run_now",
+      media_reuse: body.media_reuse === "all_pages" || plan.settings?.media_reuse === "all_pages" ? "all_pages" : "once",
       title:
         `Đăng trực tiếp local · ${plan.summary.posts_per_page_per_day} bài/page · ${plan.summary.pages_planned || plan.summary.accounts} page · ${plan.summary.accounts} admin` +
         (continuous ? " · CHẠY LIÊN TỤC" : "") +
@@ -568,6 +572,7 @@ router.post("/bulk-schedule", async (req, res) => {
       title: `Hẹn giờ · ${slots.length} slot · ${uniquePages.length} page · ${planned.mode}`,
       pages_expected: allowedIds.size,
       pages_planned: uniquePages.length,
+      media_reuse: req.body?.media_reuse === "all_pages" ? "all_pages" : "once",
     });
     res.json({
       ok: true,
