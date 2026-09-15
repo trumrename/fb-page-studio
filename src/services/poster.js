@@ -19,6 +19,7 @@ import {
   pickMedia,
   moveToPosted,
   pickCaption,
+  getCaptionPickMode,
   composeCaptionWithLead,
   buildComment,
   assignCommentForPost,
@@ -294,7 +295,13 @@ export function savePagePostConfig(pageRowId, body) {
     posted_folder: next.posted_folder || "",
     captions_folder: next.captions_folder || "",
     captions_json: JSON.stringify(next.captions || []),
-    pick_mode: next.pick_mode === "sequential" ? "sequential" : "random",
+    pick_mode: (() => {
+      const m = String(next.pick_mode || "").toLowerCase();
+      if (m === "match_media" || m === "match_ordinal" || m === "by_media") return "match_media";
+      if (m === "sequential") return "sequential";
+      if (m === "random") return "random";
+      return "random";
+    })(),
     comment_enabled: next.comment_enabled ? 1 : 0,
     comment_templates_json: JSON.stringify(next.comment_templates || []),
     link_lists_json: JSON.stringify(next.link_lists || {}),
@@ -507,16 +514,13 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       pageRowId,
     });
     selectedCaptionSlot = baseReservation.slot_index;
+    const captionMode = getCaptionPickMode(cfg);
     for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
-      caption = pickCaption(
-        cfg.captions,
-        selectedCaptionSlot + attempt,
-        "sequential_shuffle",
-        cfg.captions_folder,
-        triedCaptions
-      );
-      if (caption) triedCaptions.push(caption);
-      if (postType === "photo" || postType === "image" || postType === "video") {
+      // Chọn media trước (match_media cần tên file để khớp số caption)
+      if (
+        (postType === "photo" || postType === "image" || postType === "video") &&
+        !mediaPath
+      ) {
         const kind = postType === "video" ? "video" : "photo";
         const picked = pickUnusedMedia(
           cfg.media_folder,
@@ -533,6 +537,15 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         mediaPath = picked.path;
         mediaSkipped += picked.skipped || 0;
       }
+      caption = pickCaption(
+        cfg.captions,
+        selectedCaptionSlot + attempt,
+        captionMode,
+        cfg.captions_folder,
+        triedCaptions,
+        mediaPath || ""
+      );
+      if (caption) triedCaptions.push(caption);
       const gate = assertCanPublish({
         pageRowId,
         pageId: page.page_id,
@@ -563,6 +576,20 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       ) {
         releaseInflightMedia(mediaPath);
         throw new Error(gate.error);
+      }
+      // MEDIA_DUP → bỏ media, chọn file khác rồi khớp caption lại
+      if (gate.code === "MEDIA_DUP" || gate.code === "MEDIA_RECENT") {
+        releaseInflightMedia(mediaPath);
+        mediaPath = null;
+        continue;
+      }
+      // match_media + CAPTION_DUP: không đổi media (cùng số) — đăng không caption
+      if (captionMode === "match_media" && gate.code === "CAPTION_DUP") {
+        console.warn(
+          `[runOnePost] match_media caption dup for ${mediaPath} → đăng không caption`
+        );
+        caption = "";
+        break;
       }
       if (!caption || attempt === maxCaptionAttempts - 1) {
         releaseInflightMedia(mediaPath);

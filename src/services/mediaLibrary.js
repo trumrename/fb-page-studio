@@ -210,17 +210,19 @@ function parseCaptionsCsv(text) {
 
 /**
  * Merge captions from disk folder/file + optional inline list.
- * pickMode: random (default for disk pool) | sequential
- */
-/**
+ * pickMode: random | sequential | sequential_shuffle | match_media
+ * match_media: số đầu tên media (14-sad-news….mp4) ↔ số đầu dòng caption (14. SAD NEWS…)
+ *
  * @param {string[]} [exclude] captions to skip (already tried / blocked as dup)
+ * @param {string} [mediaPathOrName] required for match_media
  */
 export function pickCaption(
   captions,
   slotIndex = 0,
   pickMode = "random",
   captionsFolder = "",
-  exclude = []
+  exclude = [],
+  mediaPathOrName = ""
 ) {
   const fromDisk = loadCaptionsFromDisk(captionsFolder);
   const inline = Array.isArray(captions)
@@ -230,20 +232,88 @@ export function pickCaption(
   let list = [...fromDisk, ...inline.filter((c) => !fromDisk.includes(c))];
   if (!list.length) return "";
 
-  // Caption policy is intentionally fixed:
+  const mode = String(pickMode || "").toLowerCase();
+  if (
+    (mode === "match_media" || mode === "match_ordinal" || mode === "by_media") &&
+    mediaPathOrName
+  ) {
+    const matched = pickCaptionByMediaOrdinal(list, mediaPathOrName, exclude);
+    if (matched.caption) return matched.caption;
+    console.warn(
+      `[pickCaption] match_media miss (ordinal=${matched.ordinal ?? "?"} media=${mediaPathOrName}) → fallback sequential`
+    );
+  }
+
+  // Default / fallback:
   // - cycle 0: preserve the source order from beginning to end;
   // - later cycles: use a stable shuffled order, so restart/retry does not
   //   unexpectedly change the caption assigned to a slot.
   const index = Math.max(0, Number(slotIndex) || 0);
   const cycle = Math.floor(index / list.length);
   const offset = index % list.length;
-  const ordered = captionOrderForCycle(list, cycle);
+  const ordered =
+    mode === "random"
+      ? stableShuffle(list, (index % 997) + 1)
+      : captionOrderForCycle(list, cycle);
   const ban = new Set((exclude || []).map((c) => String(c).trim().toLowerCase()));
   for (let step = 0; step < ordered.length; step++) {
     const candidate = ordered[(offset + step) % ordered.length];
     if (!ban.has(String(candidate).trim().toLowerCase())) return candidate;
   }
   return "";
+}
+
+/**
+ * Caption khớp media theo số đầu:
+ *   14-sad-news-….mp4  ↔  "14. SAD NEWS !!! …"
+ * @returns {{ caption: string|null, ordinal: number|null, matched: boolean, used_index: number|null, reason: string }}
+ */
+export function pickCaptionByMediaOrdinal(list, mediaPathOrName, exclude = []) {
+  const ban = new Set((exclude || []).map((c) => String(c).trim().toLowerCase()));
+  const mediaOrd = extractOrdinalFromName(mediaPathOrName);
+  if (mediaOrd == null) {
+    return {
+      caption: null,
+      ordinal: null,
+      matched: false,
+      used_index: null,
+      reason: "no_media_ordinal",
+    };
+  }
+  const arr = Array.isArray(list) ? list : [];
+  for (let i = 0; i < arr.length; i++) {
+    const c = String(arr[i] || "").trim();
+    if (!c) continue;
+    if (ban.has(c.toLowerCase())) continue;
+    const ord = extractLeadingNumber(c);
+    if (ord === mediaOrd) {
+      return {
+        caption: c,
+        ordinal: mediaOrd,
+        matched: true,
+        used_index: i,
+        reason: "ordinal_exact",
+      };
+    }
+  }
+  return {
+    caption: null,
+    ordinal: mediaOrd,
+    matched: false,
+    used_index: null,
+    reason: "ordinal_miss",
+  };
+}
+
+/** Normalize pick_mode from page config */
+export function getCaptionPickMode(cfg = {}, fallback = "sequential_shuffle") {
+  const m = String(cfg?.pick_mode || cfg?.link_lists?.caption_pick_mode || fallback)
+    .trim()
+    .toLowerCase();
+  if (m === "match_media" || m === "match_ordinal" || m === "by_media") return "match_media";
+  if (m === "sequential") return "sequential";
+  if (m === "random") return "random";
+  return "sequential_shuffle";
 }
 
 function stableShuffle(list, cycle) {

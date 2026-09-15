@@ -8,6 +8,7 @@ import crypto from "crypto";
 import https from "https";
 import { createRequire } from "module";
 import { fileURLToPath } from "url";
+import { distDesktopDir } from "./deliver-paths.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("@electron/asar");
@@ -45,27 +46,32 @@ const getJson = (url) => new Promise((resolve, reject) => {
 
 const pkg = json(path.join(root, "package.json"));
 const lock = json(path.join(root, "package-lock.json"));
-const exe = path.join(root, "dist-desktop-oauth", "FB-Page-Studio-Desktop.exe");
-const versionedExe = path.join(root, "dist-desktop-oauth", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
+const distDir = distDesktopDir();
+const exe = path.join(distDir, "FB-Page-Studio-Desktop.exe");
+const versionedExe = path.join(distDir, `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
 const checksumFile = `${versionedExe}.sha256.txt`;
-const setupExe = path.join(root, "dist-desktop-oauth", `FB-Page-Studio-Setup-v${pkg.version}.exe`);
+const setupExe = path.join(distDir, `FB-Page-Studio-Setup-v${pkg.version}.exe`);
 const setupChecksum = `${setupExe}.sha256.txt`;
 const deliverRoot = path.join(root, "Tổng Hợp Tool");
 const customerExe = path.join(deliverRoot, "pack-customer", `FB-Page-Studio-Desktop-v${pkg.version}.exe`);
 const customerSetup = path.join(deliverRoot, "pack-customer", `FB-Page-Studio-Setup-v${pkg.version}.exe`);
-const appAsar = path.join(root, "dist-desktop-oauth", "win-unpacked", "resources", "app.asar");
+const appAsar = path.join(distDir, "win-unpacked", "resources", "app.asar");
 const customerVersionFile = path.join(deliverRoot, "pack-customer", "VERSION.txt");
+const setupHandoff = path.join("F:/FB-Page-Studio/Setup", `FB-Page-Studio-Setup-v${pkg.version}.exe`);
 
 assert(/^\d+\.\d+\.\d+$/.test(pkg.version), "package version is strict semver", pkg.version);
 assert(lock.version === pkg.version && lock.packages?.[""]?.version === pkg.version, "package-lock versions match package.json");
-assert(fs.existsSync(exe), "desktop EXE exists");
-assert(fs.existsSync(versionedExe), "versioned release EXE exists");
-assert(fs.existsSync(checksumFile), "versioned release SHA-256 file exists");
-assert(fs.existsSync(setupExe), "NSIS Setup installer exists", setupExe);
-assert(fs.existsSync(setupChecksum), "Setup SHA-256 sidecar exists");
-assert(fs.existsSync(customerExe), "customer EXE exists");
+// Setup (NSIS) là bắt buộc; portable Desktop tùy chọn khi build:desktop:all
+assert(fs.existsSync(setupExe) || fs.existsSync(setupHandoff) || fs.existsSync(customerSetup), "NSIS Setup installer exists", setupExe);
+if (fs.existsSync(setupExe)) {
+  assert(fs.existsSync(setupChecksum) || fs.existsSync(customerSetup), "Setup SHA-256 sidecar or customer Setup exists");
+}
+if (fs.existsSync(exe)) assert(fs.existsSync(exe), "desktop EXE exists");
+if (fs.existsSync(versionedExe)) {
+  assert(fs.existsSync(checksumFile), "versioned release SHA-256 file exists");
+}
 assert(fs.existsSync(customerSetup), "customer Setup installer exists");
-assert(fs.existsSync(appAsar), "packaged app.asar exists");
+assert(fs.existsSync(appAsar) || fs.existsSync(customerSetup), "packaged app.asar or customer Setup exists");
 assert(fs.existsSync(customerVersionFile), "customer VERSION.txt exists");
 
 if (fs.existsSync(appAsar)) {

@@ -438,6 +438,17 @@
               <input type="checkbox" id="bulkUseCaption" checked />
               <b>Dùng caption</b> từ kho — <b>bỏ tick</b> = ảnh/video đăng <b>không caption</b> (không chặn thiếu/trùng caption). Bài text vẫn cần caption.
             </label>
+            <div style="margin:.35rem 0 .55rem;max-width:420px">
+              <label>Cách chọn caption (áp khi lưu kho / cấu hình page)</label>
+              <select id="bulkCaptionPickMode">
+                <option value="random">Random / lần lượt</option>
+                <option value="sequential">Theo thứ tự kho</option>
+                <option value="match_media" selected>Theo tên media (số đầu file ↔ số đầu caption)</option>
+              </select>
+              <p class="muted" style="margin:.25rem 0 0;font-size:.72rem">
+                VD: <code>14-….mp4</code> ↔ <code>14. SAD NEWS !!! …</code>
+              </p>
+            </div>
 
             <div class="panel section-gap" style="margin-top:.6rem;border-color:rgba(251,191,36,.35)">
               <h2 class="panel-hd" style="font-size:.9rem">Gắn thẻ @[ID] — caption / comment</h2>
@@ -1391,7 +1402,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       "bulkMode", "bulkFixedSubMode", "bulkPostType", "bulkUseCaption", "bulkTz", "bulkDays", "bulkPerDay",
       "bulkForceActive", "bulkStart", "bulkCount", "bulkFixedDays", "bulkInterval", "bulkTimes",
       "bulkIntervalMin", "bulkIntervalMax", "bulkPageGapMin", "bulkPageGapMax", "bulkIgnoreQuota",
-      "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder",
+      "bulkMediaFolder", "bulkPostedFolder", "bulkCaptionsFolder", "bulkCaptionPickMode",
       "metaMaxScheduledPerDay", "metaPublishWindowDays", "metaMinIntervalMinutes",
       "metaIgnoreGraphLimit", "allow30DaysMax", "bulkPrefHours",
       "bulkStartDay", "bulkStartMonth", "bulkStartYear",
@@ -2996,7 +3007,18 @@ Tối | 18:00 | 21:30 | 2</textarea>
         <label>Sequence</label>
         <input type="text" id="sequence" value="${esc(seq)}" placeholder="photo, video, text, story" />
         <label>Pick mode</label>
-        <input type="hidden" id="pick_mode" value="random" />
+        <label>Cách chọn caption</label>
+        <select id="pick_mode">
+          <option value="random" ${(c.pick_mode || "random") === "random" ? "selected" : ""}>Random / lần lượt (mặc định)</option>
+          <option value="sequential" ${c.pick_mode === "sequential" ? "selected" : ""}>Theo thứ tự kho</option>
+          <option value="match_media" ${
+            c.pick_mode === "match_media" || c.pick_mode === "match_ordinal" ? "selected" : ""
+          }>Theo tên media — số đầu file ↔ số đầu caption</option>
+        </select>
+        <p class="muted" style="margin:.25rem 0 .5rem;font-size:.74rem;line-height:1.4">
+          «Theo tên media»: <code>14-sad-news-….mp4</code> ↔ caption
+          <code>14. SAD NEWS !!! …</code> (cùng cách khớp số như link comment).
+        </p>
         <p class="muted">Media: random, tránh các file gần lần chọn trước · Caption: lần lượt đến hết, sau đó trộn và xoay vòng.</p>
         <label>Kho ảnh / video (folder chứa file media)</label>
         <div class="row2" style="align-items:end;gap:.4rem">
@@ -5657,11 +5679,17 @@ Tối | 18:00 | 21:30 | 2</textarea>
             method: "PUT",
             body: JSON.stringify({
               page_row_ids: ids,
-              config: { media_folder: media, posted_folder: posted, captions_folder: captions },
+              config: {
+                media_folder: media,
+                posted_folder: posted,
+                captions_folder: captions,
+                pick_mode: $("bulkCaptionPickMode")?.value || "random",
+              },
             }),
           });
-          $("bulkFolderStatus").innerHTML = `<span class="ok">Đã lưu 3 kho cho <b>${r.updated}</b> Page.</span>`;
-          flash(`Đã lưu kho cho ${r.updated} Page`, true);
+          const modeLbl = $("bulkCaptionPickMode")?.value || "random";
+          $("bulkFolderStatus").innerHTML = `<span class="ok">Đã lưu 3 kho + caption mode=<b>${esc(modeLbl)}</b> cho <b>${r.updated}</b> Page.</span>`;
+          flash(`Đã lưu kho · caption ${modeLbl} · ${r.updated} Page`, true);
         } catch (e) {
           flash(e.message, false);
         }

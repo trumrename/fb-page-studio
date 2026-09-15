@@ -18,6 +18,7 @@ import {
 import path from "path";
 import {
   pickCaption,
+  getCaptionPickMode,
   buildComment,
   assignCommentForPost,
   composeCaptionWithLead,
@@ -349,21 +350,14 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         })
       : { slot_index: captionSlot };
     selectedCaptionSlot = baseReservation.slot_index;
+    const captionMode = getCaptionPickMode(cfg);
     for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
       const manualCaption = manualCaption0;
-      caption =
-        manualCaption
-          ? String(opts.caption).trim()
-          : pickCaption(
-              cfg.captions,
-              selectedCaptionSlot + attempt,
-              "sequential_shuffle",
-              cfg.captions_folder,
-              triedCaptions
-            );
-      if (caption && !manualCaption) triedCaptions.push(caption);
-      usedPoolCaption = !manualCaption;
-      if (postType === "photo" || postType === "image" || postType === "video") {
+      if (
+        !manualCaption &&
+        (postType === "photo" || postType === "image" || postType === "video") &&
+        !mediaPath
+      ) {
         const kind = postType === "video" ? "video" : "photo";
         const picked = pickUnusedMedia(
           cfg.media_folder,
@@ -379,6 +373,19 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         );
         mediaPath = picked.path;
       }
+      caption =
+        manualCaption
+          ? String(opts.caption).trim()
+          : pickCaption(
+              cfg.captions,
+              selectedCaptionSlot + attempt,
+              captionMode,
+              cfg.captions_folder,
+              triedCaptions,
+              mediaPath || ""
+            );
+      if (caption && !manualCaption) triedCaptions.push(caption);
+      usedPoolCaption = !manualCaption;
       const gate = assertCanPublish({
         pageRowId,
         pageId: page.page_id,
@@ -402,6 +409,15 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         ].includes(gate.code)
       ) {
         throw new Error(gate.error);
+      }
+      if (gate.code === "MEDIA_DUP" || gate.code === "MEDIA_RECENT") {
+        mediaPath = null;
+        continue;
+      }
+      if (!manualCaption && captionMode === "match_media" && gate.code === "CAPTION_DUP") {
+        caption = "";
+        usedPoolCaption = false;
+        break;
       }
       if (manualCaption || attempt === maxCaptionAttempts - 1 || !caption) {
         // Ảnh/video: hết caption → hẹn không caption thay vì fail
