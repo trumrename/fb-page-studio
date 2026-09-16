@@ -691,6 +691,42 @@ export function mediaStemFromPath(nameOrPath) {
 }
 
 /**
+ * Tìm lại file media nếu path cache đã mất (job khác đã move → posted / đổi tên stamp).
+ * VD: kho_video\14-foo.mp4 → posted\2026-…Z_14-foo.mp4
+ */
+export function resolveExistingMediaPath(filePath, extraFolders = []) {
+  if (!filePath) return null;
+  const abs = path.resolve(String(filePath));
+  if (fs.existsSync(abs)) return abs;
+  const base = path.basename(abs);
+  const stem = mediaStemFromPath(base) || base.replace(/\.[^.]+$/, "");
+  const dirs = [
+    path.dirname(abs),
+    ...extraFolders.map((d) => (d ? path.resolve(String(d)) : null)).filter(Boolean),
+  ];
+  const seen = new Set();
+  for (const dir of dirs) {
+    const key = String(dir).toLowerCase();
+    if (seen.has(key) || !fs.existsSync(dir)) continue;
+    seen.add(key);
+    try {
+      const names = fs.readdirSync(dir);
+      if (names.includes(base)) return path.join(dir, base);
+      const hit = names.find((n) => {
+        if (n === base) return true;
+        if (n.endsWith(`_${base}`)) return true;
+        const ns = mediaStemFromPath(n);
+        return Boolean(ns && stem && (ns === stem || ns.endsWith(`_${stem}`) || stem.endsWith(ns)));
+      });
+      if (hit) return path.join(dir, hit);
+    } catch {
+      /* */
+    }
+  }
+  return null;
+}
+
+/**
  * Lấy slug cuối từ URL: https://host/1-natalie-mercer/ → "1-natalie-mercer"
  */
 export function extractUrlSlug(url) {

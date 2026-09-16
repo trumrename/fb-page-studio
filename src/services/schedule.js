@@ -356,6 +356,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         reuseBag: opts.shared_media,
         reuseKey: kind,
         postRound: opts.post_round || opts.postRound || 1,
+        postedFolder: cfg.posted_folder,
       }
     );
     if (picked?.error) throw new Error(picked.error);
@@ -404,6 +405,7 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
             reuseBag: opts.shared_media,
             reuseKey: kind,
             postRound: opts.post_round || opts.postRound || 1,
+            postedFolder: cfg.posted_folder,
           }
         );
         if (picked?.error) throw new Error(picked.error);

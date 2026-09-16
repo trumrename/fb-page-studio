@@ -17,6 +17,17 @@ import {
   isInvalidAppSecretProofError,
   resolveAppSecret,
 } from "./facebook.js";
+import { resolveExistingMediaPath } from "./mediaLibrary.js";
+
+function requireMediaFile(filePath, label = "media") {
+  if (filePath && fs.existsSync(filePath)) return filePath;
+  const found = resolveExistingMediaPath(filePath, []);
+  if (found) return found;
+  const err = new Error(`File not found: ${filePath}`);
+  err.code = "MEDIA_FILE_MISSING";
+  err.permanent = true;
+  throw err;
+}
 
 function proofForToken(pageToken, metaAppKey = "") {
   const secret = resolveAppSecret("", metaAppKey);
@@ -355,9 +366,7 @@ export async function publishPhoto(
   caption = "",
   schedule = null
 ) {
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`File not found: ${filePath}`);
-  }
+  filePath = requireMediaFile(filePath, "photo");
   const data = await graphPostForm(
     `/${pageId}/photos`,
     pageToken,
@@ -433,9 +442,7 @@ export async function publishVideo(
   schedule = null,
   opts = {}
 ) {
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`File not found: ${filePath}`);
-  }
+  filePath = requireMediaFile(filePath, "video");
   // Caption bài = description FULL. Title Meta — clamp byte ≤255, không copy caption dài.
   const desc = description ? String(description) : "";
   let title = clampMetaVideoTitle(opts?.title);

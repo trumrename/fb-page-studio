@@ -18,6 +18,7 @@ import {
   moveToPosted,
   listMediaFiles as listMediaFilesSync,
   extractLeadingNumber,
+  resolveExistingMediaPath,
 } from "./mediaLibrary.js";
 
 /** Sắp media theo số đầu tên (1-, 2-, 14-…) rồi tên file — dùng cho reuse all_pages */
@@ -737,18 +738,41 @@ export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder,
   // all_pages: mỗi vòng bài (post_round) 1 file cố định, mọi page dùng chung sequence
   const postRound = Math.max(1, Number(extra.postRound) || 1);
   const roundKey = `${reuseKey}__r${postRound}`;
-  if (reuseAll && reuseBag && reuseBag[roundKey] && fs.existsSync(reuseBag[roundKey])) {
-    return { path: reuseBag[roundKey], skipped: 0, reused: true, post_round: postRound };
+  const postedFolderHint = extra.postedFolder || postedFolder || null;
+
+  const resolveCached = (cached) => {
+    if (!cached) return null;
+    if (fs.existsSync(cached)) return cached;
+    // Job khác đã move/stamp — tìm lại trong kho + posted
+    const found = resolveExistingMediaPath(cached, [folder, postedFolderHint].filter(Boolean));
+    if (found && reuseBag) {
+      reuseBag[roundKey] = found;
+      if (postRound === 1) reuseBag[reuseKey] = found;
+    }
+    return found;
+  };
+
+  if (reuseAll && reuseBag && reuseBag[roundKey]) {
+    const resolved = resolveCached(reuseBag[roundKey]);
+    if (resolved) {
+      return { path: resolved, skipped: 0, reused: true, post_round: postRound };
+    }
+    // Cache chết — xóa để pick lại
+    try {
+      delete reuseBag[roundKey];
+    } catch {
+      /* */
+    }
   }
   // Legacy single-file key (bản cũ chỉ random 1 file) — chỉ dùng khi không có postRound
-  if (
-    reuseAll &&
-    reuseBag &&
-    !extra.postRound &&
-    reuseBag[reuseKey] &&
-    fs.existsSync(reuseBag[reuseKey])
-  ) {
-    return { path: reuseBag[reuseKey], skipped: 0, reused: true };
+  if (reuseAll && reuseBag && !extra.postRound && reuseBag[reuseKey]) {
+    const resolved = resolveCached(reuseBag[reuseKey]);
+    if (resolved) return { path: resolved, skipped: 0, reused: true };
+    try {
+      delete reuseBag[reuseKey];
+    } catch {
+      /* */
+    }
   }
 
   const files = listMediaFilesSync(folder, kind).filter(
@@ -758,11 +782,15 @@ export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder,
 
   if (reuseAll) {
     const poolKey = `${reuseKey}__pool`;
-    if (!Array.isArray(reuseBag?.[poolKey]) || !reuseBag[poolKey].length) {
-      const pool = sortMediaByOrdinal(files).filter((f) => fs.existsSync(f));
-      if (reuseBag) reuseBag[poolKey] = pool;
+    // Làm mới pool: bỏ path không còn tồn tại (job once đã move)
+    let pool = Array.isArray(reuseBag?.[poolKey]) ? reuseBag[poolKey] : [];
+    pool = pool
+      .map((p) => resolveExistingMediaPath(p, [folder, postedFolderHint].filter(Boolean)) || p)
+      .filter((p) => fs.existsSync(p));
+    if (!pool.length) {
+      pool = sortMediaByOrdinal(files).filter((f) => fs.existsSync(f));
     }
-    const pool = (reuseBag && reuseBag[poolKey]) || sortMediaByOrdinal(files);
+    if (reuseBag) reuseBag[poolKey] = pool;
     const idx = postRound - 1;
     if (idx >= pool.length) {
       return {
@@ -770,7 +798,8 @@ export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder,
         skipped: 0,
         error:
           `Mode «media chung mọi page»: cần ≥ ${postRound} file ${kind} (theo số bài/page). ` +
-          `Kho đang có ${pool.length}. Thêm media (đánh số 1…${postRound}-…) hoặc giảm số bài.`,
+          `Kho đang có ${pool.length} (có thể job khác đã chuyển posted). ` +
+          `Thêm media hoặc dùng cùng mode «cùng bộ» / khác kho.`,
         post_round: postRound,
       };
     }

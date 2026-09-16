@@ -1511,7 +1511,18 @@ function asTransientProbe(resultOrErr) {
 }
 
 function isRetryableTaskOutcome(resultOrErr) {
-  return isTransientGraphError(asTransientProbe(resultOrErr));
+  const probe = asTransientProbe(resultOrErr);
+  const msg = String(probe?.message || resultOrErr?.message || resultOrErr?.error || "");
+  const code = String(probe?.code || resultOrErr?.code || "");
+  // File media mất (job khác đã move) — không retry 7 lần vô ích
+  if (
+    code === "MEDIA_FILE_MISSING" ||
+    resultOrErr?.permanent === true ||
+    /file not found|cannot move missing file|ENOENT/i.test(msg)
+  ) {
+    return false;
+  }
+  return isTransientGraphError(probe);
 }
 
 /**
