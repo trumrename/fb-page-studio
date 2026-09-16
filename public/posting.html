@@ -1334,7 +1334,36 @@ Tối | 18:00 | 21:30 | 2</textarea>
                 <div><b>Media/Caption còn lại (live)</b><div id="liveResources" class="muted" style="margin-top:.35rem">—</div></div>
                 <div><b>Thông báo OK/FAIL</b><div id="liveNotifs" class="muted" style="margin-top:.35rem;max-height:180px;overflow:auto">—</div></div>
               </div>
+              <div style="margin-top:.65rem">
+                <b>Chờ giờ (Direct Local)</b>
+                <div id="liveWaitingTasks" class="muted" style="margin-top:.35rem;max-height:160px;overflow:auto">—</div>
+              </div>
               <div style="margin-top:.65rem"><b>Từng nhiệm vụ</b><div id="liveTasks" style="margin-top:.35rem;max-height:280px;overflow:auto"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel section-gap" id="pendingSchedPanel" data-workspace-panel="monitor">
+          <h2 class="panel-hd">
+            <span>Chờ đăng · bài đã hẹn (nhiều ngày)</span>
+            <span class="hint">
+              <button type="button" class="btn-ghost btn-sm" id="btnRefreshPending">Làm mới</button>
+              <label class="muted" style="font-size:.78rem;margin-left:.35rem">
+                Ngày tới
+                <input type="number" id="pendingDays" min="1" max="60" value="14" style="width:3.2rem;margin-left:.25rem" />
+              </label>
+            </span>
+          </h2>
+          <div class="panel-body">
+            <p class="muted" style="margin:0 0 .55rem;font-size:.8rem;line-height:1.45">
+              <b>Hẹn FB</b> = Graph đã nhận lịch, chờ tới giờ mới lên tường.
+              <b>Treo tool</b> = Direct Local, task đang chờ <code>run_at</code>.
+            </p>
+            <div id="pendingSummary" class="muted" style="margin-bottom:.5rem">—</div>
+            <div id="pendingByDay" style="max-height:360px;overflow:auto"></div>
+            <div style="margin-top:.75rem">
+              <b style="font-size:.85rem">Direct Local · đang chờ giờ (job)</b>
+              <div id="pendingDirectLocal" class="muted" style="margin-top:.35rem;max-height:200px;overflow:auto">—</div>
             </div>
           </div>
         </section>
@@ -3977,6 +4006,98 @@ Tối | 18:00 | 21:30 | 2</textarea>
       }
     }
 
+    function fmtVnTime(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso);
+      return d.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    }
+
+    async function loadPendingSchedules() {
+      const box = $("pendingByDay");
+      const sum = $("pendingSummary");
+      const directBox = $("pendingDirectLocal");
+      if (!box) return;
+      try {
+        const days = Math.min(60, Math.max(1, Number($("pendingDays")?.value) || 14));
+        const data = await api(`/api/posting/pending?days=${days}&limit=800`);
+        const s = data.summary || {};
+        if (sum) {
+          sum.innerHTML =
+            `<span class="ok">FB chờ: <b>${s.fb_waiting || 0}</b></span>` +
+            ` · <span class="${s.fb_overdue ? "fail" : "muted"}">FB quá giờ: <b>${s.fb_overdue || 0}</b></span>` +
+            ` · <span class="ok">Tool chờ (Direct Local): <b>${s.tool_waiting || 0}</b></span>` +
+            ` · <span class="muted">cửa sổ ${days} ngày</span>`;
+        }
+        const byDay = data.fb_scheduled?.by_day || [];
+        if (!byDay.length) {
+          box.innerHTML = `<div class="muted">Chưa có bài hẹn FB trong ${days} ngày tới (status=scheduled).</div>`;
+        } else {
+          box.innerHTML = byDay
+            .map((d) => {
+              const rows = (d.rows || [])
+                .slice(0, 80)
+                .map((r) => {
+                  const badge = r.overdue
+                    ? `<span class="fail">quá giờ</span>`
+                    : r.waiting
+                      ? `<span class="ok">chờ</span>`
+                      : `<span class="muted">${esc(r.status)}</span>`;
+                  return (
+                    `<div style="display:grid;grid-template-columns:7.5rem 1fr auto;gap:.4rem;padding:.28rem 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:.78rem">` +
+                    `<span class="muted">${esc(fmtVnTime(r.scheduled_publish_time))}</span>` +
+                    `<span><b>${esc(r.page_name || "?")}</b> · ${esc(r.post_type || "")}` +
+                    (r.media_name ? ` · <code style="font-size:.7rem">${esc(r.media_name)}</code>` : "") +
+                    (r.caption_preview
+                      ? `<div class="muted" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.caption_preview)}</div>`
+                      : "") +
+                    `</span>${badge}</div>`
+                  );
+                })
+                .join("");
+              return (
+                `<div style="margin:0 0 .65rem;padding:.45rem .55rem;border:1px solid rgba(52,211,153,.25);border-radius:10px;background:rgba(52,211,153,.05)">` +
+                `<div style="display:flex;justify-content:space-between;gap:.5rem;margin-bottom:.35rem">` +
+                `<b>${esc(d.day)}</b>` +
+                `<span class="muted" style="font-size:.76rem">chờ ${d.waiting || 0}` +
+                (d.overdue ? ` · <span class="fail">quá giờ ${d.overdue}</span>` : "") +
+                ` · ${d.count} bài</span></div>${rows || `<div class="muted">—</div>`}</div>`
+              );
+            })
+            .join("");
+        }
+        const dl = data.direct_local_waiting || [];
+        if (directBox) {
+          if (!dl.length) {
+            directBox.innerHTML = `<span class="muted">Không có task Direct Local đang chờ giờ.</span>`;
+          } else {
+            directBox.innerHTML = dl
+              .slice(0, 100)
+              .map((t) => {
+                const badge = t.overdue
+                  ? `<span class="fail">tới giờ</span>`
+                  : `<span class="ok">chờ</span>`;
+                return (
+                  `<div style="display:grid;grid-template-columns:7.5rem 1fr auto;gap:.4rem;padding:.28rem 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:.78rem">` +
+                  `<span class="muted">${esc(fmtVnTime(t.run_at))}</span>` +
+                  `<span><b>${esc(t.page_name || "?")}</b>` +
+                  (t.post_round ? ` · vòng ${t.post_round}` : "") +
+                  (t.label ? `<div class="muted" style="font-size:.72rem">${esc(t.label)}</div>` : "") +
+                  (t.job_title
+                    ? `<div class="muted" style="font-size:.7rem">job: ${esc(t.job_title)}</div>`
+                    : "") +
+                  `</span>${badge}</div>`
+                );
+              })
+              .join("");
+          }
+        }
+      } catch (e) {
+        if (sum) sum.innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+        box.innerHTML = "";
+      }
+    }
+
     async function loadLogs() {
       const data = await api("/api/posting/logs?limit=40");
       const tb = $("logs");
@@ -5318,6 +5439,36 @@ Tối | 18:00 | 21:30 | 2</textarea>
       if (resume) resume.style.display = job.status === "paused" ? "inline-block" : "none";
       if (stop) stop.style.display = ["queued","running","paused"].includes(job.status) ? "inline-block" : "none";
 
+      // Chờ giờ Direct Local trong job hiện tại
+      const nowMs = Date.now();
+      const waitingTasks = (job.tasks || []).filter((t) => {
+        if (t.status !== "pending" && t.status !== "waiting") return false;
+        const runAt = t.run_at || t.opts?.run_at;
+        if (!runAt) return false;
+        const ms = Date.parse(runAt);
+        return Number.isFinite(ms) && ms > nowMs - 60_000;
+      });
+      const waitBox = $("liveWaitingTasks");
+      if (waitBox) {
+        if (!waitingTasks.length) {
+          waitBox.innerHTML = `<span class="muted">Không có task chờ giờ trong job này.</span>`;
+        } else {
+          waitBox.innerHTML = waitingTasks
+            .slice(0, 40)
+            .map((t) => {
+              const runAt = t.run_at || t.opts?.run_at;
+              const ms = Date.parse(runAt);
+              const mins = Math.max(0, Math.round((ms - nowMs) / 60000));
+              return (
+                `<div style="padding:.25rem 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:.78rem">` +
+                `<b>${esc(t.page_name || "?")}</b> · ${esc(t.label || "")}` +
+                `<div class="muted">${esc(fmtVnTime(runAt))} · còn ~${mins} phút</div></div>`
+              );
+            })
+            .join("");
+        }
+      }
+
       const mediaPools = job.resources?.media_pools || [];
       const captionPools = job.resources?.caption_pools || [];
       const legacyFolders = job.resources?.folders || [];
@@ -6174,7 +6325,12 @@ Tối | 18:00 | 21:30 | 2</textarea>
         downloadFile(el.getAttribute("data-dl"), el.getAttribute("data-name"));
       });
     });
-    $("btnRefreshActLog")?.addEventListener("click", () => loadLogs());
+    $("btnRefreshActLog")?.addEventListener("click", () => {
+      loadLogs();
+      loadPendingSchedules();
+    });
+    $("btnRefreshPending")?.addEventListener("click", () => loadPendingSchedules());
+    $("pendingDays")?.addEventListener("change", () => loadPendingSchedules());
     $("btnReconcileActLog")?.addEventListener("click", async () => {
       const btn = $("btnReconcileActLog");
       btn.disabled = true;
@@ -6359,7 +6515,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       await loadWorkspaceState();
       await loadDeployAndMediaUpload();
       await loadPages();
-      await Promise.all([loadLogs(), loadRotation(), loadAntiStatus()]);
+      await Promise.all([loadLogs(), loadPendingSchedules(), loadRotation(), loadAntiStatus()]);
       applyControls(workspaceState.bulk || {}, bulkWorkspaceControlIds);
       applyControls(workspaceState.rotation || {}, rotationWorkspaceControlIds);
       if (!$("rotPageTargetSelected")?.checked && !$("rotPageTargetAll")?.checked) {

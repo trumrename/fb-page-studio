@@ -26,6 +26,7 @@ import {
   listFbScheduledForPage,
   reconcileScheduledLogs,
 } from "../services/schedule.js";
+import { listJobs, getJob } from "../services/jobRunner.js";
 import { listMetaAppsPublic } from "../services/metaApps.js";
 import { getFollowerGrowth } from "../services/followerHistory.js";
 import { getAppSetting, saveAppSetting } from "../services/appSettings.js";
@@ -540,6 +541,145 @@ router.get("/stats/summary", (req, res) => {
     today: rowsFor(day || todayVn),
     total: rowsFor(null),
   });
+});
+
+/**
+ * GET /api/posting/pending
+ * Bài đã hẹn / chờ đăng (chưa tới giờ hoặc Graph chưa publish).
+ * Query: days=7 (mặc định) · limit=500
+ */
+router.get("/pending", (req, res) => {
+  try {
+    const db = getDb();
+    const days = Math.min(60, Math.max(1, Number(req.query.days) || 14));
+    const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const minMs = nowMs - days * 24 * 3600 * 1000;
+    const maxMs = nowMs + days * 24 * 3600 * 1000;
+    // ISO có chữ T/Z — không dùng datetime() SQLite (trả NULL). Lọc cửa sổ ngày ở JS.
+    const rawFb = db
+      .prepare(
+        `SELECT id, page_row_id, page_name, post_type, status, error,
+                fb_post_id, fb_post_url, caption, media_path,
+                comment_text, comment_id,
+                created_at, scheduled_publish_time,
+                ${DELIVERY_MODE_SQL} AS delivery_mode,
+                ${VN_DAY_SQL} AS day_vn
+         FROM post_logs
+         WHERE status IN ('scheduled', 'schedule_overdue')
+           AND scheduled_publish_time IS NOT NULL
+           AND trim(scheduled_publish_time) <> ''
+         ORDER BY scheduled_publish_time ASC
+         LIMIT ?`
+      )
+      .all(Math.min(5000, limit * 5));
+
+    const fbRows = [];
+    for (const r of rawFb) {
+      const ms = Date.parse(r.scheduled_publish_time);
+      if (!Number.isFinite(ms)) continue;
+      // Giữ: quá giờ gần đây + chờ trong cửa sổ days tới
+      if (ms < minMs || ms > maxMs) continue;
+      fbRows.push(r);
+      if (fbRows.length >= limit) break;
+    }
+
+    // Nhóm theo ngày VN
+    const byDay = new Map();
+    for (const r of fbRows) {
+      const day = r.day_vn || "unknown";
+      if (!byDay.has(day)) byDay.set(day, []);
+      const ms = Date.parse(r.scheduled_publish_time);
+      const waiting = r.status === "scheduled" && Number.isFinite(ms) && ms > nowMs;
+      const overdue =
+        r.status === "schedule_overdue" ||
+        (r.status === "scheduled" && Number.isFinite(ms) && ms <= nowMs);
+      byDay.get(day).push({
+        id: r.id,
+        page_row_id: r.page_row_id,
+        page_name: r.page_name,
+        post_type: r.post_type,
+        status: r.status,
+        scheduled_publish_time: r.scheduled_publish_time,
+        created_at: r.created_at,
+        delivery_mode: r.delivery_mode || "fb_scheduled",
+        fb_post_id: r.fb_post_id,
+        fb_post_url: r.fb_post_url,
+        media_name: r.media_path ? String(r.media_path).split(/[/\\]/).pop() : null,
+        caption_preview: r.caption ? String(r.caption).slice(0, 80) : null,
+        waiting,
+        overdue,
+      });
+    }
+
+    // Job Direct Local đang chạy: task pending có run_at tương lai
+    let jobWaiting = [];
+    try {
+      const jobs = listJobs(20) || [];
+      const now = Date.now();
+      for (const j of jobs) {
+        if (!j || (j.status !== "running" && j.status !== "paused" && j.status !== "pending")) {
+          continue;
+        }
+        const full = getJob(j.id) || j;
+        for (const t of full?.tasks || []) {
+          if (t.status !== "pending" && t.status !== "waiting") continue;
+          const runAt = t.run_at || t.opts?.run_at;
+          if (!runAt) continue;
+          const ms = Date.parse(runAt);
+          if (!Number.isFinite(ms)) continue;
+          jobWaiting.push({
+            job_id: full.id || j.id,
+            job_title: full.title || j.title,
+            task_id: t.id,
+            page_name: t.page_name,
+            page_row_id: t.page_row_id,
+            label: t.label,
+            post_type: t.opts?.post_type || null,
+            run_at: runAt,
+            delivery_mode: "scheduled_direct",
+            waiting: ms > now,
+            overdue: ms <= now,
+            post_round: t.opts?.post_round || null,
+          });
+        }
+      }
+      jobWaiting.sort((a, b) => Date.parse(a.run_at) - Date.parse(b.run_at));
+    } catch (e) {
+      console.warn("[pending] jobs:", e.message);
+    }
+
+    const daysOut = [...byDay.entries()]
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+      .map(([day, rows]) => ({
+        day,
+        count: rows.length,
+        waiting: rows.filter((x) => x.waiting).length,
+        overdue: rows.filter((x) => x.overdue).length,
+        rows,
+      }));
+
+    res.json({
+      ok: true,
+      now: nowIso,
+      days_ahead: days,
+      fb_scheduled: {
+        total: fbRows.length,
+        waiting: [...byDay.values()].flat().filter((x) => x.waiting).length,
+        overdue: [...byDay.values()].flat().filter((x) => x.overdue).length,
+        by_day: daysOut,
+      },
+      direct_local_waiting: jobWaiting,
+      summary: {
+        fb_waiting: [...byDay.values()].flat().filter((x) => x.waiting).length,
+        fb_overdue: [...byDay.values()].flat().filter((x) => x.overdue).length,
+        tool_waiting: jobWaiting.filter((x) => x.waiting).length,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 /**
