@@ -505,12 +505,14 @@ export function isNetworkTransientError(errOrBody) {
       "UND_ERR_BODY_TIMEOUT",
       "UND_ERR_SOCKET",
       "ABORT_ERR",
+      "EMPTY_GRAPH_BODY",
+      "BAD_GRAPH_JSON",
     ].includes(code)
   ) {
     return true;
   }
   if (
-    /fetch failed|networkerror|network error|socket hang up|socket closed|connection reset|connection refused|timed out|timeout|temporarily unavailable|could not connect|getaddrinfo|certificate|ssl|tls|und_err_|failed to fetch|econnreset|etimedout/i.test(
+    /fetch failed|networkerror|network error|socket hang up|socket closed|connection reset|connection refused|timed out|timeout|temporarily unavailable|could not connect|getaddrinfo|certificate|ssl|tls|und_err_|failed to fetch|econnreset|etimedout|unexpected end of json|empty.?graph|trả về rỗng|json lỗi/i.test(
       msg
     )
   ) {

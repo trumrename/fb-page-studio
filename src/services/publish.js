@@ -42,6 +42,35 @@ function wrapFetchError(e, label = "Graph") {
   return err;
 }
 
+/**
+ * Graph đôi khi trả body rỗng (502/timeout/proxy) → res.json() ném
+ * "Unexpected end of JSON input". Parse an toàn + đánh dấu network để retry.
+ */
+async function readGraphJson(res, label = "Graph") {
+  const text = await res.text();
+  if (!text || !String(text).trim()) {
+    const err = new Error(
+      `Facebook trả về rỗng (HTTP ${res.status || "?"}) — ${label}. Thử lại.`
+    );
+    err.code = "EMPTY_GRAPH_BODY";
+    err.network = true;
+    err.status = res.status;
+    throw err;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const err = new Error(
+      `Facebook trả JSON lỗi (HTTP ${res.status || "?"}) — ${label}: ${String(text).slice(0, 120)}`
+    );
+    err.code = "BAD_GRAPH_JSON";
+    err.network = true;
+    err.status = res.status;
+    err.cause = e;
+    throw err;
+  }
+}
+
 /** Low-level: short auto-retry for network/fetch only. */
 async function withPublishRetry(fn) {
   const maxAttempts = 3;
@@ -53,7 +82,13 @@ async function withPublishRetry(fn) {
       lastErr = e;
       const networkish =
         isNetworkTransientError(e) ||
-        (/fetch failed/i.test(String(e?.message || "")) && !e?.fb);
+        e?.network === true ||
+        e?.code === "EMPTY_GRAPH_BODY" ||
+        e?.code === "BAD_GRAPH_JSON" ||
+        (/fetch failed|Unexpected end of JSON|EMPTY_GRAPH|BAD_GRAPH/i.test(
+          String(e?.message || "")
+        ) &&
+          !e?.fb);
       if (!networkish || attempt >= maxAttempts - 1) throw e;
       const waitMs = estimateTransientWaitMs(e, {
         attempt,
@@ -91,7 +126,7 @@ async function graphPostForm(urlPath, pageToken, fields = {}, fileField = null, 
         throw wrapFetchError(e, "POST form");
       }
       noteGraphResponse(res);
-      return res.json();
+      return readGraphJson(res, "POST form");
     };
     let data = await tryOnce(true);
     if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
@@ -127,7 +162,7 @@ async function graphPostJson(urlPath, pageToken, body = {}, metaAppKey = "") {
         throw wrapFetchError(e, "POST json");
       }
       noteGraphResponse(res);
-      return res.json();
+      return readGraphJson(res, "POST json");
     };
     let data = await tryOnce(true);
     if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
@@ -160,7 +195,7 @@ async function graphGetJson(urlPath, pageToken, fields, metaAppKey = "") {
         throw wrapFetchError(e, "GET");
       }
       noteGraphResponse(res);
-      return res.json();
+      return readGraphJson(res, "GET");
     };
     let data = await tryOnce(true);
     if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
@@ -467,7 +502,7 @@ export async function listScheduledPosts(pageId, pageToken, limit = 50) {
   url.searchParams.set("limit", String(limit));
   const res = await fetch(url);
   noteGraphResponse(res);
-  const data = await res.json();
+  const data = await readGraphJson(res, "list scheduled_posts");
   if (data.error) {
     const err = new Error(data.error.message || "List scheduled_posts failed");
     err.code = data.error.code;

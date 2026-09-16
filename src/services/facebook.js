@@ -127,7 +127,22 @@ async function graphGet(path, accessToken, query = {}, opts = {}) {
     }
     const res = await fetch(url);
     noteGraphResponse(res);
-    return res.json();
+    const text = await res.text();
+    if (!text || !String(text).trim()) {
+      const err = new Error(`Facebook trả về rỗng (HTTP ${res.status}) — GET`);
+      err.code = "EMPTY_GRAPH_BODY";
+      err.network = true;
+      throw err;
+    }
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      const err = new Error(`Facebook trả JSON lỗi (HTTP ${res.status})`);
+      err.code = "BAD_GRAPH_JSON";
+      err.network = true;
+      err.cause = e;
+      throw err;
+    }
   };
 
   let data = opts.skipAppsecretProof ? await tryOnce(false) : await tryOnce(true);
@@ -175,7 +190,22 @@ async function graphFetchAbsolute(absoluteUrl, accessToken, opts = {}) {
     }
     const res = await fetch(url);
     noteGraphResponse(res);
-    return res.json();
+    const text = await res.text();
+    if (!text || !String(text).trim()) {
+      const err = new Error(`Facebook trả về rỗng (HTTP ${res.status}) — paging`);
+      err.code = "EMPTY_GRAPH_BODY";
+      err.network = true;
+      throw err;
+    }
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      const err = new Error(`Facebook trả JSON lỗi (HTTP ${res.status}) — paging`);
+      err.code = "BAD_GRAPH_JSON";
+      err.network = true;
+      err.cause = e;
+      throw err;
+    }
   };
 
   let data = opts.skipAppsecretProof ? await tryOnce(false) : await tryOnce(true);
