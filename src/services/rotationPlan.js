@@ -171,14 +171,23 @@ export function resolvePlannedPostType(settings, cfg, roundIndex = 0) {
     settings.media_pattern_mode ||
     (settings.post_type && settings.post_type !== "auto" ? "fixed" : "page_sequence");
   const round = Math.max(0, Number(roundIndex) || 0);
+  const explicit = String(settings.post_type || "").toLowerCase().trim();
 
+  // Pattern xen kẽ (photo,video,…) — ưu tiên khi user chọn pattern
   if (mode === "pattern") {
     const pat = parseMediaPattern(settings.media_pattern);
     if (pat.length) return pat[round % pat.length];
   }
+
+  // Loại bài cố định (video/photo/text) luôn thắng page_sequence
+  // Tránh: chọn video mà sequence Page vẫn đòi ảnh
+  if (explicit === "image") return "photo";
+  if (explicit === "photo" || explicit === "video" || explicit === "text") {
+    return explicit;
+  }
+
   if (mode === "fixed") {
-    const t = String(settings.post_type || "photo").toLowerCase();
-    if (t && t !== "auto") return t;
+    return "photo";
   }
   const sequence =
     Array.isArray(cfg?.sequence) && cfg.sequence.length

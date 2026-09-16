@@ -5711,22 +5711,16 @@ Tối | 18:00 | 21:30 | 2</textarea>
             body: JSON.stringify({
               page_row_ids: ids,
               config: {
+                // CHỈ kho + pick_mode caption — KHÔNG đụng comment_link_mode / comment_links
                 media_folder: media,
                 posted_folder: posted,
                 captions_folder: captions,
                 pick_mode: $("bulkCaptionPickMode")?.value || "random",
-                // Caption match_media → comment cũng khớp số (tránh random link lệch video)
-                link_lists:
-                  ($("bulkCaptionPickMode")?.value || "") === "match_media"
-                    ? { comment_link_mode: "match_media" }
-                    : undefined,
               },
             }),
           });
           const modeLbl = $("bulkCaptionPickMode")?.value || "random";
-          $("bulkFolderStatus").innerHTML = `<span class="ok">Đã lưu 3 kho + caption mode=<b>${esc(modeLbl)}</b>${
-            modeLbl === "match_media" ? " + comment match_media" : ""
-          } cho <b>${r.updated}</b> Page.</span>`;
+          $("bulkFolderStatus").innerHTML = `<span class="ok">Đã lưu 3 kho + caption mode=<b>${esc(modeLbl)}</b> cho <b>${r.updated}</b> Page.</span>`;
           flash(`Đã lưu kho · caption ${modeLbl} · ${r.updated} Page`, true);
         } catch (e) {
           flash(e.message, false);
@@ -5799,22 +5793,42 @@ Tối | 18:00 | 21:30 | 2</textarea>
       return "immediate";
     }
 
-    function parseBulkCommentLinks() {
+    /**
+     * Giữ NGUYÊN dòng link (kể cả "9. https://…") — không tách whitespace làm mất số.
+     * Chỉ bỏ dòng trống. Dùng khi Áp dụng comment (random / lần lượt / match_media).
+     */
+    function parseBulkCommentLinkLines() {
       const raw = ($("bulkCommentLinks")?.value || "").trim();
       if (!raw) return [];
-      // split by newline or whitespace; keep only http(s) URLs
-      const parts = raw
-        .split(/[\r\n\s]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const lines = [];
+      const seen = new Set();
+      for (const line of raw.split(/\r?\n/)) {
+        const s = String(line || "").trim();
+        if (!s) continue;
+        // Phải có URL somewhere trên dòng
+        if (!/https?:\/\//i.test(s) && !/^[\w.-]+\.[a-z]{2,}\//i.test(s)) continue;
+        const k = s.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        lines.push(s);
+      }
+      return lines;
+    }
+
+    /** Chỉ lấy URL thuần để preview / copy — KHÔNG ghi đè textarea. */
+    function parseBulkCommentLinks() {
       const urls = [];
       const seen = new Set();
-      for (const p of parts) {
-        let u = p.replace(/^[<\["']+|[>\]"',;]+$/g, "");
-        if (!/^https?:\/\//i.test(u)) {
-          if (/^[\w.-]+\.[a-z]{2,}\//i.test(u)) u = "https://" + u;
-          else continue;
+      for (const line of parseBulkCommentLinkLines()) {
+        const m = String(line).match(/https?:\/\/\S+/i);
+        let u = m ? m[0].replace(/[>,;]+$/g, "") : "";
+        if (!u) {
+          const bare = String(line)
+            .replace(/^\s*\d{1,4}\s*[.\)\-:\]]\s*/, "")
+            .trim();
+          if (/^[\w.-]+\.[a-z]{2,}\//i.test(bare)) u = "https://" + bare;
         }
+        if (!u) continue;
         const k = u.toLowerCase();
         if (seen.has(k)) continue;
         seen.add(k);
@@ -5827,23 +5841,27 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const box = $("bulkLinksFreeList");
       const countEl = $("bulkLinksCount");
       if (!box) return;
+      const lines = parseBulkCommentLinkLines();
       const urls = parseBulkCommentLinks();
-      if (countEl) countEl.textContent = `${urls.length} link lẻ`;
-      if (!urls.length) {
-        box.innerHTML = `<span class="muted">Dán list free (mỗi dòng 1 URL) → bấm «Làm list link lẻ»</span>`;
+      if (countEl) countEl.textContent = `${lines.length} link`;
+      if (!lines.length) {
+        box.innerHTML = `<span class="muted">Dán list (mỗi dòng 1 URL hoặc «9. https://…») → Áp dụng</span>`;
         return;
       }
-      // normalize textarea to clean 1-per-line
-      if ($("bulkCommentLinks")) $("bulkCommentLinks").value = urls.join("\n");
-      box.innerHTML = urls
-        .map(
-          (u, i) =>
+      // KHÔNG ghi đè textarea — giữ số thứ tự user đã dán
+      box.innerHTML = lines
+        .map((line, i) => {
+          const u = urls[i] || (String(line).match(/https?:\/\/\S+/i) || [""])[0];
+          return (
             `<div style="display:flex;gap:.35rem;align-items:center;margin:.2rem 0;padding:.25rem .35rem;border-radius:6px;background:rgba(255,255,255,.04)">` +
             `<span class="muted" style="min-width:1.5rem">${i + 1}.</span>` +
-            `<a href="${esc(u)}" target="_blank" rel="noopener" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7dd3fc">${esc(u)}</a>` +
-            `<button type="button" class="btn-ghost btn-sm bulk-copy-one" data-url="${esc(u)}" title="Copy link này">Copy</button>` +
+            `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem">${esc(line)}</span>` +
+            (u
+              ? `<button type="button" class="btn-ghost btn-sm bulk-copy-one" data-url="${esc(u)}" title="Copy URL">Copy</button>`
+              : "") +
             `</div>`
-        )
+          );
+        })
         .join("");
       box.querySelectorAll(".bulk-copy-one").forEach((btn) => {
         btn.onclick = async () => {
@@ -5857,22 +5875,22 @@ Tối | 18:00 | 21:30 | 2</textarea>
       });
     }
 
+    /** Chỉ sửa comment_* — cấm đụng pick_mode / media / caption lead / sequence */
     async function applyBulkCommentToSelected({ enabled }) {
       const ids = selectedPageIds();
       if (!ids.length) return flash("Tick ít nhất một Page (tab 1 hoặc summary)", false);
       const templates = ($("bulkCommentTemplates")?.value || "").trim();
-      renderBulkLinksFreeList();
-      let linkLines = parseBulkCommentLinks();
+      // Giữ nguyên dòng có số — KHÔNG gọi render ghi đè trước khi lưu
+      let linkLines = parseBulkCommentLinkLines();
       // Fallback: link ở panel «dòng mở đầu caption» nếu kho comment trống
       if (enabled && !linkLines.length) {
         const leadLinks = ($("bulkCaptionLeadLinks")?.value || "")
           .split(/\r?\n/)
           .map((s) => s.trim())
-          .filter((s) => /^https?:\/\//i.test(s));
+          .filter((s) => /https?:\/\//i.test(s) || /^\d{1,4}\s*[.\)\-:]/.test(s));
         if (leadLinks.length) {
           linkLines = leadLinks;
           if ($("bulkCommentLinks")) $("bulkCommentLinks").value = leadLinks.join("\n");
-          renderBulkLinksFreeList();
         }
       }
       if (enabled && !templates && !linkLines.length) {
@@ -5887,26 +5905,27 @@ Tối | 18:00 | 21:30 | 2</textarea>
       const siteCap = siteCapOn
         ? Math.max(1, Math.min(500, Number.isFinite(siteCapRaw) ? siteCapRaw : 10))
         : 0;
+      // Chỉ ghi field comment — KHÔNG đụng caption/media/pick_mode
+      const link_lists = {
+        comment_link_mode: mode,
+        comment_when: when,
+        comment_link_next: 0,
+        comment_tpl_next: 0,
+        comment_delay_minutes: when === "immediate" ? 0 : delayMin,
+        comment_min_likes: when === "immediate" ? 0 : minLikes,
+        comment_max_pages_per_site: siteCap,
+      };
+      // Chỉ ghi đè kho link khi textarea CÓ nội dung — tránh áp mode làm mất link
+      if (linkLines.length) {
+        link_lists.comment_links = linkLines;
+        link_lists.full_album = linkLines;
+        link_lists.see_more = linkLines;
+      }
       const config = {
         comment_enabled: enabled ? 1 : 0,
-        comment_templates: templates,
-        link_lists: {
-          // Primary pool used by assignCommentForPost
-          comment_links: linkLines,
-          full_album: linkLines,
-          see_more: linkLines,
-          comment_link_mode: mode,
-          comment_when: when,
-          // Reset con trỏ «theo bài» khi áp list mới
-          comment_link_next: 0,
-          comment_tpl_next: 0,
-          // delay/likes chỉ có ý khi after_publish
-          comment_delay_minutes: when === "immediate" ? 0 : delayMin,
-          comment_min_likes: when === "immediate" ? 0 : minLikes,
-          // 0 = tắt anti site → comment bình thường mọi page
-          comment_max_pages_per_site: siteCap,
-        },
+        link_lists,
       };
+      if (templates) config.comment_templates = templates;
       try {
         const r = await api("/api/posting/config-bulk", {
           method: "PUT",

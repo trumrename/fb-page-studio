@@ -194,7 +194,7 @@ export function savePagePostConfig(pageRowId, body) {
   const bodyLl =
     body?.link_lists && typeof body.link_lists === "object" ? body.link_lists : {};
   const linkLists = { ...prevLl, ...bodyLl };
-  // Không ghi đè mảng URL đang có bằng mảng rỗng (tránh mất link khi lưu form khác)
+  // Không ghi đè mảng URL đang có bằng mảng rỗng (tránh mất link khi lưu form / đổi mode)
   for (const key of [
     "comment_links",
     "full_album",
@@ -202,16 +202,24 @@ export function savePagePostConfig(pageRowId, body) {
     "caption_lead_links",
     "caption_lead_templates",
   ]) {
+    const hasKey = Object.prototype.hasOwnProperty.call(bodyLl, key);
+    if (!hasKey) continue;
+    const incoming = bodyLl[key];
+    const prev = prevLl[key];
+    const incomingEmpty =
+      incoming == null ||
+      (Array.isArray(incoming) && incoming.length === 0) ||
+      (typeof incoming === "string" && !String(incoming).trim());
+    const prevHas =
+      (Array.isArray(prev) && prev.length > 0) ||
+      (typeof prev === "string" && String(prev).trim());
     if (
-      Object.prototype.hasOwnProperty.call(bodyLl, key) &&
-      Array.isArray(bodyLl[key]) &&
-      bodyLl[key].length === 0 &&
-      Array.isArray(prevLl[key]) &&
-      prevLl[key].length > 0 &&
+      incomingEmpty &&
+      prevHas &&
       bodyLl.force_clear_link_lists !== true &&
       bodyLl.force_clear_link_lists !== 1
     ) {
-      linkLists[key] = prevLl[key];
+      linkLists[key] = prev;
     }
   }
   // Bỏ key undefined (từ collect partial)
