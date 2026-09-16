@@ -1304,6 +1304,24 @@ Tối | 18:00 | 21:30 | 2</textarea>
               </div>
             </div>
             <div id="rotResult" class="muted" style="margin-top:.85rem"></div>
+
+            <div id="multiJobPanel" style="margin-top:1rem;padding:1rem;border:1px solid rgba(96,165,250,.45);border-radius:12px;background:rgba(96,165,250,.08)">
+              <div style="display:flex;justify-content:space-between;gap:.75rem;align-items:center;flex-wrap:wrap">
+                <div>
+                  <b>Danh sách tiến trình (nhiều job)</b>
+                  <div class="muted" style="font-size:.76rem;margin-top:.2rem">
+                    Chạy nhiều nhóm page cùng lúc. Bấm 1 dòng để xem chi tiết bên dưới.
+                  </div>
+                </div>
+                <div class="actions" style="margin:0">
+                  <button type="button" class="btn-ghost btn-sm" id="btnRefreshJobList">Làm mới</button>
+                  <button type="button" class="btn-warn btn-sm" id="btnStopAllJobs" title="Dừng mọi job đang chạy/chờ">⏹ Dừng tất cả</button>
+                </div>
+              </div>
+              <div id="multiJobSummary" class="muted" style="margin:.55rem 0 .35rem;font-size:.8rem">—</div>
+              <div id="multiJobList" style="max-height:280px;overflow:auto"></div>
+            </div>
+
             <div id="liveJobPanel" style="display:none;margin-top:1rem;padding:1rem;border:1px solid var(--border);border-radius:12px;background:rgba(0,0,0,.16)">
               <div style="display:flex;justify-content:space-between;gap:.75rem;align-items:center">
                 <b id="liveJobTitle">Tiến trình đăng</b>
@@ -1413,6 +1431,8 @@ Tối | 18:00 | 21:30 | 2</textarea>
     let liveJobId = null;
     let liveJobTimer = null;
     let liveSeenNotifs = new Set();
+    let jobListTimer = null;
+    let lastJobListKey = "";
     const $ = (id) => document.getElementById(id);
 
     async function api(path, opts) {
@@ -3987,7 +4007,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
               ? `<div class="muted" style="margin-top:.35rem;font-size:.8rem">${esc(r.media_check.summary)}</div>`
               : "");
           flash("Job hẹn giờ đã bắt đầu", true);
-          if (r.job?.id) watchLiveJob(r.job.id);
+          if (r.job?.id) onJobStarted(r.job.id);
         }
       } catch (e) {
         flash(e.message, false);
@@ -4910,7 +4930,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
           true
         );
         if (r.job?.id) {
-          watchLiveJob(r.job.id);
+          onJobStarted(r.job.id);
           if ($("btnRotNowStop")) $("btnRotNowStop").style.display = "inline-block";
         }
       } catch (e) {
@@ -5618,7 +5638,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
           body: JSON.stringify(filters),
         });
         flash(r.job?.title || "Đã tạo job đăng lại", true);
-        if (r.job?.id) watchLiveJob(r.job.id);
+        if (r.job?.id) onJobStarted(r.job.id);
       } catch (e) {
         flash(e.message, false);
       }
@@ -5626,11 +5646,169 @@ Tối | 18:00 | 21:30 | 2</textarea>
 
     $("btnLiveRetryAll")?.addEventListener("click", () => retryLiveFailed({}));
 
+    function jobStatusBadge(st) {
+      const s = String(st || "");
+      if (s === "running" || s === "queued") return `<span class="ok">${esc(s)}</span>`;
+      if (s === "paused") return `<span class="badge live">${esc(s)}</span>`;
+      if (s === "fail" || s === "error") return `<span class="fail">${esc(s)}</span>`;
+      return `<span class="muted">${esc(s || "—")}</span>`;
+    }
+
+    async function refreshJobList() {
+      const box = $("multiJobList");
+      const sum = $("multiJobSummary");
+      if (!box) return;
+      try {
+        const data = await api("/api/jobs");
+        const all = data.jobs || [];
+        const active = all.filter((j) =>
+          ["running", "paused", "queued"].includes(String(j.status || ""))
+        );
+        const done = all.filter((j) => !["running", "paused", "queued"].includes(String(j.status || "")));
+        const key = all
+          .map(
+            (j) =>
+              `${j.id}:${j.status}:${j.progress?.percent || 0}:${j.progress?.done || 0}:${j.progress?.fail || 0}`
+          )
+          .join("|");
+        if (key === lastJobListKey && box.dataset.ready === "1") return;
+        lastJobListKey = key;
+        box.dataset.ready = "1";
+        if (sum) {
+          sum.innerHTML =
+            `<b>${active.length}</b> đang chạy/chờ` +
+            (done.length ? ` · ${done.length} gần đây đã xong` : "") +
+            ` · có thể chạy <b>nhiều nhóm page</b> cùng lúc`;
+        }
+        if (!all.length) {
+          box.innerHTML = `<div class="muted">Chưa có job. Chạy hẹn giờ / Direct Local để hiện ở đây.</div>`;
+          return;
+        }
+        const rows = [...active, ...done.slice(0, 12)];
+        box.innerHTML = rows
+          .map((j) => {
+            const p = j.progress || {};
+            const focused = liveJobId === j.id;
+            const pages =
+              j.pages_planned != null
+                ? `${j.pages_planned} page`
+                : j.page_count
+                  ? `${j.page_count} page`
+                  : "";
+            const names = (j.page_names_preview || []).slice(0, 4).join(", ");
+            const activeJob = ["running", "paused", "queued"].includes(j.status);
+            return (
+              `<div class="multi-job-row" data-job-id="${esc(j.id)}" style="display:grid;grid-template-columns:1fr auto;gap:.5rem;padding:.55rem .6rem;margin:.35rem 0;border-radius:10px;border:1px solid ${
+                focused ? "rgba(52,211,153,.55)" : "rgba(255,255,255,.1)"
+              };background:${
+                focused ? "rgba(52,211,153,.1)" : "rgba(0,0,0,.18)"
+              };cursor:pointer">` +
+              `<div>` +
+              `<div style="display:flex;gap:.45rem;flex-wrap:wrap;align-items:center">` +
+              `<b style="font-size:.84rem">${esc(j.title || j.id)}</b>` +
+              jobStatusBadge(j.status) +
+              (focused ? `<span class="ok" style="font-size:.72rem">● đang xem</span>` : "") +
+              `</div>` +
+              `<div class="muted" style="font-size:.74rem;margin-top:.2rem">` +
+              `${p.percent || 0}% · OK ${p.ok || 0} · FAIL ${p.fail || 0} · ${p.done || 0}/${p.total || 0}` +
+              (pages ? ` · ${esc(pages)}` : "") +
+              (j.media_reuse === "all_pages" ? ` · cùng bộ media` : "") +
+              (names ? `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(names)}${(j.page_names_preview || []).length > 4 ? "…" : ""}</div>` : "") +
+              (p.current_label ? `<div>${esc(p.current_label)}</div>` : "") +
+              `</div></div>` +
+              `<div style="display:flex;flex-direction:column;gap:.25rem;align-items:stretch" onclick="event.stopPropagation()">` +
+              `<button type="button" class="btn-ghost btn-sm job-focus" data-id="${esc(j.id)}">Xem</button>` +
+              (activeJob && j.status !== "paused"
+                ? `<button type="button" class="btn-warn btn-sm job-pause" data-id="${esc(j.id)}">⏸</button>`
+                : "") +
+              (j.status === "paused"
+                ? `<button type="button" class="btn-ok btn-sm job-resume" data-id="${esc(j.id)}">▶</button>`
+                : "") +
+              (activeJob
+                ? `<button type="button" class="btn-danger btn-sm job-stop" data-id="${esc(j.id)}">⏹</button>`
+                : "") +
+              `</div></div>`
+            );
+          })
+          .join("");
+        box.querySelectorAll(".multi-job-row").forEach((row) => {
+          row.onclick = () => {
+            const id = row.getAttribute("data-job-id");
+            if (id) watchLiveJob(id);
+          };
+        });
+        box.querySelectorAll(".job-focus").forEach((btn) => {
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            watchLiveJob(btn.dataset.id);
+          };
+        });
+        box.querySelectorAll(".job-pause").forEach((btn) => {
+          btn.onclick = async (e) => {
+            e.stopPropagation();
+            try {
+              await api(`/api/jobs/${btn.dataset.id}/pause`, { method: "POST", body: "{}" });
+              refreshJobList();
+              if (liveJobId === btn.dataset.id) {
+                const r = await api(`/api/jobs/${btn.dataset.id}`);
+                scheduleRenderLiveJob(r.job);
+              }
+            } catch (err) {
+              flash(err.message, false);
+            }
+          };
+        });
+        box.querySelectorAll(".job-resume").forEach((btn) => {
+          btn.onclick = async (e) => {
+            e.stopPropagation();
+            try {
+              await api(`/api/jobs/${btn.dataset.id}/resume`, { method: "POST", body: "{}" });
+              refreshJobList();
+              if (liveJobId === btn.dataset.id) {
+                const r = await api(`/api/jobs/${btn.dataset.id}`);
+                scheduleRenderLiveJob(r.job);
+              }
+            } catch (err) {
+              flash(err.message, false);
+            }
+          };
+        });
+        box.querySelectorAll(".job-stop").forEach((btn) => {
+          btn.onclick = async (e) => {
+            e.stopPropagation();
+            if (!confirm(`Dừng job ${btn.dataset.id}?`)) return;
+            try {
+              await api(`/api/jobs/${btn.dataset.id}/stop`, { method: "POST", body: "{}" });
+              refreshJobList();
+              if (liveJobId === btn.dataset.id) {
+                const r = await api(`/api/jobs/${btn.dataset.id}`);
+                scheduleRenderLiveJob(r.job);
+              }
+            } catch (err) {
+              flash(err.message, false);
+            }
+          };
+        });
+      } catch (e) {
+        if (sum) sum.innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+      }
+    }
+
+    function startJobListPolling() {
+      clearInterval(jobListTimer);
+      refreshJobList();
+      jobListTimer = setInterval(refreshJobList, 2000);
+    }
+
     async function watchLiveJob(id) {
+      // Không dừng job cũ — chỉ đổi job đang xem chi tiết
       liveJobId = id;
       liveSeenNotifs = new Set();
       lastLiveRenderKey = "";
+      lastJobListKey = ""; // force list highlight refresh
       clearInterval(liveJobTimer);
+      const panel = $("liveJobPanel");
+      if (panel) panel.style.display = "block";
       const pull = async () => {
         try {
           const r = await api(`/api/jobs/${id}`);
@@ -5641,6 +5819,19 @@ Tối | 18:00 | 21:30 | 2</textarea>
       };
       await pull();
       liveJobTimer = setInterval(pull, 1200);
+      refreshJobList();
+    }
+
+    /** Gọi khi tạo job mới — giữ job cũ chạy, focus job mới */
+    async function onJobStarted(jobOrId, { tip = true } = {}) {
+      const id = typeof jobOrId === "string" ? jobOrId : jobOrId?.id;
+      if (!id) return;
+      lastJobListKey = "";
+      refreshJobList();
+      if (tip && liveJobId && liveJobId !== id) {
+        flash("Đã thêm tiến trình mới — job cũ vẫn chạy. Xem danh sách bên dưới.", true);
+      }
+      watchLiveJob(id);
     }
 
     async function loadRotation() {
@@ -5722,7 +5913,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
         });
         renderRotResult(r, true);
         flash(`Rotation job · ${r.job?.progress?.total || "?"} task`, true);
-        if (r.job?.id) watchLiveJob(r.job.id);
+        if (r.job?.id) onJobStarted(r.job.id);
         await loadLogs();
       } catch (e) {
         flash(e.message, false);
@@ -6266,7 +6457,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
           true
         );
         if (r.job?.id) {
-          watchLiveJob(r.job.id);
+          onJobStarted(r.job.id);
           if ($("btnRotNowStop")) $("btnRotNowStop").style.display = "inline-block";
         }
       } catch (e) {
@@ -6331,6 +6522,31 @@ Tối | 18:00 | 21:30 | 2</textarea>
     });
     $("btnRefreshPending")?.addEventListener("click", () => loadPendingSchedules());
     $("pendingDays")?.addEventListener("change", () => loadPendingSchedules());
+    $("btnRefreshJobList")?.addEventListener("click", () => {
+      lastJobListKey = "";
+      refreshJobList();
+    });
+    $("btnStopAllJobs")?.addEventListener("click", async () => {
+      if (!confirm("Dừng TẤT CẢ job đang chạy/chờ?")) return;
+      try {
+        const data = await api("/api/jobs");
+        const active = (data.jobs || []).filter((j) =>
+          ["running", "paused", "queued"].includes(String(j.status || ""))
+        );
+        for (const j of active) {
+          try {
+            await api(`/api/jobs/${j.id}/stop`, { method: "POST", body: "{}" });
+          } catch {
+            /* continue */
+          }
+        }
+        flash(`Đã gửi dừng ${active.length} job`, true);
+        lastJobListKey = "";
+        refreshJobList();
+      } catch (e) {
+        flash(e.message, false);
+      }
+    });
     $("btnReconcileActLog")?.addEventListener("click", async () => {
       const btn = $("btnReconcileActLog");
       btn.disabled = true;
@@ -6516,6 +6732,7 @@ Tối | 18:00 | 21:30 | 2</textarea>
       await loadDeployAndMediaUpload();
       await loadPages();
       await Promise.all([loadLogs(), loadPendingSchedules(), loadRotation(), loadAntiStatus()]);
+      startJobListPolling();
       applyControls(workspaceState.bulk || {}, bulkWorkspaceControlIds);
       applyControls(workspaceState.rotation || {}, rotationWorkspaceControlIds);
       if (!$("rotPageTargetSelected")?.checked && !$("rotPageTargetAll")?.checked) {

@@ -544,29 +544,43 @@ export function listJobs(limit = 20) {
   return [...jobs.values()]
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
     .slice(0, limit)
-    .map((j) => ({
-      id: j.id,
-      type: j.type,
-      title: j.title,
-      status: j.status,
-      created_at: j.created_at,
-      started_at: j.started_at,
-      finished_at: j.finished_at,
-      pages_expected: j.pages_expected ?? null,
-      pages_planned: j.pages_planned ?? null,
-      progress: j.progress
-        ? {
-            total: j.progress.total,
-            done: j.progress.done,
-            ok: j.progress.ok,
-            fail: j.progress.fail,
-            skipped: j.progress.skipped,
-            percent: j.progress.percent,
-            current_label: j.progress.current_label,
-          }
-        : null,
-      page_count: Array.isArray(j.pages) ? j.pages.length : 0,
-    }));
+    .map((j) => {
+      const tasks = Array.isArray(j.tasks) ? j.tasks : [];
+      const pageIds = [
+        ...new Set(tasks.map((t) => Number(t.page_row_id)).filter((n) => n > 0)),
+      ];
+      const pageNames = [
+        ...new Set(tasks.map((t) => String(t.page_name || "").trim()).filter(Boolean)),
+      ];
+      return {
+        id: j.id,
+        type: j.type,
+        title: j.title,
+        status: j.status,
+        created_at: j.created_at,
+        started_at: j.started_at,
+        finished_at: j.finished_at,
+        pages_expected: j.pages_expected ?? null,
+        pages_planned: j.pages_planned ?? pageIds.length,
+        page_count: pageIds.length,
+        page_names_preview: pageNames.slice(0, 6),
+        continuous: !!j.continuous,
+        media_reuse: j.media_reuse || "once",
+        progress: j.progress
+          ? {
+              total: j.progress.total,
+              done: j.progress.done,
+              ok: j.progress.ok,
+              fail: j.progress.fail,
+              skipped: j.progress.skipped,
+              percent: j.progress.percent,
+              current_label: j.progress.current_label,
+              comments_ok: j.progress.comments_ok || 0,
+              comments_fail: j.progress.comments_fail || 0,
+            }
+          : null,
+      };
+    });
 }
 
 export function getJob(id) {
