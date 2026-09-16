@@ -578,6 +578,11 @@ async function scheduleOnePostUnlocked(pageRowId, opts = {}) {
         page_row_id: pageRowId,
         media_path: mediaPath || null,
         media_name: mediaPath ? path.basename(String(mediaPath)) : null,
+        post_round: opts.post_round || opts.postRound || 1,
+        pick_mode: cfg.pick_mode,
+        force_comment_match_media:
+          opts.media_reuse === "all_pages" ||
+          String(cfg.pick_mode || "").toLowerCase() === "match_media",
         comment_site_tracker: opts.comment_site_tracker || null,
       });
       pendingComment = assigned.text;

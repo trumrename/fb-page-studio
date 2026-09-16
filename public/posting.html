@@ -5715,11 +5715,18 @@ Tối | 18:00 | 21:30 | 2</textarea>
                 posted_folder: posted,
                 captions_folder: captions,
                 pick_mode: $("bulkCaptionPickMode")?.value || "random",
+                // Caption match_media → comment cũng khớp số (tránh random link lệch video)
+                link_lists:
+                  ($("bulkCaptionPickMode")?.value || "") === "match_media"
+                    ? { comment_link_mode: "match_media" }
+                    : undefined,
               },
             }),
           });
           const modeLbl = $("bulkCaptionPickMode")?.value || "random";
-          $("bulkFolderStatus").innerHTML = `<span class="ok">Đã lưu 3 kho + caption mode=<b>${esc(modeLbl)}</b> cho <b>${r.updated}</b> Page.</span>`;
+          $("bulkFolderStatus").innerHTML = `<span class="ok">Đã lưu 3 kho + caption mode=<b>${esc(modeLbl)}</b>${
+            modeLbl === "match_media" ? " + comment match_media" : ""
+          } cho <b>${r.updated}</b> Page.</span>`;
           flash(`Đã lưu kho · caption ${modeLbl} · ${r.updated} Page`, true);
         } catch (e) {
           flash(e.message, false);

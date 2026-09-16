@@ -798,22 +798,57 @@ function normalizeKey(s) {
     .replace(/^-+|-+$/g, "");
 }
 
+/** ID dài trong tên file (FB reel/post id), vd 5-1583681133509093.mp4 → 1583681133509093 */
+export function extractLongIdsFromMediaName(nameOrPath) {
+  const stem = mediaStemFromPath(nameOrPath) || String(nameOrPath || "");
+  const ids = [];
+  const re = /(\d{8,})/g;
+  let m;
+  while ((m = re.exec(stem))) {
+    if (!ids.includes(m[1])) ids.push(m[1]);
+  }
+  return ids;
+}
+
 /**
- * Chọn link theo slug/số TRONG URL khớp tên media.
- * Ví dụ media "1-natalie-mercer.mp4" ↔ https://…/1-natalie-mercer/
- * KHÔNG dùng số thứ tự dòng trong list.
+ * Chọn link theo:
+ * 1) Facebook reel/post ID trong tên media ↔ URL chứa ID đó
+ * 2) slug path (1-natalie-mercer)
+ * 3) số đầu dòng list (9. https://…)
+ * 4) post_round → phần tử thứ N trong list (khi URL không đánh số)
  */
-export function pickLinkByMediaOrdinal(rawLines, mediaPathOrName) {
+export function pickLinkByMediaOrdinal(rawLines, mediaPathOrName, opts = {}) {
   const { map, slugMap, entries, urls } = buildOrdinalLinkMap(rawLines);
   const stem = mediaStemFromPath(mediaPathOrName);
-  if (!stem) {
+  const postRound = Math.max(0, Number(opts.postRound) || 0);
+  if (!stem && !postRound) {
     return { url: null, ordinal: null, used_link_index: null, matched: false, reason: "no_media_name" };
   }
-  const stemKey = normalizeKey(stem);
-  const mediaOrd = extractLeadingNumber(stem);
+  const stemKey = normalizeKey(stem || "");
+  const mediaOrd = stem ? extractLeadingNumber(stem) : null;
+
+  // 0) Facebook ID trong tên file ↔ URL (reel/1376… hoặc dailyscope/… ít gặp)
+  if (stem) {
+    const fbIds = extractLongIdsFromMediaName(stem);
+    for (const id of fbIds) {
+      const hit = entries.find((e) => String(e.url || "").includes(id));
+      if (hit) {
+        const idx = urls.findIndex((u) => String(u).trim() === String(hit.url).trim());
+        return {
+          url: hit.url,
+          ordinal: mediaOrd,
+          used_link_index: idx >= 0 ? idx : null,
+          matched: true,
+          reason: "facebook_id_in_filename",
+          slug: hit.slug,
+          facebook_id: id,
+        };
+      }
+    }
+  }
 
   // 1) Exact slug: tên file = đoạn path URL (1-natalie-mercer)
-  if (slugMap.has(stemKey)) {
+  if (stemKey && slugMap.has(stemKey)) {
     const url = slugMap.get(stemKey);
     const idx = urls.findIndex((u) => String(u).trim() === String(url).trim());
     return {
@@ -946,6 +981,19 @@ export function pickLinkByMediaOrdinal(rawLines, mediaPathOrName) {
     }
   }
 
+  // 5) post_round → lấy link thứ N trong list (URL trần không đánh số)
+  if (postRound > 0 && urls.length) {
+    const idx = Math.min(postRound - 1, urls.length - 1);
+    return {
+      url: urls[idx],
+      ordinal: mediaOrd ?? postRound,
+      used_link_index: idx,
+      matched: true,
+      reason: "post_round_index",
+      slug: stemKey,
+    };
+  }
+
   return {
     url: null,
     ordinal: mediaOrd,
@@ -1051,7 +1099,16 @@ export function buildComment(templates, linkLists = {}, pickMode = "random") {
  */
 export function assignCommentForPost(cfg = {}) {
   const ll0 = cfg.link_lists && typeof cfg.link_lists === "object" ? { ...cfg.link_lists } : {};
-  const mode = getCommentPickMode(ll0, cfg.comment_pick_mode || "random");
+  // Nếu caption đang match_media / có post_round (bộ media chung) → comment cũng khớp theo số
+  const wantMatch =
+    getCommentPickMode(ll0, cfg.comment_pick_mode || "random") === "match_media" ||
+    String(cfg.pick_mode || "").toLowerCase() === "match_media" ||
+    String(cfg.pick_mode || "").toLowerCase() === "match_ordinal" ||
+    !!cfg.force_comment_match_media;
+  const mode = wantMatch
+    ? "match_media"
+    : getCommentPickMode(ll0, cfg.comment_pick_mode || "random");
+  const postRound = Math.max(0, Number(cfg.post_round || cfg.postRound) || 0);
   const templates = normalizeLineList(cfg.comment_templates);
   const pageRowId = Number(cfg.page_row_id) || 0;
   const siteTracker = cfg.comment_site_tracker || null;
@@ -1113,7 +1170,21 @@ export function assignCommentForPost(cfg = {}) {
     // Templates: match_media → khớp số đầu câu kèm với số media (9. Critics… ↔ 9-video.mp4)
     if (mode === "match_media") {
       const mediaRef = cfg.media_path || cfg.media_name || "";
-      const pickedTpl = pickCommentTemplateByMediaOrdinal(templates, mediaRef);
+      let pickedTpl = pickCommentTemplateByMediaOrdinal(templates, mediaRef);
+      // Không khớp số trên câu → dùng post_round (bộ media chung mọi page)
+      if (!pickedTpl.matched && postRound > 0 && templates.length) {
+        const idx = Math.min(postRound - 1, templates.length - 1);
+        const line = templates[idx];
+        const parsed = parseNumberedCommentTemplate(line);
+        pickedTpl = {
+          template: line,
+          text: parsed.text || line,
+          url: parsed.url || "",
+          ordinal: postRound,
+          matched: true,
+          reason: "template_post_round",
+        };
+      }
       if (pickedTpl.template) {
         tpl = pickedTpl.template;
         tplText = pickedTpl.text || pickedTpl.template;
@@ -1154,7 +1225,11 @@ export function assignCommentForPost(cfg = {}) {
   } else if (links.length || rawLinkLines.length) {
     if (mode === "match_media") {
       const mediaRef = cfg.media_path || cfg.media_name || "";
-      const picked = pickLinkByMediaOrdinal(rawLinkLines.length ? rawLinkLines : links, mediaRef);
+      const picked = pickLinkByMediaOrdinal(
+        rawLinkLines.length ? rawLinkLines : links,
+        mediaRef,
+        { postRound }
+      );
       matchMeta = picked;
       if (picked.url && linkSiteOk(picked.url)) {
         link = picked.url;

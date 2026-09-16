@@ -496,7 +496,7 @@ router.post("/bulk-schedule", async (req, res) => {
         continue;
       }
       const meta = pagesMeta([p.page_row_id])[0] || {};
-      for (const s of p.slots) {
+      p.slots.forEach((s, i) => {
         slots.push({
           page_row_id: p.page_row_id,
           page_name: p.page_name || meta.name,
@@ -505,8 +505,10 @@ router.post("/bulk-schedule", async (req, res) => {
           local_label: s.local_label,
           post_type: body.post_type === "auto" ? undefined : body.post_type,
           use_caption: body.use_caption !== false,
+          // Bài thứ i+1 trên page → khớp media/caption/comment cùng số
+          post_round: Number(s.post_round) || i + 1,
         });
-      }
+      });
     }
     // Tick 10 nhưng chỉ 7–8 có slot → TRƯỚC bỏ im lặng; SAU chặn + nêu tên page
     if (skippedPages.length && !body.allow_partial_pages) {
