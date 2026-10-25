@@ -1,6 +1,6 @@
 {
   "name": "fb-page-studio",
-  "version": "1.4.184",
+  "version": "1.4.185",
   "description": "FB Page Studio SAFE — OAuth + Graph API only (không cookie / id|pass)",
   "author": "trumrename",
   "type": "module",
