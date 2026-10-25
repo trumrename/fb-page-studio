@@ -68,7 +68,7 @@ function pageToRow(page, exportMeta) {
   return {
     ngay_xuat: exportMeta.display,
     ten_page: cell(page.name),
-    page_id: cell(page.page_id),
+    page_id: page.page_id || "",
     followers: cell(page.followers_count),
     fans: cell(page.fan_count),
     tang_7d_nguoi: hasGrowth ? g.absolute : "",
@@ -90,21 +90,21 @@ function pageToRow(page, exportMeta) {
 
 /** Headers tiếng Việt — khớp tool hiện tại */
 const COLUMNS = [
-  { header: "Ngay xuat", key: "ngay_xuat", width: 20 },
-  { header: "Ten page", key: "ten_page", width: 28 },
+  { header: "Ngày xuất", key: "ngay_xuat", width: 20 },
+  { header: "Tên page", key: "ten_page", width: 28 },
   { header: "Page ID", key: "page_id", width: 22 },
   { header: "Followers", key: "followers", width: 12 },
   { header: "Fans", key: "fans", width: 10 },
-  { header: "Tang 7 ngay (nguoi)", key: "tang_7d_nguoi", width: 18 },
-  { header: "Tang 7 ngay (%)", key: "tang_7d_phan_tram", width: 16 },
-  { header: "Followers dau 7d", key: "followers_dau_7d", width: 16 },
-  { header: "Followers cuoi 7d", key: "followers_cuoi_7d", width: 16 },
+  { header: "Tăng 7 ngày (người)", key: "tang_7d_nguoi", width: 18 },
+  { header: "Tăng 7 ngày (%)", key: "tang_7d_phan_tram", width: 16 },
+  { header: "Followers đầu 7d", key: "followers_dau_7d", width: 16 },
+  { header: "Followers cuối 7d", key: "followers_cuoi_7d", width: 16 },
   { header: "Category", key: "category", width: 16 },
   { header: "Verified", key: "verification", width: 14 },
   { header: "Link", key: "link", width: 40 },
   { header: "Account", key: "account", width: 16 },
   { header: "Account FB ID", key: "account_fb_id", width: 22 },
-  { header: "Quyen cua toi (tasks)", key: "quyen_cua_toi", width: 36 },
+  { header: "Quyền của tôi (tasks)", key: "quyen_cua_toi", width: 36 },
   { header: "Enriched at", key: "enriched_at", width: 20 },
   { header: "About", key: "about", width: 40 },
   { header: "Export ISO", key: "export_iso", width: 24 },
@@ -178,6 +178,12 @@ export function getWorkbookPath() {
   return WORKBOOK_FILE;
 }
 
+/** RFC 4180 field escaping used by the quick CSV endpoint. */
+export function csvEscape(value) {
+  const s = String(value ?? "");
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 /**
  * CSV snapshot — cùng schema COLUMNS với Excel (chuẩn hiện tại).
  * UTF-8 BOM để Excel mở đúng tiếng Việt / số.
@@ -192,15 +198,13 @@ export function exportPagesToCsvString({ accountId, q } = {}) {
   });
   const headers = COLUMNS.map((c) => c.header);
   const keys = COLUMNS.map((c) => c.key);
-  const escape = (v) => {
-    const s = String(v ?? "");
-    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-    return s;
-  };
-  const lines = [headers.map(escape).join(",")];
+  // RFC 4180 CSV: comma delimiter + quoted fields. The previous semicolon
+  // delimiter made Excel installations using the comma locale show one long
+  // horizontal field instead of separate columns.
+  const lines = [headers.map(csvEscape).join(",")];
   for (const p of pages) {
     const row = pageToRow(p, parts);
-    lines.push(keys.map((k) => escape(row[k])).join(","));
+    lines.push(keys.map((k) => csvEscape(row[k])).join(","));
   }
   return {
     csv: lines.join("\r\n"),

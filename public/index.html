@@ -20,6 +20,7 @@
       <div class="nav-label">Workspace</div>
       <a class="nav-item active" href="/index.html"><span class="ico">1</span> Connect & chọn Page</a>
       <a class="nav-item" href="/posting.html"><span class="ico">2</span> Cấu hình & chạy</a>
+      <a class="nav-item" href="/story-hand.html"><span class="ico">S</span> Story gắn link</a>
       <a class="nav-item" href="/app.html"><span class="ico">3</span> Tiến trình vận hành</a>
       <a class="nav-item" href="/antispam.html"><span class="ico">4</span> Giới hạn Anti-spam</a>
       <div class="nav-label">Kết nối App</div>
@@ -51,6 +52,17 @@
           <button class="btn-ghost" id="btnRefresh" type="button">Refresh</button>
           <button class="btn-ok" id="btnEnrichAll" type="button">Sync all</button>
           <button class="btn-primary" id="btnExportDailyPages" type="button">Xuất thông tin Page theo App</button>
+          <button class="btn-ok" id="btnExportFollowAll" type="button" title="Cập nhật follow rồi ghi đè 1 file follow-theo-doi.xlsx (không tải bản mới)">Cập nhật thống kê follow · tất cả</button>
+          <select id="exportFollowVia" style="max-width:160px;height:34px" title="Via / Token (tài khoản)">
+            <option value="">— Via / Token —</option>
+          </select>
+          <button class="btn-ok" id="btnExportFollowVia" type="button" title="Ghi đè file follow theo các token đang tick ở danh sách">Cập nhật · token đã tick</button>
+          <select id="exportFollowGroup" style="max-width:140px;height:34px" title="Nhóm page đã lưu ở Đăng bài">
+            <option value="">— Nhóm page —</option>
+          </select>
+          <button class="btn-ok" id="btnExportFollowGroup" type="button" title="Chỉ nhóm đang chọn — ghi đè file">Cập nhật · nhóm</button>
+          <a class="btn btn-ghost btn-sm" id="btnDownloadFollowTrack" href="/api/export/followers-track/file" title="Mở/tải file đã ghi đè (tuỳ chọn)">Mở follow-theo-doi.xlsx</a>
+          <span id="followExportStatus" class="muted" style="font-size:.78rem;max-width:16rem"></span>
           <button class="btn-ghost" id="btnExportXlsx" type="button">Excel tổng hợp cũ</button>
           <button class="btn-ghost" id="btnExportCsv" type="button">CSV nhanh</button>
           <a class="btn btn-primary" href="/posting.html">Publish →</a>
@@ -175,7 +187,7 @@
               <li>Dán token vào ô dưới → Import. Không dán token web lạ. Vẫn 0 Page → Chẩn đoán 0 Page.</li>
             </ol>
             <label style="display:block">Token (một System User, hoặc nhiều Page token — mỗi dòng một token)
-              <textarea id="importTokenText" rows="4" placeholder="EAAB… hoặc dán nhiều token, mỗi dòng một cái" style="width:100%;margin-top:.35rem;font-family:ui-monospace,monospace;font-size:.8rem;resize:vertical" autocomplete="off"></textarea>
+              <textarea id="importTokenText" rows="4" placeholder="EAAB… hoặc dán nhiều token, mỗi dòng một cái" style="width:100%;margin-top:.35rem;font-family:ui-monospace,monospace;font-size:.8rem;resize:vertical" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
             </label>
             <div class="toolbar" style="margin-top:.65rem;align-items:end">
               <label style="flex:1;min-width:240px">Tên token (máy này)
@@ -955,12 +967,16 @@
       ) {
         return;
       }
+      const delete_media_folders = confirm(
+        `Xóa luôn thư mục media dưới F:\\FB-Media\\{via}\\... của ${ids.length} tài khoản này?\n\n` +
+          `OK = xóa ổ media · Hủy = giữ folder trên đĩa`
+      );
       const btn = $("btnBulkDeleteAcc");
       btn.disabled = true;
       try {
         const r = await api("/api/accounts/bulk-delete", {
           method: "POST",
-          body: JSON.stringify({ ids }),
+          body: JSON.stringify({ ids, delete_media_folders }),
         });
         if (selectedAccountId && ids.includes(selectedAccountId)) {
           selectedAccountId = null;
@@ -1076,9 +1092,63 @@
       $("modalBg").classList.add("open");
     }
 
+    function hasImportToken(raw) {
+      const text = String(raw || "").replace(/[\u200B-\u200D\uFEFF\u2060]/g, "");
+      const parts = text
+        .split(/[\r\n,;]+/)
+        .map((s) => s.replace(/\s+/g, ""))
+        .filter(Boolean);
+      if (parts.some((s) => /EAA[A-Za-z0-9]{17,}/.test(s) || /^[A-Za-z0-9]{20,}$/.test(s))) return true;
+      let buf = "";
+      for (const s of parts) {
+        if (!/^[A-Za-z0-9]+$/.test(s) || s.length >= 80) {
+          if (buf.length >= 20) return true;
+          buf = "";
+          continue;
+        }
+        if (s.startsWith("EAA")) buf = s;
+        else if (buf && s.length >= 8) buf += s;
+      }
+      return buf.length >= 20;
+    }
+
+    $("importTokenText").addEventListener("paste", (e) => {
+      const data = e.clipboardData;
+      if (!data) return;
+      const plain = data.getData("text/plain") || "";
+      const htmlText = (data.getData("text/html") || "")
+        .replace(/<[^>]+>/g, "\n")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&amp;/gi, "&")
+        .replace(/&lt;/gi, "<")
+        .replace(/&gt;/gi, ">")
+        .replace(/&quot;/gi, '"');
+      const pick = hasImportToken(plain) || !hasImportToken(htmlText) ? plain : htmlText;
+      if (!pick) return;
+      e.preventDefault();
+      const el = e.target;
+      const start = el.selectionStart ?? el.value.length;
+      const end = el.selectionEnd ?? start;
+      el.value = el.value.slice(0, start) + pick + el.value.slice(end);
+      const pos = start + pick.length;
+      el.selectionStart = el.selectionEnd = pos;
+    });
+
     $("btnImportToken").onclick = async () => {
-      const token = $("importTokenText").value.trim();
+      const box = $("importTokenText");
       const status = $("importTokenStatus");
+      let token = box.value.trim();
+      if (!hasImportToken(token)) {
+        try {
+          const clip = await window.fbPageStudioDesktop?.readClipboardText?.();
+          if (clip && hasImportToken(clip)) {
+            token = String(clip).trim();
+            box.value = token;
+          }
+        } catch {
+          /* clipboard không đọc được */
+        }
+      }
       if (!token) {
         status.textContent = "Dán token trước.";
         return;
@@ -1264,6 +1334,129 @@
         btn.textContent = "Xuất thông tin Page theo App";
       }
     };
+
+    async function loadFollowExportGroups() {
+      const sel = $("exportFollowGroup");
+      if (sel) {
+        const keep = sel.value;
+        try {
+          const r = await api("/api/posting/selection-groups");
+          const groups = r.page_groups || [];
+          sel.innerHTML =
+            `<option value="">— Nhóm page —</option>` +
+            groups
+              .map(
+                (g) =>
+                  `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name || g.id)} (${(g.page_row_ids || []).length})</option>`
+              )
+              .join("");
+          if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+        } catch {
+          /* ignore */
+        }
+      }
+      const viaSel = $("exportFollowVia");
+      if (viaSel) {
+        const keepV = viaSel.value;
+        try {
+          const r = await api("/api/export/followers-track/accounts");
+          const accounts = r.accounts || [];
+          viaSel.innerHTML =
+            `<option value="">— Via / Token —</option>` +
+            accounts
+              .map(
+                (a) =>
+                  `<option value="${escapeHtml(String(a.id))}">${escapeHtml(a.name || "TK#" + a.id)} (${a.page_count || 0})</option>`
+              )
+              .join("");
+          if (keepV && [...viaSel.options].some((o) => o.value === keepV)) viaSel.value = keepV;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    async function runFollowTrackExport(scope) {
+      const body = { scope, refresh: true };
+      if (scope === "group") {
+        const gid = $("exportFollowGroup")?.value || "";
+        if (!gid) {
+          alert("Chọn nhóm page (tạo nhóm ở màn Đăng bài trước).");
+          return;
+        }
+        body.page_group_id = gid;
+      }
+      if (scope === "account" || scope === "accounts") {
+        const ticked = [...selectedAccIds].map(Number).filter((n) => n > 0);
+        const aid = $("exportFollowVia")?.value || "";
+        if (ticked.length) {
+          body.scope = "accounts";
+          body.account_ids = ticked;
+          const gid = $("exportFollowGroup")?.value || "";
+          if (gid) body.page_group_id = gid;
+        } else if (aid) {
+          body.scope = "account";
+          body.account_id = Number(aid);
+        } else {
+          alert("Tick token/via trong danh sách tài khoản, hoặc chọn 1 via ở ô dropdown.");
+          return;
+        }
+      }
+      const btnAll = $("btnExportFollowAll");
+      const btnG = $("btnExportFollowGroup");
+      const btnV = $("btnExportFollowVia");
+      const btns = [btnAll, btnG, btnV].filter(Boolean);
+      btns.forEach((b) => (b.disabled = true));
+      const labels = new Map(btns.map((b) => [b, b.textContent]));
+      if (scope === "all" && btnAll) btnAll.textContent = "Đang cập nhật follow…";
+      if (scope === "group" && btnG) btnG.textContent = "Đang cập nhật follow…";
+      if (scope === "account" && btnV) btnV.textContent = "Đang cập nhật follow…";
+      const st = $("followExportStatus");
+      if (st) {
+        st.textContent =
+          "Đang hỏi Facebook rồi tạo follow-theo-doi.csv và .xlsx. Nhiều page thì chờ — đừng bấm lại.";
+      }
+      const flashBox = $("flash");
+      if (flashBox) {
+        flashBox.innerHTML =
+          `<div class="flash-block ok">Đang cập nhật follow… Xong sẽ mở Explorer đúng file follow-theo-doi.csv.</div>`;
+      }
+      try {
+        const r = await api("/api/export/followers-track", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        // Ghi đè 1 file cố định follow-theo-doi.xlsx — không tải bản mới về Downloads
+        const dl = $("btnDownloadFollowTrack");
+        if (dl) {
+          dl.style.display = "";
+          dl.href = r.download_url || "/api/export/followers-track/file";
+          dl.title = r.file || "follow-theo-doi.xlsx";
+        }
+        const msg =
+          `Đã cập nhật thống kê follow · ${r.pages} page · OK ${r.enrich?.ok || 0} · lỗi ${r.enrich?.fail || 0}\n` +
+          `Đã tạo/ghi đè CSV: ${r.csv || "follow-theo-doi.csv"}\nExcel: ${r.file || "follow-theo-doi.xlsx"}`;
+        if (st) st.textContent = msg.replace(/\n/g, " ");
+        if (flashBox) {
+          flashBox.innerHTML = `<div class="flash-block ok">${escapeHtml(msg).replace(/\n/g, "<br/>")}</div>`;
+        }
+      } catch (e) {
+        if (st) st.textContent = e.message;
+        if (flashBox) {
+          flashBox.innerHTML = `<div class="flash-block err">${escapeHtml(e.message)}</div>`;
+        }
+        alert(e.message);
+      } finally {
+        for (const b of btns) {
+          b.disabled = false;
+          b.textContent = labels.get(b);
+        }
+      }
+    }
+    $("btnExportFollowAll")?.addEventListener("click", () => runFollowTrackExport("all"));
+    $("btnExportFollowGroup")?.addEventListener("click", () => runFollowTrackExport("group"));
+    $("btnExportFollowVia")?.addEventListener("click", () => runFollowTrackExport("account"));
+
     $("btnExportCsv").onclick = () => {
       const params = new URLSearchParams();
       if (selectedAccountId) params.set("account_id", String(selectedAccountId));
@@ -1274,7 +1467,12 @@
     $("btnDelete").onclick = async () => {
       if (!selectedAccountId) return;
       if (!confirm("Xóa account + page tokens?")) return;
-      await api(`/api/accounts/${selectedAccountId}`, { method: "DELETE" });
+      const delete_media_folders = confirm(
+        "Xóa luôn thư mục media F:\\FB-Media\\{via}\\... của tài khoản này?\n\nOK = xóa ổ · Hủy = giữ folder"
+      );
+      await api(`/api/accounts/${selectedAccountId}?delete_media_folders=${delete_media_folders ? "1" : "0"}`, {
+        method: "DELETE",
+      });
       selectedAccountId = null;
       ["btnSync", "btnDiagnose", "btnEnrich", "btnEnrichForce", "btnDelete"].forEach((id) => {
         $(id).disabled = true;
@@ -1301,7 +1499,7 @@
     };
 
     async function refreshAll() {
-      await Promise.all([loadDeployMode(), loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadFirstRunStatus(), loadOAuthDomain(), loadBrowserProfiles()]);
+      await Promise.all([loadDeployMode(), loadStats(), loadAccounts(), loadPages(), loadMetaAppsHint(), loadFirstRunStatus(), loadOAuthDomain(), loadBrowserProfiles(), loadFollowExportGroups()]);
       try {
         const v = await api("/api/version");
         if ($("sidebarVer") && v?.version) {

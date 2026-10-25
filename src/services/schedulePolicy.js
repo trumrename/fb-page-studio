@@ -104,8 +104,8 @@ export function resolveMinGapMinutes(cfg, anti = null) {
   const s = anti || getAntiSpamSettings();
   const pageInterval = Math.max(0, Number(cfg?.interval_minutes) || 0);
   if (!s.enabled) {
-    // Soft floor so bulk still spaces a bit even with anti OFF
-    return Math.max(pageInterval, 30);
+    // Anti tắt: đúng interval page đã lưu. 0 = không chèn thêm phút.
+    return pageInterval;
   }
   const floor = Math.max(0, Number(s.min_interval_minutes_floor) || 0);
   const cooldown = Math.max(0, Number(s.page_cooldown_minutes) || 0);

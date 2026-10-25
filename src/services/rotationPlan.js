@@ -27,6 +27,7 @@ import {
 } from "./antiSpam.js";
 import { listMetaAppsPublic } from "./metaApps.js";
 import { getPagePostConfig, getCaptionStats } from "./poster.js";
+import { applyRunMedia } from "./tokenMedia.js";
 import { captionPoolIdentity } from "./captionPoolState.js";
 import {
   resolveMinGapMinutes,
@@ -50,7 +51,7 @@ export const DEFAULT_ROTATION = {
    */
   auto_groups_by_meta_app: true,
   /** per_app | interleave_apps */
-  app_rotation_mode: "interleave_apps",
+  app_rotation_mode: "per_app",
   /** 0 = 30 page 1 bài đăng gần cùng lúc (Direct Local mặc định) */
   between_tasks_gap_minutes_min: 0,
   between_tasks_gap_minutes_max: 0,
@@ -243,6 +244,37 @@ function addDaysYmd(ymd, days) {
   return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
 }
 
+/**
+ * Ngày kế của treo tool. Không đăng thêm ngay khi vừa xong ngày đầu.
+ * Ngày đã qua hoặc là hôm nay → ngày mai. force_start_now của lần đầu không được kéo sang.
+ */
+export function continuousReplanSettings(cont = {}, forceDay = null) {
+  const tz = Number.isFinite(Number(cont.tz_offset_minutes)) ? Number(cont.tz_offset_minutes) : 420;
+  const today = todayYmd(tz);
+  const raw = forceDay && /^\d{4}-\d{2}-\d{2}$/.test(String(forceDay)) ? String(forceDay) : "";
+  const day = !raw || raw <= today ? addDaysYmd(today, 1) : raw;
+  return {
+    ...cont,
+    force_start_now: false,
+    delivery: "direct",
+    days_ahead: 1,
+    force_plan_day: day,
+    plan_start_day: day,
+    run_now_continuous: true,
+  };
+}
+
+/** Giờ ưa thích trên Đăng trực tiếp: 0 giờ = không chờ, không ép sàn 15 phút hay 1 giờ. */
+export function preferredSlotSpacing(settings = {}) {
+  const gapH = Number(settings.same_page_gap_hours_min);
+  const minGapMinutes =
+    Number.isFinite(gapH) && gapH > 0 ? Math.round(gapH * 60) : 0;
+  const jitN = Number(settings.jitter_minutes_min);
+  const jitterMinutes =
+    Number.isFinite(jitN) && jitN > 0 ? Math.min(45, jitN) : 0;
+  return { minGapMinutes, jitterMinutes };
+}
+
 function formatLocal(date, tzOffsetMin) {
   const ms = date.getTime() + tzOffsetMin * 60 * 1000;
   const d = new Date(ms);
@@ -307,6 +339,8 @@ export function saveRotationSettings(partial) {
 
 export function normalizeSettings(s) {
   const out = { ...DEFAULT_ROTATION, ...s };
+  delete out.account_group_ids;
+  delete out.media_source;
   {
     const ppd = Number(out.posts_per_page_per_day);
     out.posts_per_page_per_day = clamp(Number.isFinite(ppd) && ppd > 0 ? ppd : 1, 1, 12);
@@ -415,7 +449,15 @@ export function normalizeSettings(s) {
   // use_caption: default true; explicit false/0/"off" → tắt
   {
     const v = out.use_caption;
-    if (v === false || v === 0 || v === "0" || String(v).toLowerCase() === "off") {
+    const capS = String(v ?? "").trim().toLowerCase();
+    if (
+      v === false ||
+      v === 0 ||
+      capS === "0" ||
+      capS === "off" ||
+      capS === "false" ||
+      capS === "no"
+    ) {
       out.use_caption = false;
     } else {
       out.use_caption = true;
@@ -1250,16 +1292,24 @@ export function buildSplitWindowBurstSlots({
     1,
     ...windows.map((w) => Number(w.posts) || 1)
   );
-  const postsPerPageDay = windows.reduce(
-    (s, w) => s + clamp(Number(w.posts) || 1, 1, 12),
-    0
-  );
+  const perPage = new Map();
+  for (const s of numbered) {
+    const id = Number(s.page_row_id);
+    if (!id) continue;
+    perPage.set(id, (perPage.get(id) || 0) + 1);
+  }
+  const perPageCounts = [...perPage.values()];
+  const postsPerPageDay = perPageCounts.length
+    ? Math.max(...perPageCounts)
+    : windows.reduce((s, w) => s + clamp(Number(w.posts) || 1, 1, 12), 0);
+  const postsPerPageMin = perPageCounts.length ? Math.min(...perPageCounts) : postsPerPageDay;
   return {
     slots: numbered,
     planDay,
     warnings,
     burstCount,
     postsPerPageDay,
+    postsPerPageMin,
     days_ahead: daysAhead,
     plan_start_day: startDay,
     plan_end_day: endDay,
@@ -1279,6 +1329,7 @@ export function buildSplitWindowBurstSlots({
  * Returns { settings, groups_meta, slots: [...], summary }
  */
 export function buildRotationPlan(inputSettings = {}) {
+  applyRunMedia(inputSettings.page_row_ids, inputSettings.account_group_ids);
   const settings = normalizeSettings({ ...loadRotationSettings(), ...inputSettings });
   if (settings.page_target_mode === "selected" && !settings.page_row_ids.length) {
     throw new Error(
@@ -1506,9 +1557,7 @@ export function buildRotationPlan(inputSettings = {}) {
       pages_missing_list: missingAfterCap.slice(0, 30),
       anti_spam_trimmed: !!limited.trimmed,
       anti_spam_caps: limited.caps,
-      order_logic: settings.app_rotation_mode === "per_app"
-        ? "day → bài# → từng App → pageIndex → toàn bộ admin của App"
-        : "day → bài# → pageIndex → adminIndex → group so-le (app ngắn skip)",
+      order_logic: "Bài → Page → Token · hết Bài 1 trên Page 1…Page cuối của từng token rồi mới sang Bài 2; đây là thứ tự tạo/xử lý task, không cam kết tất cả lượt đều thành công",
       wait_logic:
         "Chỉ gap cùng page+admin trong khung giờ; khác admin/group = API sequential ~350ms, không chờ phút",
       note_meta_app:
@@ -1557,6 +1606,7 @@ export function buildRotationPlan(inputSettings = {}) {
  * - interleave_apps: page → admin → app
  */
 export function buildRunNowPlan(inputSettings = {}) {
+  applyRunMedia(inputSettings.page_row_ids, inputSettings.account_group_ids);
   let settings = normalizeSettings({ ...loadRotationSettings(), ...inputSettings });
   if (settings.page_target_mode === "selected" && !settings.page_row_ids.length) {
     throw new Error(
@@ -1659,7 +1709,7 @@ export function buildRunNowPlan(inputSettings = {}) {
     }
   } else if (usePreferred) {
     const req = clamp(
-      Number(inputSettings.posts_per_page_per_day) || settings.posts_per_page_per_day || 2,
+      Number(inputSettings.posts_per_page_per_day) || Number(settings.posts_per_page_per_day) || 1,
       1,
       12
     );
@@ -1669,16 +1719,13 @@ export function buildRunNowPlan(inputSettings = {}) {
       const pref = resolvePreferredHours(pageRowId);
       // Theo cài Direct Local (req bài/ngày), không cắt theo max/quota anti
       const postsWanted = req;
-      const minGap = Math.max(
-        15,
-        Math.round((Number(settings.same_page_gap_hours_min) || 1) * 60)
-      );
+      const prefSpace = preferredSlotSpacing(settings);
       let slots = buildSlotsFromActiveHours(pref.hours, {
         daysAhead: 1,
         postsPerDay: postsWanted,
         tzOffsetMinutes: tz,
-        minGapMinutes: minGap,
-        jitterMinutes: 5,
+        minGapMinutes: prefSpace.minGapMinutes,
+        jitterMinutes: prefSpace.jitterMinutes,
         pageStaggerMinutes: 0,
       });
       // If all past for today, take future slots within 2 days
@@ -1687,8 +1734,8 @@ export function buildRunNowPlan(inputSettings = {}) {
           daysAhead: 2,
           postsPerDay: postsWanted,
           tzOffsetMinutes: tz,
-          minGapMinutes: minGap,
-          jitterMinutes: 5,
+          minGapMinutes: prefSpace.minGapMinutes,
+          jitterMinutes: prefSpace.jitterMinutes,
           pageStaggerMinutes: 0,
         }).filter((t) => t.getTime() >= nowMs + 60 * 1000);
         if (slots.length) planDayShifted = true;
@@ -1790,6 +1837,14 @@ export function buildRunNowPlan(inputSettings = {}) {
     usedBurstPlan = true;
     planDay = burstMeta.planDay || planDay;
     rounds = burstMeta.postsPerPageDay || burstMeta.burstCount || rounds;
+    if (
+      burstMeta.postsPerPageMin != null &&
+      burstMeta.postsPerPageMin !== rounds
+    ) {
+      warnings.push(
+        `Số bài/page không đều (${burstMeta.postsPerPageMin}–${rounds}). Tổng task bên dưới là số sẽ đăng.`
+      );
+    }
     for (const w of burstMeta.warnings || []) warnings.push(w);
     const mediaHint =
       String(settings.media_pattern_mode || "") === "fixed"
@@ -2056,16 +2111,21 @@ export function buildRunNowPlan(inputSettings = {}) {
     }
   }
   for (const need of mediaNeeds.values()) {
-    const inv = inspectMediaFolder(need.folder, need.kind);
+    const inv = inspectMediaFolder(need.folder, need.kind, {
+      skipHash: !!settings.dry_run,
+    });
     // all_pages: giữ file trong kho / tái dùng → đếm theo tổng file trên đĩa, không theo hash đã dùng
     need.available = reuseAllPages ? inv.total : inv.unused;
     need.total_on_disk = inv.total;
     need.used_hashes = inv.used;
     if (need.available < need.required) {
-      if (!reuseAllPages && inv.total > 0 && inv.used > 0 && inv.unused === 0) {
+      if (!reuseAllPages && inv.total > 0 && inv.used > 0 && inv.unused < need.required) {
         blockers.push(
-          `Thiếu ${need.kind}: cần ${need.required} — folder còn ${inv.total} file nhưng cả ${inv.used} đã dùng hash (media_once_forever). ` +
-            `Vào Anti-spam → Xóa hash media / tắt «1 file = 1 lần» — hoặc chọn mode «Cùng bộ media cho mọi page». ${need.folder || ""}`
+          `Mode «Random chưa đăng»: cần ${need.required} ${need.kind} trong kho media — ` +
+            `kho có ${inv.total} file nhưng ${inv.used} trùng nội dung đã có ở folder posted` +
+            ` (còn ${inv.unused} dùng được). ` +
+            `Xóa bản trùng / thêm file mới / Anti-spam → Xóa hash media / hoặc chọn «Cùng bộ media». ` +
+            `${need.folder || ""}`
         );
       } else if (reuseAllPages) {
         blockers.push(
@@ -2128,6 +2188,15 @@ export function buildRunNowPlan(inputSettings = {}) {
     ...new Set(finalSlots.map((s) => Number(s.page_row_id)).filter((n) => n > 0)),
   ];
   const plannedSet = new Set(plannedPageIds);
+  const postsByPage = new Map();
+  for (const s of finalSlots) {
+    const id = Number(s.page_row_id);
+    if (!id) continue;
+    postsByPage.set(id, (postsByPage.get(id) || 0) + 1);
+  }
+  const postsEach = [...postsByPage.values()];
+  const postsThisRunMax = postsEach.length ? Math.max(...postsEach) : rounds;
+  const postsThisRunMin = postsEach.length ? Math.min(...postsEach) : rounds;
   const missingPages = requestedPageIds
     .filter((id) => !plannedSet.has(id))
     .map((id) => ({
@@ -2174,7 +2243,10 @@ export function buildRunNowPlan(inputSettings = {}) {
       accounts: matrix.length,
       groups: groups.length,
       posts_per_page_per_day: rounds,
-      configured_posts_per_page: rounds,
+      configured_posts_per_page: postsThisRunMax,
+      posts_this_run_per_page: postsThisRunMin === postsThisRunMax ? postsThisRunMax : null,
+      posts_this_run_min: postsThisRunMin,
+      posts_this_run_max: postsThisRunMax,
       total_planned: slots.length,
       total_final: finalSlots.length,
       pages_requested: requestedPageIds.length,
@@ -2200,9 +2272,7 @@ export function buildRunNowPlan(inputSettings = {}) {
           : settings.media_pattern_mode === "fixed"
             ? `cố định: ${settings.post_type}`
             : "sequence từng Page",
-      order_logic: settings.app_rotation_mode === "per_app"
-        ? "vòng bài# → từng App → pageIndex → toàn bộ admin của App"
-        : "vòng bài# → pageIndex → adminIndex → App 1/App 2 so le",
+      order_logic: "pageIndex-first · vòng Page: Page 1 của từng token → Page 2 của từng token; trong mỗi vòng token chạy song song hoặc tuần tự theo lựa chọn",
       wait_logic: useWindows
         ? `Khung Sáng/Tối ${(burstMeta?.days_ahead || settings.days_ahead || 1) > 1
             ? `${burstMeta?.plan_start_day || planDay} → ${burstMeta?.plan_end_day || planDay} (${burstMeta?.days_ahead || settings.days_ahead} ngày)`
@@ -2232,7 +2302,7 @@ export function buildRunNowPlan(inputSettings = {}) {
     blockers,
     media_requirements: [...mediaNeeds.values()],
     caption_requirements: [...captionNeeds.values()],
-    preview_order: finalSlots.map((s) => {
+    preview_order: finalSlots.slice(0, 24).map((s) => {
       const dueSoon = s.immediate || s.unix * 1000 <= Date.now() + 5000;
       return {
         order: s.order,

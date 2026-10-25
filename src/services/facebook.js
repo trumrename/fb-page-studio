@@ -5,6 +5,8 @@ import {
   noteGraphResponse,
   isGraphRateLimitError,
   isTransientGraphError,
+  isSpamBlockError,
+  isPermissionError,
   isAlreadyGoneGraphError,
   classifyDeleteBatchItem,
   withRateLimitRetry,
@@ -20,6 +22,17 @@ import {
   parallelAfterRateLimit,
   rampBatchParallel,
 } from "./rateLimit.js";
+import { graphError } from "./fbNotice.js";
+import { isPageCircuitOpen, openPageCircuit } from "./antiSpam.js";
+
+function throwGraph(fb, fallback) {
+  const err = graphError(fb, fallback);
+  if (isInvalidAppSecretProofError(fb?.message)) {
+    err.message +=
+      "\nTool: FB_APP_SECRET trên máy này không khớp App đã Connect. Gói khách: xóa dòng FB_APP_SECRET trong .env và tắt Require App Secret Proof trên Meta. Gói nội bộ: điền đúng secret của đúng App.";
+  }
+  throw err;
+}
 
 /**
  * Official Graph API helpers (no cookies).
@@ -114,6 +127,7 @@ export function buildLoginUrl(state, opts = {}) {
 async function graphGet(path, accessToken, query = {}, opts = {}) {
   const tryOnce = async (withProof) => {
     const url = new URL(`${graphBase()}${path}`);
+    if (!url.searchParams.has("locale")) url.searchParams.set("locale", "vi_VN");
     for (const [k, v] of Object.entries(query)) {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     }
@@ -126,7 +140,7 @@ async function graphGet(path, accessToken, query = {}, opts = {}) {
       }
     }
     const res = await fetch(url);
-    noteGraphResponse(res);
+    noteGraphResponse(res, accessToken);
     const text = await res.text();
     if (!text || !String(text).trim()) {
       const err = new Error(`Facebook trả về rỗng (HTTP ${res.status}) — GET`);
@@ -156,19 +170,7 @@ async function graphGet(path, accessToken, query = {}, opts = {}) {
   ) {
     data = await tryOnce(true);
   }
-  if (data.error) {
-    const err = new Error(data.error.message || "Graph API error");
-    err.code = data.error.code;
-    err.type = data.error.type;
-    err.fb = data.error;
-    if (isInvalidAppSecretProofError(err.message)) {
-      err.message =
-        "Invalid appsecret_proof: FB_APP_SECRET trên máy này không khớp App đã Connect. " +
-        "Gói khách: xóa hẳn dòng FB_APP_SECRET trong .env (để trống) và tắt Require App Secret Proof trên Meta. " +
-        "Gói nội bộ: điền đúng secret của đúng App (App 1 / App 2).";
-    }
-    throw err;
-  }
+  if (data.error) throwGraph(data.error, "Graph API error");
   return data;
 }
 
@@ -176,6 +178,7 @@ async function graphGet(path, accessToken, query = {}, opts = {}) {
 async function graphFetchAbsolute(absoluteUrl, accessToken, opts = {}) {
   const tryOnce = async (withProof) => {
     const url = new URL(absoluteUrl);
+    if (!url.searchParams.has("locale")) url.searchParams.set("locale", "vi_VN");
     if (accessToken && !url.searchParams.get("access_token")) {
       url.searchParams.set("access_token", accessToken);
     }
@@ -189,7 +192,7 @@ async function graphFetchAbsolute(absoluteUrl, accessToken, opts = {}) {
       url.searchParams.delete("appsecret_proof");
     }
     const res = await fetch(url);
-    noteGraphResponse(res);
+    noteGraphResponse(res, url.searchParams.get("access_token") || accessToken);
     const text = await res.text();
     if (!text || !String(text).trim()) {
       const err = new Error(`Facebook trả về rỗng (HTTP ${res.status}) — paging`);
@@ -218,13 +221,7 @@ async function graphFetchAbsolute(absoluteUrl, accessToken, opts = {}) {
   ) {
     data = await tryOnce(true);
   }
-  if (data.error) {
-    const err = new Error(data.error.message || "Graph API error");
-    err.code = data.error.code;
-    err.type = data.error.type;
-    err.fb = data.error;
-    throw err;
-  }
+  if (data.error) throwGraph(data.error, "Graph API error");
   return data;
 }
 
@@ -340,13 +337,21 @@ function mergePageIntoMap(byId, page, source) {
  * Works only if the connected user actually has Page tasks (Editor+).
  */
 async function tryResolvePageToken(pageId, userToken, graphOpts) {
-  const r = await graphGetSoft(
-    `/${pageId}`,
-    userToken,
-    { fields: PAGE_LIST_FIELDS },
-    graphOpts
-  );
-  if (r.ok && r.data?.access_token) return r.data;
+  const fields = [
+    PAGE_LIST_FIELDS,
+    "id,name,access_token,tasks,permitted_tasks",
+    "id,name,access_token",
+    "access_token",
+  ];
+  for (const fieldSet of fields) {
+    const r = await graphGetSoft(
+      `/${pageId}`,
+      userToken,
+      { fields: fieldSet },
+      graphOpts
+    );
+    if (r.ok && r.data?.access_token) return r.data;
+  }
   return null;
 }
 
@@ -381,6 +386,8 @@ export async function getAllPages(userToken, opts = {}) {
     bm_owned: 0,
     bm_client: 0,
     bm_assigned: 0,
+    bm_asset_groups: 0,
+    bm_group_pages: 0,
     token_resolved: 0,
     token_resolve_fail: 0,
     bm_errors: [],
@@ -480,6 +487,47 @@ export async function getAllPages(userToken, opts = {}) {
             }
           }
           await sleep(40);
+        }
+
+        // Partner-shared asset groups are exposed as client_asset_groups;
+        // owned groups use owned_asset_groups.
+        for (const groupEdge of ["owned_asset_groups", "client_asset_groups"]) {
+          const groups = await graphGetEdgeAllSoft(
+            `/${b.id}/${groupEdge}`,
+            userToken,
+            { fields: "id,name", limit: 100 },
+            graphOpts
+          );
+          if (!groups.ok && groups.error) {
+            meta.bm_errors.push(`${b.name || b.id}/${groupEdge}: ${groups.error}`);
+            continue;
+          }
+          meta.bm_asset_groups += groups.data.length;
+          for (const group of groups.data) {
+            if (!group?.id) continue;
+            const assets = await graphGetEdgeAllSoft(
+              `/${group.id}/contained_assets`,
+              userToken,
+              { fields: "id,name,asset_type", limit: 100 },
+              graphOpts
+            );
+            if (!assets.ok && assets.error) {
+              meta.bm_errors.push(`asset_group ${group.id}/contained_assets: ${assets.error}`);
+              continue;
+            }
+            for (const asset of assets.data) {
+              const type = String(asset?.asset_type || asset?.type || "").toLowerCase();
+              if (type && type !== "page") continue;
+              if (!asset?.id) continue;
+              const isNew = mergePageIntoMap(
+                byId,
+                { id: String(asset.id), name: asset.name || String(asset.id) },
+                `bm:${groupEdge}:${group.id}`
+              );
+              if (isNew) meta.bm_group_pages++;
+            }
+            await sleep(40);
+          }
         }
       }
     }
@@ -1166,6 +1214,7 @@ export async function listGroupPosts(groupId, accessToken, opts = {}) {
 export async function graphDelete(path, accessToken, opts = {}) {
   const tryOnce = async (withProof) => {
     const url = new URL(`${graphBase()}${path.startsWith("/") ? path : `/${path}`}`);
+    if (!url.searchParams.has("locale")) url.searchParams.set("locale", "vi_VN");
     if (accessToken) {
       url.searchParams.set("access_token", accessToken);
       if (withProof && !opts.skipAppsecretProof) {
@@ -1175,7 +1224,7 @@ export async function graphDelete(path, accessToken, opts = {}) {
       }
     }
     const res = await fetch(url, { method: "DELETE" });
-    noteGraphResponse(res);
+    noteGraphResponse(res, accessToken);
     return res.json();
   };
 
@@ -1183,13 +1232,7 @@ export async function graphDelete(path, accessToken, opts = {}) {
   if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
     data = await tryOnce(false);
   }
-  if (data.error) {
-    const err = new Error(data.error.message || "Graph DELETE error");
-    err.code = data.error.code;
-    err.type = data.error.type;
-    err.fb = data.error;
-    throw err;
-  }
+  if (data.error) throwGraph(data.error, "Graph DELETE error");
   return data;
 }
 
@@ -1422,6 +1465,70 @@ export async function deletePageAvatarAndCover(pageId, pageToken, opts = {}) {
  * - listMode "full": all edges (preview / deep scan).
  * - On #4: stop calling more edges; rely on global pause (rateLimit.js).
  */
+/** Keep list pre-filter consistent with deletePosts.postInTimeRange (until = strict). */
+function postPassesListTimeFilter(post, sinceU, untilU) {
+  if (!post || typeof post !== "object") return false;
+  const parse = (raw) => {
+    if (raw == null || raw === "") return null;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 1e9) return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+    const ms = Date.parse(String(raw));
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+  };
+  const created = parse(post.created_time);
+  const scheduled = parse(post.scheduled_publish_time);
+  const updated = parse(post.updated_time);
+  const known = [created, scheduled, updated].filter((t) => t != null);
+  if (!known.length) return false;
+  if (Number.isFinite(untilU) && untilU > 0) {
+    if (created != null && created > untilU) return false;
+    if (scheduled != null && scheduled > untilU) return false;
+    if (created == null && scheduled == null && updated != null && updated > untilU) {
+      return false;
+    }
+  }
+  if (Number.isFinite(sinceU) && sinceU > 0) {
+    const goLive = scheduled ?? created ?? updated;
+    if (goLive != null && goLive < sinceU) return false;
+  }
+  return true;
+}
+
+/** Map UI content-type keys → Graph edge kinds used in listPagePosts. */
+const CONTENT_TYPE_TO_KINDS = {
+  posts: ["published_posts", "posts", "feed"],
+  photos: ["photos", "photos_uploaded"],
+  videos: ["videos", "videos_uploaded"],
+  reels: ["video_reels"],
+  live: ["live_videos"],
+  scheduled: ["scheduled_posts"],
+  tagged: ["tagged"],
+  visitor: ["visitor_posts"],
+};
+
+/**
+ * @param {string[]|string|null|undefined} raw
+ * @returns {Set<string>|null} null = all types
+ */
+function normalizeContentTypeFilter(raw) {
+  if (raw == null || raw === "" || raw === "all") return null;
+  const arr = Array.isArray(raw)
+    ? raw
+    : String(raw)
+        .split(/[,|;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+  if (!arr.length || arr.includes("all")) return null;
+  const kinds = new Set();
+  for (const key of arr) {
+    const k = String(key).toLowerCase();
+    const mapped = CONTENT_TYPE_TO_KINDS[k];
+    if (mapped) mapped.forEach((x) => kinds.add(x));
+    else kinds.add(k); // allow raw edge kind
+  }
+  return kinds.size ? kinds : null;
+}
+
 export async function listPagePosts(pageId, pageToken, opts = {}) {
   const pid = String(pageId || "").trim();
   if (!pid) throw new Error("Thiếu page_id");
@@ -1438,9 +1545,18 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
   // Live probe 2026-07-29: Animals page had 21/50 shared_story — DELETE works.
   // Minimal fallbacks if rich fields rejected.
   const postFieldSets = [
-    "id,created_time,message,story,status_type,permalink_url,from{id,name}",
-    "id,created_time,message,story,status_type,permalink_url",
+    "id,created_time,updated_time,scheduled_publish_time,message,story,status_type,permalink_url,from{id,name}",
+    "id,created_time,scheduled_publish_time,message,story,status_type,permalink_url",
+    "id,created_time,scheduled_publish_time,message,status_type",
     "id,created_time,message,status_type",
+    "id,created_time,message",
+    "id,created_time",
+    "id",
+  ];
+  const scheduledFieldSets = [
+    "id,created_time,updated_time,scheduled_publish_time,message,story,status_type,permalink_url",
+    "id,created_time,scheduled_publish_time,message,permalink_url",
+    "id,scheduled_publish_time,message",
     "id,created_time,message",
     "id,created_time",
     "id",
@@ -1456,7 +1572,9 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     );
   }
   const videoFieldSets = [
-    "id,created_time,description,permalink_url",
+    "id,created_time,updated_time,scheduled_publish_time,description,title,permalink_url",
+    "id,created_time,scheduled_publish_time,description,permalink_url",
+    "id,created_time,scheduled_publish_time,permalink_url",
     "id,created_time,permalink_url",
     "id,created_time",
     "id",
@@ -1530,6 +1648,13 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
       },
       { path: `/${pid}/videos`, fieldSets: videoFieldSets, kind: "videos" },
       { path: `/${pid}/video_reels`, fieldSets: videoFieldSets, kind: "video_reels" },
+      { path: `/${pid}/live_videos`, fieldSets: videoFieldSets, kind: "live_videos" },
+      // Bài hẹn FB — bắt buộc trong wipe (trước đây chỉ có ở listMode=full)
+      {
+        path: `/${pid}/scheduled_posts`,
+        fieldSets: scheduledFieldSets,
+        kind: "scheduled_posts",
+      },
       { path: `/${pid}/tagged`, fieldSets: postFieldSets, kind: "tagged" },
       {
         path: `/${pid}/visitor_posts`,
@@ -1539,13 +1664,37 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     ];
   }
 
-  // List: few local retries — global pause handles cool-down length
+  // Optional content-type filter (UI «xóa tổng» / chọn loại)
+  const typeFilter = normalizeContentTypeFilter(opts.content_types || opts.contentTypes);
+  if (typeFilter) {
+    edges = edges.filter((e) => typeFilter.has(String(e.kind)));
+    if (!edges.length) {
+      // Fallback: if filter emptied edges, keep core posts
+      edges = [
+        { path: `/${pid}/published_posts`, fieldSets: postFieldSets, kind: "published_posts" },
+        { path: `/${pid}/posts`, fieldSets: postFieldSets, kind: "posts" },
+      ];
+    }
+  }
+  // Mặc định KHÔNG list bài đợi hẹn — chỉ khi tick «Bài hẹn giờ» / include_scheduled
+  const allowScheduled =
+    opts.include_scheduled === true ||
+    opts.includeScheduled === true ||
+    (typeFilter && typeFilter.has("scheduled_posts"));
+  if (!allowScheduled) {
+    edges = edges.filter((e) => e.kind !== "scheduled_posts");
+  }
+
+  // List: few local retries — pause theo Meta App (không chặn App khác)
+  const listAppKeyEarly =
+    graphOpts.metaAppKey || opts.metaAppKey || opts.meta_app_key || "";
   const rlOpts = {
     maxAttempts: Math.min(3, Number(opts.listMaxAttempts) || 2),
     shouldStop: opts.shouldStop,
     label: `list page content ${pid}`,
     onRateLimit: opts.onRateLimit,
     onlyRateLimit: false,
+    metaAppKey: listAppKeyEarly,
   };
   let hitAppLimit = false; // code 4 — skip remaining edges after we have data
 
@@ -1809,11 +1958,13 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     "videos_uploaded",
   ]);
 
+  const listAppKey = listAppKeyEarly;
   for (const edge of edges) {
     if (opts.shouldStop?.()) break;
-    // Wait any global pause before starting next edge (no parallel edge burn)
-    if (isGlobalGraphPaused()) {
+    // Chỉ chờ pause của ĐÚNG Meta App đang list — App khác vẫn chạy
+    if (isGlobalGraphPaused(listAppKey)) {
       const g = await waitGlobalGraphPause({
+        metaAppKey: listAppKey,
         shouldStop: opts.shouldStop,
         onTick: opts.onRateLimit,
       });
@@ -1837,12 +1988,13 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
       if (e.code === "STOPPED") throw e;
       if (isGraphRateLimitError(e) || e.rate_limit || e.code === 4 || e._appLimit) {
         hitAppLimit = true;
-        noteGlobalRateLimit(e);
+        noteGlobalRateLimit(e, { metaAppKey: listAppKey });
         edgeErrors.push(`${edge.kind}: limit #${e.code || 4}`);
         edgeStats.rate_limited_early = 1;
         if (byId.size === 0) {
-          // Need at least one edge — wait GLOBAL then one minimal retry
+          // Need at least one edge — wait App pause then one minimal retry
           await waitGlobalGraphPause({
+            metaAppKey: listAppKey,
             shouldStop: opts.shouldStop,
             onTick: opts.onRateLimit,
           });
@@ -1875,7 +2027,7 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     !opts.shouldStop?.() &&
     !hitAppLimit &&
     listMode === "full" &&
-    !isGlobalGraphPaused()
+    !isGlobalGraphPaused(listAppKey)
   ) {
     try {
       for (let i = 0; i < plainIds.length; i += 40) {
@@ -1921,8 +2073,9 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     return tb - ta;
   });
 
-  // Graph since/until often ignored on /videos & reels — enforce by created_time.
-  // until is inclusive (created_time unix <= until).
+  // Graph since/until often ignored on /videos & reels — enforce client-side.
+  // Effective time: scheduled_publish_time (ưu tiên) → created_time → updated_time
+  // (tránh xóa bài hẹn ngày 18 khi until=17 chỉ vì created_time là ngày tạo lịch).
   const sinceU =
     opts.since != null && opts.since !== ""
       ? Number(opts.since) > 1e12
@@ -1940,14 +2093,7 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
     (Number.isFinite(untilU) && untilU > 0)
   ) {
     const before = posts.length;
-    posts = posts.filter((p) => {
-      if (!p.created_time) return false;
-      const sec = Math.floor(Date.parse(p.created_time) / 1000);
-      if (!Number.isFinite(sec)) return false;
-      if (Number.isFinite(sinceU) && sinceU > 0 && sec < sinceU) return false;
-      if (Number.isFinite(untilU) && untilU > 0 && sec > untilU) return false;
-      return true;
-    });
+    posts = posts.filter((p) => postPassesListTimeFilter(p, sinceU, untilU));
     edgeStats.time_filtered_out = before - posts.length;
   }
 
@@ -1958,7 +2104,17 @@ export async function listPagePosts(pageId, pageToken, opts = {}) {
   posts._edgeStats = edgeStats;
   posts._edgeErrors = edgeErrors;
 
+  // Soft permission / App Review errors (#10 live_videos, visitor Permissions) —
+  // không biến thành lỗi cứng nếu chỉ toàn lỗi soft (pass 2/3 sẽ bỏ qua êm).
+  const softErr = (s) =>
+    /#10\b|live-video-api|Permissions error|permission/i.test(String(s || ""));
   if (!posts.length && edgeErrors.length) {
+    const hard = edgeErrors.filter((e) => !softErr(e));
+    if (!hard.length) {
+      posts._edgeStats = edgeStats;
+      posts._edgeErrors = edgeErrors;
+      return posts; // empty but not throw
+    }
     const err = new Error(
       `Không lấy được bài Page. Edges: ${edgeErrors.slice(0, 5).join(" | ")}`
     );
@@ -2003,7 +2159,7 @@ export async function graphBatch(accessToken, batch, opts = {}) {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form.toString(),
       });
-      noteGraphResponse(res);
+      noteGraphResponse(res, accessToken);
       lastData = await res.json();
       // Array response = success; error object may mean wrong path → try next
       if (Array.isArray(lastData)) return lastData;
@@ -2021,12 +2177,7 @@ export async function graphBatch(accessToken, batch, opts = {}) {
   if (data?.error && isInvalidAppSecretProofError(data.error.message)) {
     data = await tryOnce(false);
   }
-  if (data?.error) {
-    const err = new Error(data.error.message || "Graph batch error");
-    err.code = data.error.code;
-    err.fb = data.error;
-    throw err;
-  }
+  if (data?.error) throwGraph(data.error, "Graph batch error");
   if (!Array.isArray(data)) {
     throw new Error("Graph batch trả về không phải mảng");
   }
@@ -2077,15 +2228,20 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
   const useBatch = opts.useBatch !== false;
   // Single-DELETE worker pool (fallback mode)
   const concurrency = Math.min(24, Math.max(1, Number(opts.concurrency) || 12));
-  // Max concurrent Graph batch HTTP requests (adaptive ceiling). Community: 4–8 common.
-  const maxBatchParallel = Math.min(
-    12,
-    Math.max(1, Number(opts.batchParallel ?? opts.batch_parallel ?? 6) || 6)
-  );
   const adaptive = opts.adaptive !== false;
-  let liveParallel = adaptive
-    ? suggestedBatchParallel(maxBatchParallel)
-    : maxBatchParallel;
+  // pace=max: xóa đúng id của job vừa đăng. Không hạ tốc theo % usage còn sót sau lúc đăng.
+  // Facebook trả lỗi giới hạn thì vẫn hạ tốc và chờ đúng thời gian FB yêu cầu.
+  const paceMax = opts.pace === "max";
+  // Graph batch cứng 50 id/lần. Wipe tối đa 12 HTTP song song; pace=max tối đa 24.
+  const maxBatchParallel = Math.min(
+    paceMax ? 24 : 12,
+    Math.max(1, Number(opts.batchParallel ?? opts.batch_parallel ?? (paceMax ? 24 : 6)) || (paceMax ? 24 : 6))
+  );
+  let liveParallel = paceMax
+    ? maxBatchParallel
+    : adaptive
+      ? suggestedBatchParallel(maxBatchParallel)
+      : maxBatchParallel;
   let healthyStreak = 0;
   let delayMs = Math.max(0, Number(opts.delayMs) || 0);
   const baseDelayMs = delayMs;
@@ -2183,6 +2339,25 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
     recount();
   };
 
+  const pageRowId = Number(opts.pageRowId || opts.page_row_id || 0);
+  let pageBanned = false;
+  const openDeleteBan = (err, postId) => {
+    const msg = String(err?.message || err || "Page bị khóa");
+    if (postId) markFail(postId, msg);
+    pageBanned = true;
+    if (!pageRowId) return;
+    const code = Number(err?.code ?? err?.fb?.code ?? err?.error?.code ?? NaN);
+    openPageCircuit(pageRowId, code === 190 ? "auth" : "delete", msg);
+  };
+  const deleteGate = pageRowId ? isPageCircuitOpen(pageRowId, "delete") : { open: false };
+  const authGate = pageRowId ? isPageCircuitOpen(pageRowId, "auth") : { open: false };
+  const blockedGate = deleteGate.open ? deleteGate : authGate.open ? authGate : null;
+  if (blockedGate) {
+    pageBanned = true;
+    for (const id of ids) markFail(id, `Page đang khóa xóa. Còn ${blockedGate.seconds_left}s`);
+    ids.length = 0;
+  }
+
   const onRateLimitHit = () => {
     if (!adaptive) return;
     liveParallel = parallelAfterRateLimit(liveParallel);
@@ -2193,6 +2368,15 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
   const onHealthyBatch = () => {
     if (!adaptive) return;
     healthyStreak++;
+    if (paceMax) {
+      // Không cắt theo X-App-Usage. Sau một đợt sạch, nhân đôi lại đến trần.
+      delayMs = baseDelayMs;
+      if (liveParallel < maxBatchParallel) {
+        liveParallel = Math.min(maxBatchParallel, Math.max(liveParallel * 2, liveParallel + 4));
+        healthyStreak = 0;
+      }
+      return;
+    }
     // Proactive: also respect current usage header
     const usageCap = suggestedBatchParallel(maxBatchParallel);
     if (liveParallel > usageCap) {
@@ -2207,7 +2391,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         healthyStreak = 0;
       }
     }
-    delayMs = suggestedInterBatchDelayMs(baseDelayMs);
+    delayMs = paceMax ? baseDelayMs : suggestedInterBatchDelayMs(baseDelayMs);
   };
 
   const notifyLimit = (info) => {
@@ -2265,9 +2449,10 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         minMs: retryCount <= 3 ? 8_000 : retryCount <= 12 ? 15_000 : 20_000,
         maxMs: retryCount <= 3 ? 40_000 : retryCount <= 12 ? 90_000 : 120_000,
       });
-      // CRITICAL: batch *item* #4/#17/#32 must pause ALL pages/list workers
-      // (local sharedPauseUntil alone lets page_parallel keep thrashing Graph)
-      noteGlobalRateLimit(sampleErr || { code: 4, message: "batch item rate limit" });
+      // Pause ĐÚNG Meta App của page này — App khác vẫn xóa được
+      noteGlobalRateLimit(sampleErr || { code: 4, message: "batch item rate limit" }, {
+        metaAppKey: opts.metaAppKey || opts.meta_app_key,
+      });
     } else {
       waitMs = estimateTransientWaitMs(sampleErr, {
         attempt,
@@ -2293,9 +2478,11 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         : `⚠ Lỗi tạm FB — chờ ~${Math.ceil(waitMs / 1000)}s, còn ${retryCount} bài (${liveLabel()})`,
     });
 
-    // Wait both process-global pause (other pages) and local shared pause
+    // Wait App pause + local shared pause (không chặn Meta App khác)
     if (isRl) {
+      const delAppKey = opts.metaAppKey || opts.meta_app_key || "";
       const g = await waitGlobalGraphPause({
+        metaAppKey: delAppKey,
         shouldStop: opts.shouldStop,
         onTick: (tick) => {
           notifyLimit({
@@ -2306,8 +2493,9 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
             error: sampleErr?.message || "retry",
             code: sampleErr?.code,
             rate_limit: true,
+            meta_app_key: delAppKey,
             label,
-            message: `⚠ GLOBAL pause — còn ${tick.remaining_sec}s… (còn ${retryCount} bài · ${liveLabel()})`,
+            message: `⚠ App «${delAppKey || "?"}» pause — còn ${tick.remaining_sec}s… (còn ${retryCount} bài · ${liveLabel()})`,
             ticking: true,
           });
         },
@@ -2364,6 +2552,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
             maxAttempts: 4,
             shouldStop: opts.shouldStop,
             label: `batch DELETE ×${pending.length}`,
+            metaAppKey: opts.metaAppKey || opts.meta_app_key,
             onRateLimit: notifyLimit,
           }
         );
@@ -2380,6 +2569,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
                 maxAttempts: 10,
                 shouldStop: opts.shouldStop,
                 label: `DELETE ${postId}`,
+                metaAppKey: opts.metaAppKey || opts.meta_app_key,
                 onRateLimit: notifyLimit,
               }
             );
@@ -2388,6 +2578,13 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
             if (err.code === "STOPPED") break;
             if (isAlreadyGoneGraphError(err)) {
               markOk(postId, true);
+            } else if (isSpamBlockError(err) || isPermissionError(err)) {
+              openDeleteBan(err, postId);
+              for (const rest of pending) {
+                if (rest !== postId) markFail(rest, "Bỏ qua vì page bị khóa");
+              }
+              pending = [];
+              break;
             } else if (isTransientGraphError(err)) {
               still.push(postId);
             } else {
@@ -2411,6 +2608,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
       let sampleRetryErr = null;
       let retryIsLimit = false;
       let okInRound = 0;
+      let banHit = null;
 
       for (let j = 0; j < pending.length; j++) {
         const postId = pending[j];
@@ -2433,17 +2631,30 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
           if (cls.rate_limit) retryIsLimit = true;
           continue;
         }
+        if (cls.spam || cls.permission) {
+          banHit = j;
+          openDeleteBan(cls.error || { message: cls.message, code: cls.error?.code }, postId);
+          break;
+        }
         // permanent fail
         markFail(postId, cls.message || cls.error?.message || "delete failed");
+      }
+      if (banHit != null) {
+        for (const id of retryIds) markFail(id, "Bỏ qua vì page bị khóa");
+        for (const id of pending.slice(banHit + 1)) markFail(id, "Bỏ qua vì page bị khóa");
+        pending = [];
+        break;
       }
 
       // Adaptive: heavy retries → slow + cut parallel; clean round → ramp
       if (retryIds.length >= pending.length * 0.3) {
-        delayMs = Math.min(2000, Math.max(delayMs, 80) + 40);
         if (adaptive && retryIsLimit) onRateLimitHit();
-        else if (adaptive && liveParallel > 1) {
-          liveParallel = Math.max(1, liveParallel - 1);
-          healthyStreak = 0;
+        else if (!paceMax) {
+          delayMs = Math.min(2000, Math.max(delayMs, 80) + 40);
+          if (adaptive && liveParallel > 1) {
+            liveParallel = Math.max(1, liveParallel - 1);
+            healthyStreak = 0;
+          }
         }
       }
       if (okInRound > 0 && retryIds.length === 0) {
@@ -2482,6 +2693,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
           maxAttempts: 8,
           shouldStop: opts.shouldStop,
           label: `DELETE ${postId}`,
+          metaAppKey: opts.metaAppKey || opts.meta_app_key,
           onRateLimit: notifyLimit,
         }
       );
@@ -2489,6 +2701,15 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
     } catch (e) {
       if (e.code === "STOPPED") return { ok: false, stopped: true };
       if (isAlreadyGoneGraphError(e)) return { ok: true, gone: true };
+      if (isSpamBlockError(e) || isPermissionError(e)) {
+        return {
+          ok: false,
+          error: e.message || String(e),
+          spam: isSpamBlockError(e),
+          permission: isPermissionError(e),
+          err: e,
+        };
+      }
       return { ok: false, error: e.message || String(e), transient: isTransientGraphError(e) };
     }
   }
@@ -2515,16 +2736,22 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
     async function batchWorker(workerId) {
       while (cursor < chunks.length) {
         if (opts.shouldStop?.()) return;
+        if (pageBanned) {
+          const my = cursor++;
+          if (my >= chunks.length) return;
+          for (const id of chunks[my]) markFail(id, "Bỏ qua vì page bị khóa");
+          continue;
+        }
         // Slot gate: only first `liveParallel` workers pull new chunks
         if (workerId > liveParallel) {
-          // Proactive usage check while idle
-          if (adaptive) {
+          // Proactive usage check while idle. pace=max không tự hạ theo % usage.
+          if (adaptive && !paceMax) {
             const cap = suggestedBatchParallel(maxBatchParallel);
             if (cap > liveParallel && healthyStreak >= 1) {
               liveParallel = Math.min(maxBatchParallel, liveParallel + 1);
             }
           }
-          await sleep(80);
+          await sleep(paceMax ? 20 : 80);
           continue;
         }
         if (await waitSharedPause()) return;
@@ -2536,7 +2763,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         const chunk = chunks[my];
         await processChunk(chunk);
         // Soft usage throttle between batches (Meta: avoid spikes)
-        const gap = adaptive
+        const gap = adaptive && !paceMax
           ? suggestedInterBatchDelayMs(delayMs)
           : delayMs;
         report({
@@ -2562,7 +2789,9 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
     recount();
 
     // Final sweep: re-try permanent fails once, slowly (often recovers limit ghosts)
-    const failedIds = results.items.filter((x) => !x.ok).map((x) => x.post_id);
+    const failedIds = pageBanned
+      ? []
+      : results.items.filter((x) => !x.ok).map((x) => x.post_id);
     if (failedIds.length && !opts.shouldStop?.() && opts.finalSweep !== false) {
       report({
         phase: "final_sweep",
@@ -2598,7 +2827,7 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
         } catch {
           // ignore — leave as fail
         }
-        await sleep(Math.max(delayMs, 200));
+        if (!paceMax || delayMs > 0) await sleep(Math.max(delayMs, paceMax ? 0 : 200));
         report({
           phase: "final_sweep",
           sweep_done: i + chunk.length,
@@ -2635,9 +2864,14 @@ export async function deletePagePostsFast(postIds, pageToken, opts = {}) {
       if (opts.shouldStop?.()) return;
       const idx = cursor++;
       const postId = ids[idx];
+      if (pageBanned) {
+        markFail(postId, "Bỏ qua vì page bị khóa");
+        continue;
+      }
       const r = await singleDeleteWithRetry(postId);
       if (r.stopped) return;
       if (r.ok) markOk(postId, r.gone);
+      else if (r.spam || r.permission) openDeleteBan(r.err || { message: r.error }, postId);
       else markFail(postId, r.error || "fail");
       report({ phase: "delete", post_id: postId });
       if (delayMs) await sleep(delayMs);

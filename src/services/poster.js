@@ -2,6 +2,7 @@
  * Orchestrate one feed/story post for a page: media + caption + optional comment + CSV/DB log.
  * Story: Page Stories API (photo/video) + link strategy (combo/overlay) — no official link sticker.
  */
+import fs from "fs";
 import path from "path";
 import { getDb } from "../db/index.js";
 import { config } from "../config.js";
@@ -11,6 +12,7 @@ import {
   publishPhoto,
   publishVideo,
   publishComment,
+  COMMENT_PREVIEW_FALLBACK_NOTE,
   isImageFile,
   isVideoFile,
 } from "./publish.js";
@@ -19,10 +21,11 @@ import {
   pickMedia,
   moveToPosted,
   pickCaption,
-  getCaptionPickMode,
+  captionModeForRun,
   composeCaptionWithLead,
   buildComment,
   assignCommentForPost,
+  ensureCommentHasLink,
   ensureDir,
   listMediaFiles,
   captionPoolStats,
@@ -32,6 +35,10 @@ import * as mediaLibrary from "./mediaLibrary.js";
 import { pickNextVideoTitle } from "./videoTitlePool.js";
 import { applyMentionsToText } from "./mentions.js";
 import { appendPostCsv } from "./postLogCsv.js";
+import { isCommunitySpamBlock, isGraphRateLimitError, isSpamBlockError, isPermissionError } from "./rateLimit.js";
+import { isPageCircuitOpen, openPageCircuit } from "./antiSpam.js";
+import { formatFbNotice } from "./fbNotice.js";
+import { commentDueIso, readCommentTiming } from "./commentTiming.js";
 import {
   assertCanPublish,
   pickUnusedMedia,
@@ -46,6 +53,15 @@ import {
 } from "./antiSpam.js";
 import { assertCanPublish as assertLicenseActive } from "./license.js";
 import { withPageOperationLock } from "./pageOperationLock.js";
+import { getAppSetting, saveAppSetting } from "./appSettings.js";
+import {
+  archiveBundleInbox,
+  bundleLinkFolder,
+  linkLineOrdinal,
+  noteSharedBundleOrdinal,
+  rememberArchivedLinkLines,
+  shouldArchiveBundleNow,
+} from "./bundleArchive.js";
 import { reserveCaptionSlot } from "./captionPoolState.js";
 import {
   countPagePostsOnLocalDay,
@@ -141,6 +157,54 @@ export function wantsCaption(cfg = {}, opts = {}) {
   return true;
 }
 
+export function assertCaptionIfEnabled(cfg, opts, caption, postType) {
+  if (!wantsCaption(cfg, opts)) return;
+  const kind = String(postType || "").toLowerCase();
+  if (!["text", "photo", "image", "video"].includes(kind)) return;
+  if (String(caption || "").trim()) return;
+  const err = new Error(
+    "Kiểm tra cấu hình: đang bật «Dùng caption» nhưng bài này không có caption. Chưa gửi Facebook."
+  );
+  err.code = "CAPTION_REQUIRED";
+  throw err;
+}
+
+export function composePlannedComment({ cfg, opts, pageRowId, mediaPath }) {
+  const want =
+    opts?.comment_on === true ? true : opts?.comment_on === false ? false : !!cfg?.comment_enabled;
+  const lists0 = cfg?.link_lists || {};
+  if (!want || opts?.comment_skip) {
+    return { enabled: !!want, skipped: !!opts?.comment_skip, text: null, link_lists: lists0 };
+  }
+  const assigned = assignCommentForPost({
+    ...cfg,
+    comment_style: opts?.match_bundle ? "bundle" : "classic",
+    link_lists: opts?.match_bundle
+      ? { ...(cfg.link_lists || {}), comment_link_mode: "match_media" }
+      : cfg.link_lists,
+    page_row_id: pageRowId,
+    media_path: mediaPath || null,
+    media_name: mediaPath ? path.basename(String(mediaPath)) : null,
+    post_round: opts?.post_round || opts?.postRound || 1,
+    pick_mode: cfg.pick_mode,
+    comment_site_tracker: opts?.comment_site_tracker || null,
+  });
+  const lists = assigned.link_lists || cfg.link_lists || lists0;
+  let text = opts?.match_bundle
+    ? assigned.text
+    : ensureCommentHasLink(assigned.text, lists, { force: true });
+  if (text) text = applyMentionsToText(text, { ...cfg, link_lists: lists }, "comment");
+  const pool = mediaLibrary.getCommentLinkPool(lists || {});
+  if (pool.length && !/https?:\/\//i.test(String(text || ""))) {
+    const err = new Error(
+      "Kiểm tra cấu hình: bật comment kèm link nhưng không ghép được link. Chưa gửi Facebook."
+    );
+    err.code = "COMMENT_LINK_REQUIRED";
+    throw err;
+  }
+  return { enabled: true, skipped: false, text: text || null, link_lists: lists };
+}
+
 export function getPagePostConfig(pageRowId) {
   const db = getDb();
   const paths = defaultMediaPaths();
@@ -222,6 +286,7 @@ export function savePagePostConfig(pageRowId, body) {
       linkLists[key] = prev;
     }
   }
+  delete linkLists.force_clear_link_lists;
   // Bỏ key undefined (từ collect partial)
   for (const k of Object.keys(linkLists)) {
     if (linkLists[k] === undefined) delete linkLists[k];
@@ -323,6 +388,115 @@ export function savePagePostConfig(pageRowId, body) {
   return getPagePostConfig(pageRowId);
 }
 
+function sameMediaFolder(a, b) {
+  const x = String(a || "").trim();
+  const y = String(b || "").trim();
+  if (!x || !y) return false;
+  try {
+    return path.resolve(x).toLowerCase() === path.resolve(y).toLowerCase();
+  } catch {
+    return x.toLowerCase() === y.toLowerCase();
+  }
+}
+
+function textLines(value) {
+  if (Array.isArray(value)) return value.map((s) => String(s ?? "").trim()).filter(Boolean);
+  if (typeof value === "string" && value.trim()) {
+    return value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function linesExceptOrdinal(lines, ordinal) {
+  return lines.filter((line) => linkLineOrdinal(line) !== ordinal);
+}
+
+/**
+ * Facebook đã nhận bài Theo bộ. Chuyển caption, comment, link cùng số sang đã đăng
+ * và gỡ số đó khỏi kho link của mọi page dùng cùng folder media.
+ * Lỗi kho không làm hỏng bài đã đăng.
+ */
+export function archiveConsumedBundle({ cfg = {}, mediaPath = "", ordinal = null } = {}) {
+  const n = ordinal != null ? Number(ordinal) : mediaLibrary.extractOrdinalFromName(mediaPath || "");
+  if (!Number.isFinite(n) || n <= 0) return { ok: false, reason: "no_ordinal" };
+  const ll = cfg.link_lists && typeof cfg.link_lists === "object" ? cfg.link_lists : {};
+  const linkFolder = bundleLinkFolder(cfg.media_folder);
+  let fileReport = { captionLines: 0, commentLines: 0, linkLines: 0, removedLinkLines: [] };
+  try {
+    fileReport = archiveBundleInbox({
+      ordinal: n,
+      captionsFolder: cfg.captions_folder,
+      commentFolder: ll.comment_open_folder || cfg.comment_open_folder,
+      linkFolder,
+    });
+  } catch (e) {
+    console.warn("[bundle-archive] file", e.message || e);
+  }
+  const dbLinkLines = [];
+  try {
+    const rows = getDb().prepare(`SELECT page_row_id, media_folder FROM page_post_config`).all();
+    for (const row of rows) {
+      if (!sameMediaFolder(row.media_folder, cfg.media_folder)) continue;
+      const pageCfg = getPagePostConfig(row.page_row_id);
+      const pageLl = pageCfg.link_lists && typeof pageCfg.link_lists === "object" ? pageCfg.link_lists : {};
+      const links = textLines(pageLl.comment_links);
+      const captions = textLines(pageCfg.captions);
+      const templates = textLines(pageCfg.comment_templates);
+      const nextLinks = linesExceptOrdinal(links, n);
+      const nextCaptions = linesExceptOrdinal(captions, n);
+      const nextTemplates = linesExceptOrdinal(templates, n);
+      for (const line of links) {
+        if (linkLineOrdinal(line) === n) dbLinkLines.push(line);
+      }
+      const body = {};
+      if (nextLinks.length !== links.length) {
+        body.link_lists = { comment_links: nextLinks };
+        if (!nextLinks.length) body.link_lists.force_clear_link_lists = true;
+      }
+      if (nextCaptions.length !== captions.length) body.captions = nextCaptions;
+      if (nextTemplates.length !== templates.length) body.comment_templates = nextTemplates;
+      if (Object.keys(body).length) savePagePostConfig(row.page_row_id, body);
+    }
+    rememberArchivedLinkLines(linkFolder, dbLinkLines);
+    const ws = getAppSetting("posting_workspace_v1", {});
+    const bundle = ws?.bundle && typeof ws.bundle === "object" ? ws.bundle : null;
+    if (bundle && typeof bundle.bundleCommentLinks === "string") {
+      const nl = bundle.bundleCommentLinks.includes("\r\n") ? "\r\n" : "\n";
+      const kept = bundle.bundleCommentLinks.split(/\r?\n/).filter((line) => linkLineOrdinal(line) !== n);
+      const next = kept.join(nl);
+      if (next !== bundle.bundleCommentLinks) {
+        saveAppSetting("posting_workspace_v1", {
+          ...ws,
+          bundle: { ...bundle, bundleCommentLinks: next },
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[bundle-archive] db", e.message || e);
+  }
+  console.log(
+    `[bundle-archive] số ${n} · caption ${fileReport.captionLines || 0} · comment ${fileReport.commentLines || 0} · link ${fileReport.linkLines || 0}`
+  );
+  return { ok: true, ordinal: n, ...fileReport };
+}
+
+/** once: chuyển ngay. all_pages: ghi số, đợi flush cuối job. Không có post id thì không đụng kho. */
+export function noteBundlePosted(opts, cfg, mediaPath, postId) {
+  if (!opts?.match_bundle || !postId) return;
+  const ordinal = mediaLibrary.extractOrdinalFromName(mediaPath || "");
+  if (ordinal == null) return;
+  if (!shouldArchiveBundleNow({ matchBundle: true, keepInInbox: opts.media_reuse === "all_pages", postId })) {
+    noteSharedBundleOrdinal(opts.shared_media, ordinal);
+    return;
+  }
+  if (mediaPath && fs.existsSync(mediaPath)) return;
+  try {
+    archiveConsumedBundle({ cfg, mediaPath, ordinal });
+  } catch (e) {
+    console.warn("[bundle-archive]", e.message || e);
+  }
+}
+
 function resetDayCounterIfNeeded(cfg) {
   const today = todayYmd(420);
   if (cfg.posts_today_date !== today) {
@@ -370,14 +544,14 @@ function logPost(row) {
       `INSERT INTO post_logs (
         page_row_id, page_id, page_name, post_type, media_path, caption,
         fb_post_id, fb_post_url, day_index, status, error, comment_text, comment_id,
-        delivery_mode
+        delivery_mode, comment_due_at
       ) VALUES (
         @page_row_id, @page_id, @page_name, @post_type, @media_path, @caption,
         @fb_post_id, @fb_post_url, @day_index, @status, @error, @comment_text, @comment_id,
-        @delivery_mode
+        @delivery_mode, @comment_due_at
       )`
     )
-    .run(rowWithMode);
+    .run({ ...rowWithMode, comment_due_at: rowWithMode.comment_due_at || null });
   const logRow = { id: info.lastInsertRowid, ...rowWithMode, created_at: new Date().toISOString() };
   try {
     appendPostCsv(logRow);
@@ -409,6 +583,9 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
   }
 
   let cfg = clampPageLimits(resetDayCounterIfNeeded(getPagePostConfig(pageRowId)));
+  if (opts.media_folder) cfg = { ...cfg, media_folder: opts.media_folder };
+  if (opts.posted_folder) cfg = { ...cfg, posted_folder: opts.posted_folder };
+  if (opts.captions_folder) cfg = { ...cfg, captions_folder: opts.captions_folder };
   if (!opts.force && !cfg.enabled) {
     throw new Error("Posting disabled for this page (bật enabled trong config)");
   }
@@ -486,7 +663,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     const picked = pickUnusedMedia(
       cfg.media_folder,
       kind,
-      "random_spaced",
+      opts.match_bundle ? "match_media" : "random_spaced",
       slot,
       cfg.posted_folder,
       {
@@ -509,6 +686,8 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       ignore_interval: !!opts.ignore_interval,
       burst: !!opts.burst,
       reuse_all_pages: opts.media_reuse === "all_pages",
+      skip_time_caps: !!opts.match_bundle,
+      skip_caption_dup: !!opts.match_bundle,
     });
     if (!gate.ok) {
       releaseInflightMedia(mediaPath);
@@ -525,7 +704,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       pageRowId,
     });
     selectedCaptionSlot = baseReservation.slot_index;
-    const captionMode = getCaptionPickMode(cfg);
+    const captionMode = captionModeForRun(cfg, opts);
     for (let attempt = 0; attempt < maxCaptionAttempts; attempt++) {
       // Chọn media trước (match_media cần tên file để khớp số caption)
       if (
@@ -536,7 +715,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         const picked = pickUnusedMedia(
           cfg.media_folder,
           kind,
-          "random_spaced",
+          opts.match_bundle ? "match_media" : "random_spaced",
           slot + attempt,
           cfg.posted_folder,
           {
@@ -569,10 +748,16 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         ignore_interval: !!opts.ignore_interval,
         burst: !!opts.burst,
         reuse_all_pages: opts.media_reuse === "all_pages",
+      skip_time_caps: !!opts.match_bundle,
+      skip_caption_dup: !!opts.match_bundle,
       });
       if (gate.ok && caption) break;
       if (gate.ok && !caption) {
-        // empty pool — ảnh/video vẫn OK không caption
+        const gap = mediaLibrary.bundleCaptionGapMessage(!!opts.match_bundle, mediaPath || "");
+        if (gap) {
+          releaseInflightMedia(mediaPath);
+          throw new Error(gap);
+        }
         break;
       }
       // hard fail codes that won't fix by retrying caption/media
@@ -597,18 +782,15 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         mediaPath = null;
         continue;
       }
-      // match_media + CAPTION_DUP: không đổi media (cùng số) — đăng không caption
-      if (captionMode === "match_media" && gate.code === "CAPTION_DUP") {
-        console.warn(
-          `[runOnePost] match_media caption dup for ${mediaPath} → đăng không caption`
-        );
+      // match_media + CAPTION_DUP: không đổi media. Chỉ bỏ caption khi cấu hình tắt «Dùng caption».
+      if (captionMode === "match_media" && gate.code === "CAPTION_DUP" && !wantsCaption(cfg, opts)) {
         caption = "";
         break;
       }
       if (!caption || attempt === maxCaptionAttempts - 1) {
         releaseInflightMedia(mediaPath);
-        // Ảnh/video: hết caption → đăng không caption thay vì fail
         if (
+          !wantsCaption(cfg, opts) &&
           (postType === "photo" || postType === "image" || postType === "video") &&
           (gate.code === "CAPTION_DUP" || !caption)
         ) {
@@ -632,7 +814,17 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
 
   // Dòng mở đầu (view full album : + link) + caption kho — tuỳ chọn
   // Truyền media_path để mode match_media khớp số thứ tự tên file ↔ link
-  const leadPack = composeCaptionWithLead(caption, {
+  if (opts.match_bundle && postType !== "text") {
+    try {
+      mediaLibrary.assertMatchedBundle({ mediaPath, caption, cfg });
+    } catch (e) {
+      releaseInflightMedia(mediaPath);
+      throw e;
+    }
+  }
+  const leadPack = opts.match_bundle
+    ? { text: caption, link_lists: null }
+    : composeCaptionWithLead(caption, {
     ...cfg,
     media_path: mediaPath || null,
     media_name: mediaPath ? path.basename(String(mediaPath)) : null,
@@ -648,14 +840,25 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
   let movedPath = null;
   let result = null;
 
+  let plannedComment = null;
   try {
+    assertCaptionIfEnabled(cfg, opts, caption, postType);
+    plannedComment = composePlannedComment({ cfg, opts, pageRowId, mediaPath });
     if (postType === "text") {
       if (!caption) {
         throw new Error(
           "Loại text cần caption trong kho (file .txt/.csv) hoặc danh sách inline — không bịa nội dung. Bật «Dùng caption» hoặc đổi loại bài."
         );
       }
-      result = await publishText(page.page_id, pageToken, caption);
+      {
+        const posted = await publishFeedUnlessLinkSpam(
+          (text) => publishText(page.page_id, pageToken, text),
+          caption
+        );
+        result = posted.result;
+        caption = posted.caption;
+        result.link_held_for_comment = posted.heldUrls;
+      }
     } else if (postType === "photo" || postType === "image") {
       if (!mediaPath) {
         throw new Error(
@@ -672,14 +875,19 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         ignore_quota: !!opts.ignore_quota,
         ignore_interval: !!opts.ignore_interval,
         reuse_all_pages: opts.media_reuse === "all_pages",
+      skip_time_caps: !!opts.match_bundle,
+      skip_caption_dup: !!opts.match_bundle,
       });
       if (!gate2.ok) throw new Error(gate2.error);
-      result = await publishPhoto(
-        page.page_id,
-        pageToken,
-        mediaPath,
-        caption
-      );
+      {
+        const posted = await publishFeedUnlessLinkSpam(
+          (text) => publishPhoto(page.page_id, pageToken, mediaPath, text),
+          caption
+        );
+        result = posted.result;
+        caption = posted.caption;
+        result.link_held_for_comment = posted.heldUrls;
+      }
     } else if (postType === "video") {
       if (!mediaPath) {
         throw new Error(
@@ -695,6 +903,8 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         ignore_quota: !!opts.ignore_quota,
         ignore_interval: !!opts.ignore_interval,
         reuse_all_pages: opts.media_reuse === "all_pages",
+      skip_time_caps: !!opts.match_bundle,
+      skip_caption_dup: !!opts.match_bundle,
       });
       if (!gate2.ok) throw new Error(gate2.error);
       // Title Meta tùy chọn: tick kho title → xoay vòng; hết thì xáo random lại
@@ -702,14 +912,18 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       if (titlePick.warning) {
         console.warn("[video title]", titlePick.warning);
       }
-      result = await publishVideo(
-        page.page_id,
-        pageToken,
-        mediaPath,
-        caption,
-        null,
-        { title: titlePick.title || null }
-      );
+      {
+        const posted = await publishFeedUnlessLinkSpam(
+          (text) =>
+            publishVideo(page.page_id, pageToken, mediaPath, text, null, {
+              title: titlePick.title || null,
+            }),
+          caption
+        );
+        result = posted.result;
+        caption = posted.caption;
+        result.link_held_for_comment = posted.heldUrls;
+      }
       if (titlePick.title) {
         result = { ...result, video_title: titlePick.title };
       }
@@ -740,6 +954,8 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         ignore_quota: !!opts.ignore_quota,
         ignore_interval: !!opts.ignore_interval,
         reuse_all_pages: opts.media_reuse === "all_pages",
+      skip_time_caps: !!opts.match_bundle,
+      skip_caption_dup: !!opts.match_bundle,
       });
       if (!gate2.ok) throw new Error(gate2.error);
 
@@ -820,37 +1036,199 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
     releaseInflightMedia(mediaPath);
     movedPath = fin.movedPath;
 
-    let commentText = null;
+    let commentText = plannedComment?.text || null;
     let commentId = null;
-    let commentLinkLists = cfg.link_lists;
-    if (cfg.comment_enabled && result?.post_id) {
-      // 1 bài = 1 gán (random hoặc lần lượt theo page)
-      const assigned = assignCommentForPost({
-        ...cfg,
-        page_row_id: pageRowId,
-        media_path: movedPath || mediaPath || null,
-        media_name: path.basename(String(movedPath || mediaPath || "")),
-        post_round: opts.post_round || opts.postRound || 1,
-        pick_mode: cfg.pick_mode,
-        force_comment_match_media:
-          opts.media_reuse === "all_pages" ||
-          String(cfg.pick_mode || "").toLowerCase() === "match_media",
-        comment_site_tracker: opts.comment_site_tracker || null,
-      });
-      commentText = assigned.text;
-      commentLinkLists = assigned.link_lists || cfg.link_lists;
-      if (commentText) {
-        commentText = applyMentionsToText(commentText, { ...cfg, link_lists: commentLinkLists }, "comment");
+    let commentPreviewFallback = false;
+    let commentPreviewNote = "";
+    let commentLinkLists = plannedComment?.link_lists || cfg.link_lists;
+    const wantComment = !!plannedComment?.enabled && !plannedComment?.skipped;
+    const commentTiming = readCommentTiming(commentLinkLists);
+    if (wantComment && result?.post_id && commentText) {
+      const heldUrls = Array.isArray(result?.link_held_for_comment) ? result.link_held_for_comment : [];
+      if (heldUrls.length) {
+        const missing = heldUrls.filter((url) => !String(commentText || "").includes(url));
+        if (missing.length) commentText = [commentText, ...missing].filter(Boolean).join("\n");
+      }
+      // «Sau publish» + số phút / số like: bài đã lên, comment để scheduler gửi đúng giờ.
+      const deferComment =
+        commentTiming.afterPublish &&
+        (commentTiming.delayMin > 0 || commentTiming.minLikes > 0);
+      if (deferComment && commentText) {
+        const dueIso = commentDueIso(Date.now(), commentTiming.delayMin);
+        const logWait = logPost({
+          page_row_id: pageRowId,
+          page_id: page.page_id,
+          page_name: page.name,
+          post_type: postType,
+          media_path: movedPath || mediaPath,
+          caption,
+          fb_post_id: result.post_id,
+          fb_post_url: result.post_url,
+          day_index: dayIndex,
+          status: "ok",
+          error: null,
+          comment_text: commentText,
+          comment_id: null,
+          comment_due_at: dueIso,
+          delivery_mode: deliveryMode,
+        });
+        savePagePostConfig(pageRowId, {
+          ...cfg,
+          link_lists: commentLinkLists,
+          next_slot_index: slot + 1,
+          caption_slot_index: caption ? selectedCaptionSlot + 1 : captionSlot,
+          last_post_at: new Date().toISOString().replace("T", " ").slice(0, 19),
+          posts_today: dayIndex,
+          posts_today_date: todayYmd(420),
+        });
+        noteBundlePosted(opts, cfg, mediaPath, result?.post_id);
+        return {
+          ok: true,
+          post: result,
+          comment_id: null,
+          comment_text: commentText,
+          comment_error: null,
+          comment_pending: true,
+          comment_when: "after_publish",
+          comment_delay_minutes: commentTiming.delayMin,
+          comment_min_likes: commentTiming.minLikes,
+          comment_ready_at: dueIso,
+          comment_immediate: false,
+          caption_sent: !!String(caption || "").trim(),
+          log: logWait,
+          day_index: dayIndex,
+          post_type: postType,
+          media_moved_to: movedPath,
+          media_hash: fin.hash,
+        };
+      }
+      const commentGate = isPageCircuitOpen(pageRowId, "comment");
+      const authGate = isPageCircuitOpen(pageRowId, "auth");
+      const heldGate = commentGate.open ? commentGate : authGate;
+      if (heldGate.open) {
+        const skipNote = `Comment đang khóa. Còn ${heldGate.seconds_left}s. ${heldGate.reason || ""}`.trim();
+        const logSkip = logPost({
+          page_row_id: pageRowId,
+          page_id: page.page_id,
+          page_name: page.name,
+          post_type: postType,
+          media_path: movedPath || mediaPath,
+          caption,
+          fb_post_id: result.post_id,
+          fb_post_url: result.post_url,
+          day_index: dayIndex,
+          status: "comment_skipped_banned",
+          error: skipNote,
+          comment_text: commentText,
+          comment_id: null,
+          delivery_mode: deliveryMode,
+        });
+        savePagePostConfig(pageRowId, {
+          ...cfg,
+          link_lists: commentLinkLists,
+          next_slot_index: slot + 1,
+          caption_slot_index: caption ? selectedCaptionSlot + 1 : captionSlot,
+          last_post_at: new Date().toISOString().replace("T", " ").slice(0, 19),
+          posts_today: dayIndex,
+          posts_today_date: todayYmd(420),
+        });
+        noteBundlePosted(opts, cfg, mediaPath, result?.post_id);
+        return {
+          ok: true,
+          post: result,
+          comment_id: null,
+          comment_text: commentText,
+          comment_error: skipNote,
+          comment_skipped_banned: true,
+          caption_sent: !!String(caption || "").trim(),
+          comment_when: commentTiming.when,
+          log: logSkip,
+          day_index: dayIndex,
+          post_type: postType,
+          media_moved_to: movedPath,
+          media_hash: fin.hash,
+        };
       }
       if (commentText) {
-        try {
-          const c = await publishComment(
-            result.post_id,
-            pageToken,
-            commentText
-          );
-          commentId = c.comment_id;
-        } catch (ce) {
+        let commentErr = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            const c = await publishComment(result.post_id, pageToken, commentText);
+            commentId = c.comment_id;
+            commentPreviewFallback = !!c.preview_fallback;
+            commentPreviewNote = c.attachment_error || "";
+            commentErr = null;
+            break;
+          } catch (ce) {
+            commentErr = ce;
+            commentId = null;
+            commentPreviewFallback = false;
+            commentPreviewNote = "";
+            if (isSpamBlockError(ce) || isPermissionError(ce)) {
+              const code = Number(ce?.code ?? ce?.fb?.code ?? NaN);
+              openPageCircuit(pageRowId, code === 190 ? "auth" : "comment", ce.message || String(ce));
+              break;
+            }
+            const retryable =
+              attempt < 2 &&
+              (isCommunitySpamBlock(ce) ||
+                isGraphRateLimitError(ce) ||
+                /try again|thử lại|please retry|temporarily(?! blocked)/i.test(ce.message || String(ce)));
+            if (!retryable) break;
+            await new Promise((r) => setTimeout(r, 12000));
+          }
+        }
+        if (commentErr) {
+          const ce = commentErr;
+          const retryLater =
+            !isSpamBlockError(ce) &&
+            !isPermissionError(ce) &&
+            (isCommunitySpamBlock(ce) ||
+              isGraphRateLimitError(ce) ||
+              /try again|thử lại|please retry|temporarily(?! blocked)/i.test(ce.message || String(ce)));
+          if (retryLater) {
+            const logWaitComment = logPost({
+              page_row_id: pageRowId,
+              page_id: page.page_id,
+              page_name: page.name,
+              post_type: postType,
+              media_path: movedPath || mediaPath,
+              caption,
+              fb_post_id: result.post_id,
+              fb_post_url: result.post_url,
+              day_index: dayIndex,
+              status: "ok",
+              error: null,
+              comment_text: commentText,
+              comment_id: null,
+              delivery_mode: deliveryMode,
+            });
+            savePagePostConfig(pageRowId, {
+              ...cfg,
+              link_lists: commentLinkLists,
+              next_slot_index: slot + 1,
+              caption_slot_index: caption ? selectedCaptionSlot + 1 : captionSlot,
+              last_post_at: new Date().toISOString().replace("T", " ").slice(0, 19),
+              posts_today: dayIndex,
+              posts_today_date: todayYmd(420),
+            });
+            noteBundlePosted(opts, cfg, mediaPath, result?.post_id);
+            return {
+              ok: true,
+              post: result,
+              comment_id: null,
+              comment_text: commentText,
+              comment_error: null,
+              comment_pending: true,
+              comment_when: commentTiming.when,
+              caption_sent: !!String(caption || "").trim(),
+              log: logWaitComment,
+              day_index: dayIndex,
+              post_type: postType,
+              media_moved_to: movedPath,
+              media_hash: fin.hash,
+            };
+          }
           commentText = `[comment failed] ${commentText}`;
           const logFailComment = logPost({
             page_row_id: pageRowId,
@@ -863,7 +1241,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
             fb_post_url: result.post_url,
             day_index: dayIndex,
             status: "ok_comment_failed",
-            error: ce.message,
+            error: formatFbNotice(ce) || ce.message,
             comment_text: commentText,
             comment_id: null,
             delivery_mode: deliveryMode,
@@ -877,12 +1255,16 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
             posts_today: dayIndex,
             posts_today_date: todayYmd(420),
           });
+          noteBundlePosted(opts, cfg, mediaPath, result?.post_id);
           return {
             ok: true,
             post: result,
             comment_id: null,
             comment_text: commentText,
-            comment_error: ce.message,
+            comment_error: formatFbNotice(ce) || ce.message,
+            comment_preview_fallback: false,
+            caption_sent: !!String(caption || "").trim(),
+            comment_when: commentTiming.when,
             log: logFailComment,
             day_index: dayIndex,
             post_type: postType,
@@ -904,7 +1286,9 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       fb_post_url: result.post_url,
       day_index: dayIndex,
       status: "ok",
-      error: null,
+      error: commentPreviewFallback
+        ? commentPreviewNote || COMMENT_PREVIEW_FALLBACK_NOTE
+        : null,
       comment_text: commentText,
       comment_id: commentId,
       delivery_mode: deliveryMode,
@@ -919,6 +1303,7 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       posts_today: dayIndex,
       posts_today_date: todayYmd(420),
     });
+    noteBundlePosted(opts, cfg, mediaPath, result?.post_id);
 
     return {
       ok: true,
@@ -931,6 +1316,12 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       comment_id: commentId,
       comment_text: commentText,
       comment_error: null,
+      comment_when: commentText ? commentTiming.when : null,
+      comment_preview_fallback: commentPreviewFallback,
+      comment_preview_note: commentPreviewNote || null,
+      caption_sent: !!String(caption || "").trim(),
+      comment_pending:
+        !!commentText && !commentId && !String(commentText).startsWith("[comment failed]"),
       comment_immediate: !!commentId,
     };
   } catch (e) {
@@ -947,12 +1338,24 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
         String(e.message || "")
       );
     const isLocalValidation =
-      /caption|media|inbox|kho|quota|interval|cooldown|anti-spam|hết caption|không có ảnh|không có video/i.test(
+      /caption|media|inbox|kho|quota|interval|cooldown|anti-spam|hết caption|không có ảnh|không có video|Kiểm tra cấu hình/i.test(
         String(e.message || "")
       );
     releaseInflightMedia(mediaPath);
     if (isGraphFail && !isLocalValidation) {
       noteGraphFailure(e);
+    }
+    // Auto scheduler chạy mọi page bật «Auto scheduler», không theo tick.
+    // Kho chỉ có video mà bước hiện tại là ảnh thì không ghi báo cáo —
+    // nếu không, page không chọn bị lặp câu này mỗi phút.
+    if (opts.from_scheduler && isUnusedMediaMiss(e.message)) {
+      return {
+        ok: false,
+        skipped: true,
+        error: e.message,
+        post_type: postType,
+        log: null,
+      };
     }
     const log = logPost({
       page_row_id: pageRowId,
@@ -977,6 +1380,33 @@ async function runOnePostUnlocked(pageRowId, opts = {}) {
       log,
       post_type: postType,
     };
+  }
+}
+
+function urlsInText(text) {
+  return String(text || "").match(/https?:\/\/[^\s<>"']+/gi) || [];
+}
+
+function captionWithoutPublicUrls(text) {
+  const raw = String(text || "").trim();
+  if (!/https?:\/\//i.test(raw)) return raw;
+  const kept = raw
+    .split(/\r?\n/)
+    .map((line) => line.replace(/https?:\/\/\S+/gi, "").trim())
+    .filter((line) => line && !/^(view full album|xem full album)\s*:?$/i.test(line));
+  return kept.join("\n\n").trim();
+}
+
+/** Đăng trực tiếp: câu spam của Facebook thường do link trong bài, không phải page bị khóa. */
+async function publishFeedUnlessLinkSpam(run, caption) {
+  try {
+    return { result: await run(caption), caption, heldUrls: [] };
+  } catch (e) {
+    const plain = captionWithoutPublicUrls(caption);
+    const heldUrls = urlsInText(caption);
+    if (!isCommunitySpamBlock(e) || !heldUrls.length || plain === String(caption || "").trim()) throw e;
+    const result = await run(plain);
+    return { result, caption: plain, heldUrls };
   }
 }
 
@@ -1006,6 +1436,7 @@ export async function runSchedulerTick() {
       const out = await runOnePost(r.page_row_id, {
         force: false,
         respectPreferredHours: true,
+        from_scheduler: true,
       });
       results.push({ page_row_id: r.page_row_id, ...out });
     } catch (e) {
@@ -1021,19 +1452,83 @@ export async function runSchedulerTick() {
   return results;
 }
 
+function postKindLabel(postType) {
+  const s = String(postType || "").toLowerCase();
+  if (s === "video") return "video";
+  if (s === "photo" || s === "image") return "ảnh";
+  if (s === "text") return "text";
+  if (s.startsWith("story")) return "story";
+  return s || "—";
+}
+
+function captionNote(text) {
+  const s = String(text || "").trim();
+  if (!s) return "Chưa có caption";
+  return /https?:\/\//i.test(s) ? "Có caption · có link" : "Có caption · không có link";
+}
+
+function commentNote(text, commentId) {
+  const s = String(text || "").trim();
+  if (!s && !commentId) return "Chưa có comment";
+  const hasLink = /https?:\/\//i.test(s);
+  const opener = s.replace(/https?:\/\/\S+/gi, "").trim();
+  const parts = [
+    opener ? "Có câu mở đầu" : "Không có câu mở đầu",
+    hasLink ? "có link" : "không có link",
+    commentId ? "đã gửi" : "chờ bài publish",
+  ];
+  return parts.join(" · ");
+}
+
+function decoratePostLog(row) {
+  const scheduled = !!row.scheduled_publish_time;
+  const kind = postKindLabel(row.post_type);
+  return {
+    ...row,
+    delivery_note: scheduled ? `Đã hẹn ${kind}` : `Đã đăng ${kind}`,
+    caption_note: captionNote(row.caption),
+    caption_preview: String(row.caption || "").replace(/\s+/g, " ").slice(0, 140),
+    comment_note: commentNote(row.comment_text, row.comment_id),
+    comment_preview: String(row.comment_text || "").replace(/\s+/g, " ").slice(0, 160),
+  };
+}
+
+function isUnusedMediaMiss(message) {
+  return /^Không có (ảnh|video) chưa dùng/.test(String(message || ""));
+}
+
+function selectedPageIdSet() {
+  try {
+    const row = getDb()
+      .prepare(`SELECT value_json FROM app_settings WHERE key = ?`)
+      .get("posting_workspace_v1");
+    const data = row?.value_json ? JSON.parse(row.value_json) : {};
+    const ids = Array.isArray(data.selected_page_ids) ? data.selected_page_ids : [];
+    return new Set(ids.map(Number).filter((id) => id > 0));
+  } catch {
+    return new Set();
+  }
+}
+
 export function listPostLogs({ pageRowId, limit = 100 } = {}) {
   const db = getDb();
   const safeLimit = Math.min(1000, Math.max(1, Number(limit) || 100));
-  if (pageRowId) {
-    return db
-      .prepare(
-        `SELECT * FROM post_logs WHERE page_row_id = ? ORDER BY id DESC LIMIT ?`
-      )
-      .all(pageRowId, safeLimit);
-  }
-  return db
-    .prepare(`SELECT * FROM post_logs ORDER BY id DESC LIMIT ?`)
-    .all(safeLimit);
+  const cols = `id, page_row_id, page_id, page_name, post_type, fb_post_id, fb_post_url,
+    status, substr(COALESCE(error,''),1,300) AS error, scheduled_publish_time, created_at,
+    comment_id, substr(COALESCE(caption,''),1,400) AS caption,
+    substr(COALESCE(comment_text,''),1,400) AS comment_text`;
+  const selected = pageRowId ? null : selectedPageIdSet();
+  const fetchLimit = selected && selected.size ? Math.min(5000, safeLimit * 25) : safeLimit;
+  const rows = pageRowId
+    ? db.prepare(`SELECT ${cols} FROM post_logs WHERE page_row_id = ? ORDER BY id DESC LIMIT ?`).all(pageRowId, safeLimit)
+    : db.prepare(`SELECT ${cols} FROM post_logs ORDER BY id DESC LIMIT ?`).all(fetchLimit);
+  const visible = selected && selected.size
+    ? rows.filter((row) => {
+        if (!isUnusedMediaMiss(row.error)) return true;
+        return selected.has(Number(row.page_row_id));
+      })
+    : rows;
+  return visible.slice(0, safeLimit).map(decoratePostLog);
 }
 
 export function mediaStats(folder) {

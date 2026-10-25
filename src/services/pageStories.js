@@ -101,7 +101,7 @@ async function graphForm(urlPath, pageToken, fields = {}, fileField = null, meta
       } catch (e) {
         throw wrapFetchError(e, "story form");
       }
-      noteGraphResponse(res);
+      noteGraphResponse(res, pageToken);
       return res.json();
     };
     let data = await tryOnce(true);
@@ -137,7 +137,7 @@ async function graphJson(urlPath, pageToken, body = {}, metaAppKey = "") {
       } catch (e) {
         throw wrapFetchError(e, "story json");
       }
-      noteGraphResponse(res);
+      noteGraphResponse(res, pageToken);
       return res.json();
     };
     let data = await tryOnce(true);
@@ -306,7 +306,7 @@ export async function publishVideoStory(pageId, pageToken, filePath, opts = {}) 
     } catch (e) {
       throw wrapFetchError(e, "rupload video story");
     }
-    noteGraphResponse(res);
+    noteGraphResponse(res, pageToken);
     const data = await res.json().catch(() => ({}));
     if (data.error) {
       const err = new Error(data.error.message || "Video rupload error");

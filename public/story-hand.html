@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Story gắn link · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <a class="brand" href="/">
+        <div class="brand-mark">FB</div>
+        <div class="brand-text">
+          <strong>Page Studio</strong>
+          <span>Story như tay</span>
+        </div>
+      </a>
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item" href="/index.html"><span class="ico">1</span> Connect & chọn Page</a>
+      <a class="nav-item" href="/posting.html"><span class="ico">2</span> Cấu hình & chạy</a>
+      <a class="nav-item active" href="/story-hand.html"><span class="ico">S</span> Story gắn link</a>
+    </aside>
+    <main class="main" style="padding:24px;max-width:920px">
+      <h1>Story gắn link</h1>
+      <p class="muted">Mở trang story từng page, chọn file, đợi ô link, dán link rồi đăng. Lần đầu cửa sổ Chrome mở ra thì đăng nhập via một lần.</p>
+      <label class="field">Page ID, mỗi dòng một ID</label>
+      <textarea id="pageIds" rows="8" style="width:100%" placeholder="101148181608185"></textarea>
+      <label class="field">File ảnh hoặc video</label>
+      <div style="display:flex;gap:8px">
+        <input id="filePath" style="flex:1" placeholder="F:\media\story.mp4" />
+        <button type="button" id="pickFile">Chọn file</button>
+      </div>
+      <label class="field">Link gắn vào story</label>
+      <input id="link" style="width:100%" placeholder="https://" />
+      <div style="margin:12px 0;display:flex;gap:16px">
+        <label><input type="radio" name="mode" value="now" checked /> Đăng ngay</label>
+        <label><input type="radio" name="mode" value="schedule" /> Hẹn giờ</label>
+      </div>
+      <input id="when" type="datetime-local" />
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button class="btn primary" id="run" type="button">Chạy story</button>
+        <button class="btn" id="stop" type="button">Dừng</button>
+      </div>
+      <pre id="log" style="margin-top:16px;min-height:180px;white-space:pre-wrap"></pre>
+    </main>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    $("pickFile").onclick = async () => {
+      const api = window.fbPageStudioDesktop;
+      if (!api?.pickFile) {
+        alert("Dán đường dẫn đầy đủ của file vào ô bên cạnh.");
+        return;
+      }
+      const picked = await api.pickFile({ title: "Chọn ảnh hoặc video story" });
+      if (picked?.ok && picked.path) $("filePath").value = picked.path;
+    };
+    $("run").onclick = async () => {
+      const mode = document.querySelector("input[name=mode]:checked")?.value || "now";
+      const res = await fetch("/api/story-hand/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pageIds: $("pageIds").value,
+          filePath: $("filePath").value,
+          link: $("link").value,
+          mode,
+          scheduleLocal: $("when").value,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) $("log").textContent = data.error || "Không chạy được";
+    };
+    $("stop").onclick = () => fetch("/api/story-hand/stop", { method: "POST" });
+    setInterval(async () => {
+      const res = await fetch("/api/story-hand/status");
+      const data = await res.json();
+      $("log").textContent = (data.logs || []).join("\n");
+      $("run").disabled = !!data.running;
+    }, 1000);
+  </script>
+</body>
+</html>

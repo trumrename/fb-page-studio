@@ -707,15 +707,24 @@ if (-not $newExe) {
 Log ("Updated EXE OK: $newExe")
 Set-Status "Starting new version..."
 
-# Close anything Setup's runAfterFinish may have started (could be race)
-Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Cài im lặng không tự mở app. Không được giết process vừa mở.
+# explorer.exe chạy app ở phiên người dùng, không phải cửa sổ admin bị ẩn.
 Start-Sleep -Seconds 1
-
-try {
-  Start-Process -FilePath $newExe -WorkingDirectory (Split-Path -Parent $newExe)
-  Log ("Launched " + $newExe)
-} catch {
-  Fail ("LOI: da cai v$toVersion nhung khong mo duoc app: " + $_.Exception.Message)
+$running = @(Get-Process -Name 'FB Page Studio' -ErrorAction SilentlyContinue)
+if ($running.Count -lt 1) {
+  try {
+    Start-Process -FilePath "$env:SystemRoot\explorer.exe" -ArgumentList ('"' + $newExe + '"')
+    Log ("Launched via explorer " + $newExe)
+  } catch {
+    try {
+      Start-Process -FilePath $newExe -WorkingDirectory (Split-Path -Parent $newExe)
+      Log ("Launched " + $newExe)
+    } catch {
+      Fail ("LOI: da cai v$toVersion nhung khong mo duoc app: " + $_.Exception.Message)
+    }
+  }
+} else {
+  Log ("App already running after Setup, keep it")
 }
 
 Start-Sleep -Seconds 3

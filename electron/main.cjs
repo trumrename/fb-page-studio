@@ -11,6 +11,8 @@ const {
   shell,
   dialog,
   ipcMain,
+  clipboard,
+  screen,
 } = require("electron");
 const path = require("path");
 const http = require("http");
@@ -25,6 +27,12 @@ try {
   /* ignore */
 }
 
+// dwm.exe on this PC dies with c0000005 and a display watchdog. Electron's GPU
+// process goes with it and the window vanishes. Draw on the CPU instead.
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch("disable-gpu");
+app.commandLine.appendSwitch("disable-gpu-compositing");
+
 let PORT = Number(process.env.PORT || 3847);
 
 /** Unexpected backend exits — auto-restart up to 2 times */
@@ -36,6 +44,8 @@ let serverProc = null;
 let USER_DIR = null;
 let logFile = null;
 let applyingUpdate = false;
+let reopenAttempts = 0;
+let reopenWindowAt = 0;
 
 function log(...args) {
   const line = `[${new Date().toISOString()}] ${args.join(" ")}\n`;
@@ -67,6 +77,20 @@ function appRoot() {
 }
 
 function findUserDirWithEnv() {
+  // A packaged NSIS install must never treat app.asar as the writable user
+  // directory. Electron reports files inside the archive as existing, so the
+  // generic .env walk below can otherwise select `resources\\app.asar` and
+  // make the backend spawn fail with ENOENT (invalid cwd).
+  if (app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR && !process.env.FB_USER_DIR) {
+    try {
+      const installed = app.getPath("userData");
+      fs.mkdirSync(installed, { recursive: true });
+      return installed;
+    } catch {
+      /* fall through to the portable/project discovery below */
+    }
+  }
+
   const candidates = [
     process.env.FB_USER_DIR,
     process.env.PORTABLE_EXECUTABLE_DIR,
@@ -240,7 +264,7 @@ function seedCustomerEnvInUserDir(userDir) {
       "FB_REDIRECT_URI=https://modelswiki.top/auth/facebook/callback",
       "FB_APP_ID=",
       "FB_APP_NAME=App 1",
-      "FB_GRAPH_VERSION=v21.0",
+      "FB_GRAPH_VERSION=v26.0",
       "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,pages_manage_metadata,pages_read_user_content,business_management,read_insights,public_profile",
       "TOKEN_ENCRYPTION_KEY=",
       "GITHUB_REPO=trumrename/fb-page-studio",
@@ -1330,6 +1354,7 @@ function startBackend() {
         .then(() => {
           log("backend restarted OK");
           backendRestartAttempts = 0;
+          if (!mainWindow || mainWindow.isDestroyed()) scheduleReopen("backend restarted");
         })
         .catch((e) => log("backend restart fail", e.message));
     }, 1200);
@@ -1552,12 +1577,92 @@ function createWindow() {
       e.preventDefault();
       mainWindow.hide();
       log("window hide to tray (job backend stays alive)");
+      try {
+        tray.displayBalloon({
+          title: "FB Page Studio vẫn chạy",
+          content: "Cửa sổ nằm ở khay hệ thống, cạnh đồng hồ. Bấm đúp icon để mở lại.",
+        });
+      } catch {
+        /* ignore */
+      }
     }
+  });
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    const reason = details?.reason || "";
+    log("render-process-gone", reason, String(details?.exitCode ?? ""));
+    if (reason === "clean-exit") return;
+    scheduleReopen(`renderer ${reason}`);
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
+    scheduleReopen("window closed");
   });
+  mainWindow.once("ready-to-show", () => revealMainWindow());
 }
+
+function scheduleReopen(reason) {
+  if (app.isQuitting || applyingUpdate) return;
+  const now = Date.now();
+  if (now - reopenWindowAt < 15000) reopenAttempts += 1;
+  else reopenAttempts = 1;
+  reopenWindowAt = now;
+  if (reopenAttempts > 3) {
+    log("stop reopening window", reason);
+    return;
+  }
+  log("reopen window", reason);
+  setTimeout(() => {
+    if (app.isQuitting || applyingUpdate) return;
+    try {
+      if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+      else revealMainWindow();
+    } catch (e) {
+      log("reopen window fail", e.message);
+    }
+  }, 600);
+}
+
+function revealMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  try {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    const bounds = mainWindow.getBounds();
+    const onScreen = screen.getAllDisplays().some((d) => {
+      const a = d.workArea;
+      const cx = bounds.x + Math.min(Math.max(bounds.width, 80), 160);
+      const cy = bounds.y + 48;
+      return cx >= a.x && cx < a.x + a.width && cy >= a.y && cy < a.y + a.height;
+    });
+    if (!onScreen) mainWindow.center();
+    mainWindow.setSkipTaskbar(false);
+    mainWindow.show();
+    mainWindow.moveTop();
+    mainWindow.focus();
+    log("window reveal");
+  } catch (e) {
+    log("window reveal failed", e.message);
+  }
+}
+
+function refocusMainWindow() {
+  setTimeout(() => revealMainWindow(), 40);
+}
+
+ipcMain.handle("fbps:refocus", () => {
+  refocusMainWindow();
+  return { ok: true };
+});
+
+ipcMain.handle("fbps:read-clipboard", () => {
+  try {
+    return clipboard.readText() || "";
+  } catch {
+    return "";
+  }
+});
 
 ipcMain.handle("fbps:pick-folder", async (_event, options = {}) => {
   const title = String(options.title || "Chọn thư mục").slice(0, 180);
@@ -1574,11 +1679,36 @@ ipcMain.handle("fbps:pick-folder", async (_event, options = {}) => {
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, dialogOptions)
     : await dialog.showOpenDialog(dialogOptions);
+  refocusMainWindow();
   if (result.canceled || !result.filePaths?.[0]) {
     return { ok: false, cancelled: true, path: null };
   }
   const paths = result.filePaths.map((item) => path.resolve(item));
   return { ok: true, cancelled: false, path: paths[0], paths };
+});
+
+ipcMain.handle("fbps:pick-file", async (_event, options = {}) => {
+  const title = String(options.title || "Chọn ảnh hoặc video").slice(0, 180);
+  let defaultPath = String(options.initialDir || "").trim();
+  if (defaultPath && !fs.existsSync(defaultPath)) defaultPath = path.dirname(defaultPath);
+  if (!defaultPath || !fs.existsSync(defaultPath)) defaultPath = USER_DIR || app.getPath("documents");
+  const dialogOptions = {
+    title,
+    defaultPath,
+    buttonLabel: "Chọn file này",
+    properties: ["openFile"],
+    filters: [
+      { name: "Ảnh và video", extensions: ["mp4", "mov", "m4v", "webm", "jpg", "jpeg", "png", "webp"] },
+    ],
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  refocusMainWindow();
+  if (result.canceled || !result.filePaths?.[0]) {
+    return { ok: false, cancelled: true, path: null };
+  }
+  return { ok: true, cancelled: false, path: path.resolve(result.filePaths[0]) };
 });
 
 function createTray() {
@@ -1592,16 +1722,12 @@ function createTray() {
   }
   tray = new Tray(trayIcon.isEmpty() ? icon : trayIcon);
   tray.setToolTip(`FB Page Studio v${app.getVersion()}`);
+  tray.on("double-click", () => revealMainWindow());
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
         label: "Mở app",
-        click: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-          } else createWindow();
-        },
+        click: () => revealMainWindow(),
       },
       {
         label: "Mở folder .env / data",
@@ -1642,18 +1768,14 @@ if (!gotLock) {
 } else {
   app.on("second-instance", (_event, _argv, _workingDirectory, additionalData) => {
     const requestedVersion = String(additionalData?.version || "").trim();
+    revealMainWindow();
     if (requestedVersion && requestedVersion !== ownVersion) {
-      dialog.showMessageBox(mainWindow || undefined, {
+      dialog.showMessageBox({
         type: "warning",
         title: "Đang chạy phiên bản cũ",
         message: `Tool đang chạy là v${ownVersion}, nhưng bạn vừa mở EXE v${requestedVersion}.`,
-        detail: "Hãy Thoát tool hoàn toàn ở khay hệ thống, sau đó mở lại file EXE phiên bản mới.",
+        detail: "Cửa sổ vừa được mở lại. Muốn đúng bản mới thì bấm Thoát ở khay hệ thống, rồi mở lại file cài.",
       });
-    }
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
     }
   });
 
@@ -1717,5 +1839,12 @@ if (!gotLock) {
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
+  app.on("child-process-gone", (_event, details) => {
+    const type = details?.type || "";
+    const reason = details?.reason || "";
+    log("child-process-gone", type, reason);
+    if (type === "GPU") scheduleReopen(`gpu ${reason}`);
   });
 }

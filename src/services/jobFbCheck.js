@@ -4,6 +4,7 @@
 import { getDb } from "../db/index.js";
 import { getPageToken } from "./accounts.js";
 import { graphGetSoft } from "./facebook.js";
+import { pageStoryUrl, pageVideoUrl, preferRealPostUrl } from "./publish.js";
 import { getJob, getJobHistory } from "./jobRunner.js";
 
 function sleep(ms) {
@@ -118,11 +119,18 @@ export async function reconcileJobWithFacebook(jobId) {
     );
     await sleep(80);
     if (g.ok && g.data?.id) {
+      const kind = String(t.post_type || t.opts?.post_type || "");
+      const built = kind === "video" ? pageVideoUrl(t.page_id, pid) : pageStoryUrl(pid);
+      const realUrl =
+        preferRealPostUrl(g.data.permalink_url, taskPostUrl(t) || built) ||
+        built ||
+        taskPostUrl(t) ||
+        null;
       const check = {
         ok: true,
         on_facebook: true,
         post_id: g.data.id,
-        permalink_url: g.data.permalink_url || taskPostUrl(t) || null,
+        permalink_url: realUrl,
         created_time: g.data.created_time || null,
         is_published: g.data.is_published !== false,
         status_type: g.data.status_type || null,
@@ -130,7 +138,7 @@ export async function reconcileJobWithFacebook(jobId) {
       };
       t.fb_check = check;
       t.fb_post_id = pid;
-      t.fb_post_url = check.permalink_url;
+      if (realUrl) t.fb_post_url = realUrl;
       results.push({ task_id: t.id, page_name: t.page_name, ...check });
       onFb += 1;
     } else {

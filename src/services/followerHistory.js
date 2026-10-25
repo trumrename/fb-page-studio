@@ -50,3 +50,54 @@ export function getFollowerGrowth(pageRowId, currentFollowers, day) {
     d30: growthFor(pageRowId, currentFollowers, day, 30),
   };
 }
+
+/** Follow đúng 1 ngày VN (null nếu chưa có snapshot). */
+export function getFollowOnDay(pageRowId, day) {
+  const row = getDb()
+    .prepare(
+      `SELECT followers_count, fan_count, snapshot_day, captured_at
+       FROM page_follower_history
+       WHERE page_row_id = ? AND snapshot_day = ?`
+    )
+    .get(Number(pageRowId), String(day));
+  if (!row || !Number.isFinite(Number(row.followers_count))) return null;
+  return {
+    followers: Number(row.followers_count),
+    fans: Number.isFinite(Number(row.fan_count)) ? Number(row.fan_count) : null,
+    day: row.snapshot_day,
+    captured_at: row.captured_at || null,
+  };
+}
+
+/** Snapshot follow cho danh sách page_row_id (không phải toàn DB). */
+export function snapshotFollowersForPages(pageRowIds = [], day) {
+  const ids = [
+    ...new Set(
+      (Array.isArray(pageRowIds) ? pageRowIds : [])
+        .map(Number)
+        .filter((n) => n > 0)
+    ),
+  ];
+  if (!ids.length) return 0;
+  const snapshotDay =
+    day ||
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Ho_Chi_Minh",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+  const db = getDb();
+  const get = db.prepare(
+    `SELECT id, followers_count, fan_count FROM fb_pages WHERE id = ? AND status = 'active'`
+  );
+  let saved = 0;
+  for (const id of ids) {
+    const row = get.get(id);
+    if (!row || !Number.isFinite(Number(row.followers_count))) continue;
+    if (saveFollowerSnapshot(row.id, row.followers_count, row.fan_count, snapshotDay)) {
+      saved += 1;
+    }
+  }
+  return saved;
+}

@@ -127,6 +127,9 @@ const HISTORY_COLUMNS = [
   { header: "Link bài", key: "fb_post_url", width: 48 },
   { header: "Media", key: "media_path", width: 44 },
   { header: "Caption", key: "caption", width: 60 },
+  { header: "Caption tình trạng", key: "caption_note", width: 28 },
+  { header: "Comment tình trạng", key: "comment_note", width: 36 },
+  { header: "Comment", key: "comment_text", width: 50 },
   { header: "Lỗi", key: "error", width: 50 },
 ];
 
@@ -151,10 +154,29 @@ export async function exportPostingHistoryDaily({ day = vnDay() } = {}) {
         : r.delivery_mode === "scheduled_direct"
           ? "Hẹn giờ đăng trực tiếp"
           : "Đăng trực tiếp",
-    post_type: r.post_type || "", created_vn: r.created_at ? getDb().prepare("SELECT datetime(?, '+7 hours') AS v").get(r.created_at).v : "",
+    post_type: `${r.scheduled_publish_time ? "Đã hẹn" : "Đã đăng"} ${r.post_type || ""}`.trim(),
+    created_vn: r.created_at ? getDb().prepare("SELECT datetime(?, '+7 hours') AS v").get(r.created_at).v : "",
     scheduled_vn: r.scheduled_publish_time ? getDb().prepare("SELECT datetime(?, '+7 hours') AS v").get(r.scheduled_publish_time).v : "",
     status: r.status || "", fb_post_id: r.fb_post_id || "", fb_post_url: r.fb_post_url || "",
-    media_path: r.media_path || "", caption: r.caption || "", error: r.error || "",
+    media_path: r.media_path || "",
+    caption: r.caption || "",
+    caption_note: /https?:\/\//i.test(String(r.caption || ""))
+      ? "Có caption · có link"
+      : String(r.caption || "").trim()
+        ? "Có caption · không có link"
+        : "Chưa có caption",
+    comment_note: (() => {
+      const raw = String(r.comment_text || "");
+      const opener = raw.replace(/https?:\/\/\S+/gi, "").trim();
+      if (!raw.trim() && !r.comment_id) return "Chưa có comment";
+      return [
+        opener ? "Có câu mở đầu" : "Không có câu mở đầu",
+        /https?:\/\//i.test(raw) ? "có link" : "không có link",
+        r.comment_id ? "đã gửi" : "chờ bài publish",
+      ].join(" · ");
+    })(),
+    comment_text: r.comment_text || "",
+    error: r.error || "",
   }));
   const xlsx = path.join(DIR, "lich-su-dang.xlsx");
   const csv = path.join(DIR, `lich-su-dang-${day}.csv`);

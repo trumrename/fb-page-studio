@@ -20,8 +20,9 @@
     if (path === "/index.html") return "connections";
     if (path === "/pages-hub.html") return "pages_hub";
     if (path === "/delete-posts.html") return "delete_posts";
-    if (path === "/delete-group-posts.html") return "delete_groups";
+    if (path === "/monitor-posts.html") return "monitor_posts";
     if (path === "/antispam.html") return "safety";
+    if (path === "/limit.html") return "token_limit";
     if (path === "/license.html") return "license";
     return "default";
   }
@@ -37,11 +38,14 @@
     ["/index.html", "1", "Kết nối Meta", "OAuth App & sync Page (an toàn)"],
     ["/pages-hub.html", "▣", "Quản lý Fanpage", "Tài khoản → Page · insights · đề xuất"],
     ["/posting.html#configWorkspace", "2", "Cấu hình Page", "Media, caption và giới hạn"],
-    ["/posting.html#rotationWorkspace", "3", "Lập lịch & chạy", "Chạy ngay hoặc hẹn giờ"],
+    ["/posting.html#rotationWorkspace", "3", "Đăng trực tiếp", "Treo tool đến giờ rồi đăng"],
+    ["/posting.html#bundleWorkspace", "3b", "Theo bộ", "Media, caption, comment cùng số"],
+    ["/posting.html#bulkWorkspace", "3c", "Hẹn Facebook", "Facebook giữ lịch"],
+    ["/monitor-posts.html", "📅", "Theo dõi bài", "Đã đăng / Chờ đăng · lịch · lọc"],
     ["/delete-posts.html", "⌫", "Xóa bài Page", "Xóa feed Fanpage siêu nhanh"],
-    ["/delete-group-posts.html", "⊟", "Xóa bài Group", "Admin/Mod xóa feed Group"],
     ["/app.html#jobSection", "4", "Tiến trình", "Phần trăm, OK và lỗi"],
     ["/antispam.html", "5", "An toàn Anti-spam", "Quota và cooldown"],
+    ["/limit.html", "%", "Limit token", "Bấm tay mới gọi Facebook"],
     ["/app.html#logsSection", "6", "Báo cáo", "Lịch sử và file xuất"],
     ["/license.html", "◆", "License", "Kích hoạt thiết bị"],
   ];
@@ -52,10 +56,11 @@
     pages_hub: ["FANPAGE", "Tài khoản OAuth · Page · Insights · Chất lượng · Đề xuất", "cyan"],
     configuration: ["CẤU HÌNH PAGE", "Thiết lập nội dung và giới hạn từng Page", "cyan"],
     rotation: ["LẬP LỊCH & CHẠY", "Xếp vòng đăng, thời gian và bắt đầu job", "green"],
+    monitor_posts: ["THEO DÕI BÀI", "Tab Đã đăng / Chờ đăng · lịch · lọc TK/ngày", "cyan"],
     delete_posts: ["XÓA BÀI", "Xóa bài Fanpage hàng loạt bằng Graph API", "red"],
-    delete_groups: ["XÓA GROUP", "Xóa bài Group với quyền Admin/Mod", "red"],
     progress: ["TIẾN TRÌNH", "Theo dõi phần trăm, nhiệm vụ và lỗi", "orange"],
     safety: ["AN TOÀN", "Kiểm soát quota, cooldown và anti-spam", "red"],
+    token_limit: ["LIMIT TOKEN", "Bấm tay mới gọi Facebook. Mở tab không đo.", "orange"],
     reports: ["BÁO CÁO", "Đối soát Facebook và lịch sử đăng", "yellow"],
     license: ["LICENSE", "Kích hoạt và giới hạn thiết bị", "violet"],
   };
@@ -66,10 +71,11 @@
     pages_hub: "Quản lý Fanpage (Graph API)",
     configuration: "Cấu hình nội dung Page",
     rotation: "Lập lịch và bắt đầu chạy",
+    monitor_posts: "Theo dõi bài đăng",
     delete_posts: "Xóa bài Fanpage siêu nhanh",
-    delete_groups: "Xóa bài Group (Admin/Mod)",
     progress: "Tiến trình công việc",
     safety: "An toàn Anti-spam",
+    token_limit: "Limit từng token",
     reports: "Báo cáo và đối soát",
     license: "License thiết bị",
   };

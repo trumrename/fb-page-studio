@@ -30,6 +30,7 @@ import { listJobs, getJob } from "../services/jobRunner.js";
 import { listMetaAppsPublic } from "../services/metaApps.js";
 import { getFollowerGrowth } from "../services/followerHistory.js";
 import { getAppSetting, saveAppSetting } from "../services/appSettings.js";
+import { archivedLinkOrdinals, bundleLinkFolder, linkLineOrdinal } from "../services/bundleArchive.js";
 import {
   getSelectionGroups,
   saveSelectionGroups,
@@ -39,6 +40,14 @@ import {
   deletePageGroup,
   resolveGroupToPageIds,
 } from "../services/selectionGroups.js";
+import {
+  installListMedia,
+  installTokenMedia,
+  setTokenMediaEnabled,
+  installPageGroupMedia,
+  setPageGroupMediaEnabled,
+  addPagesToPageGroup,
+} from "../services/tokenMedia.js";
 import { splitPagesByToken } from "../services/tokenSplit.js";
 
 const router = Router();
@@ -50,6 +59,7 @@ const DEFAULT_WORKSPACE = Object.freeze({
   active_view: "configure",
   bulk: {},
   rotation: {},
+  bundle: {},
 });
 
 function todayVnKey() {
@@ -92,23 +102,18 @@ function normalizeWorkspaceState(input = {}) {
   const activeId = selected.includes(requestedActiveId)
     ? requestedActiveId
     : selected[0] || null;
-  const allowedViews = new Set(["configure", "run", "schedule", "monitor"]);
+  const allowedViews = new Set(["configure", "run", "bundle", "schedule", "monitor"]);
+  const objectBag = (value) =>
+    value && typeof value === "object" && !Array.isArray(value) ? value : {};
   return {
     selected_page_ids: selected,
     active_page_id: activeId,
     active_view: allowedViews.has(input.active_view)
       ? input.active_view
       : "configure",
-    bulk:
-      input.bulk && typeof input.bulk === "object" && !Array.isArray(input.bulk)
-        ? input.bulk
-        : {},
-    rotation:
-      input.rotation &&
-      typeof input.rotation === "object" &&
-      !Array.isArray(input.rotation)
-        ? input.rotation
-        : {},
+    bulk: objectBag(input.bulk),
+    rotation: objectBag(input.rotation),
+    bundle: objectBag(input.bundle),
   };
 }
 
@@ -131,6 +136,7 @@ router.put("/workspace-state", (req, res) => {
     ...incoming,
     bulk: { ...(current.bulk || {}), ...(incoming.bulk || {}) },
     rotation: { ...(current.rotation || {}), ...(incoming.rotation || {}) },
+    bundle: { ...(current.bundle || {}), ...(incoming.bundle || {}) },
   };
   const state = normalizeWorkspaceState(merged);
   saveAppSetting(POSTING_WORKSPACE_KEY, state);
@@ -205,6 +211,78 @@ router.post("/selection-groups/resolve", (req, res) => {
   }
 });
 
+/** POST /api/posting/token-media/token  { account_id, media_folder, posted_folder? } */
+router.post("/token-media/token", (req, res) => {
+  try {
+    const row = installTokenMedia(
+      req.body?.account_id,
+      req.body?.media_folder,
+      req.body?.posted_folder
+    );
+    res.json({ ok: true, ...row });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** POST /api/posting/token-media/use  { account_id, enabled } */
+router.post("/token-media/use", (req, res) => {
+  try {
+    const row = setTokenMediaEnabled(req.body?.account_id, req.body?.enabled);
+    res.json({ ok: true, ...row });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** POST /api/posting/token-media/list  { account_group_id, media_folder, posted_folder? } */
+router.post("/token-media/list", (req, res) => {
+  try {
+    const row = installListMedia(
+      req.body?.account_group_id,
+      req.body?.media_folder,
+      req.body?.posted_folder
+    );
+    res.json({ ok: true, ...row, ...getSelectionGroups() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** POST /api/posting/page-group-media/install  { page_group_id, media_folder, posted_folder? } */
+router.post("/page-group-media/install", (req, res) => {
+  try {
+    const row = installPageGroupMedia(
+      req.body?.page_group_id,
+      req.body?.media_folder,
+      req.body?.posted_folder
+    );
+    res.json({ ok: true, ...row, ...getSelectionGroups() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** POST /api/posting/page-group-media/use  { page_group_id, enabled } */
+router.post("/page-group-media/use", (req, res) => {
+  try {
+    const row = setPageGroupMediaEnabled(req.body?.page_group_id, req.body?.enabled);
+    res.json({ ok: true, ...row, ...getSelectionGroups() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** POST /api/posting/page-groups/add  { page_group_id, page_row_ids } */
+router.post("/page-groups/add", (req, res) => {
+  try {
+    const row = addPagesToPageGroup(req.body?.page_group_id, req.body?.page_row_ids);
+    res.json({ ok: true, ...row, ...getSelectionGroups() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
 /** POST /api/posting/split-by-token  { pages_per_token?: 15 } */
 router.post("/split-by-token", async (req, res) => {
   try {
@@ -257,6 +335,9 @@ function normalizeConfigBody(input) {
       "mention_target",
       "mention_position",
       "use_caption",
+      "comment_with_link",
+      "comment_open_folder",
+      "comment_bundle_mode",
     ]);
     for (const [k, v] of Object.entries(body.link_lists)) {
       if (scalarKeys.has(k)) {
@@ -270,12 +351,19 @@ function normalizeConfigBody(input) {
           k === "caption_lead_link_next"
         ) {
           const n = Number(Array.isArray(v) ? v[0] : v);
-          out[k] = Number.isFinite(n) ? Math.max(0, Math.min(500, n)) : 0;
+          const cap =
+            k === "comment_delay_minutes"
+              ? 7 * 24 * 60
+              : k === "comment_min_likes"
+                ? 1_000_000
+                : 500;
+          out[k] = Number.isFinite(n) ? Math.max(0, Math.min(cap, n)) : 0;
         } else if (
           k === "caption_lead_enabled" ||
           k === "video_title_enabled" ||
           k === "mention_enabled" ||
-          k === "use_caption"
+          k === "use_caption" ||
+          k === "comment_with_link"
         ) {
           const raw = Array.isArray(v) ? v[0] : v;
           const s = String(raw ?? "").trim().toLowerCase();
@@ -288,7 +376,7 @@ function normalizeConfigBody(input) {
             s === "yes"
               ? 1
               : 0;
-        } else if (k === "video_titles_path") {
+        } else if (k === "video_titles_path" || k === "comment_open_folder") {
           const raw = Array.isArray(v) ? v[0] : v;
           out[k] = String(raw ?? "").trim();
         } else if (
@@ -312,6 +400,10 @@ function normalizeConfigBody(input) {
           } else {
             out[k] = "random";
           }
+        } else if (k === "comment_bundle_mode") {
+          const raw = Array.isArray(v) ? v[0] : v;
+          const m = String(raw || "split").trim().toLowerCase();
+          out[k] = m === "merged" ? "merged" : "split";
         } else if (k === "comment_when") {
           const raw = Array.isArray(v) ? v[0] : v;
           const m = String(raw || "after_publish").trim().toLowerCase();
@@ -412,9 +504,35 @@ router.put("/config-bulk", (req, res) => {
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
+  const bundleLinks = filterArchivedBundleLinks(configBody);
   const saved = getDb().transaction(() => ids.map((id) => savePagePostConfig(id, configBody)))();
-  res.json({ ok: true, updated: saved.length, page_row_ids: ids });
+  res.json({
+    ok: true,
+    updated: saved.length,
+    page_row_ids: ids,
+    ...(bundleLinks ? { comment_links: bundleLinks.links, dropped_archived_links: bundleLinks.dropped } : {}),
+  });
 });
+
+/** Chỉ lần lưu Theo bộ. Link đã nằm trong link/đã đăng thì bỏ khỏi ô, khỏi bị dán lại. */
+function filterArchivedBundleLinks(configBody) {
+  const ll = configBody?.link_lists;
+  if (!ll || typeof ll !== "object" || !Array.isArray(ll.comment_links)) return null;
+  const openFolder = String(ll.comment_open_folder || "").trim();
+  if (ll.comment_link_mode !== "match_media" || !openFolder) return null;
+  const archived = archivedLinkOrdinals(bundleLinkFolder(configBody.media_folder));
+  if (!archived.size) return { links: ll.comment_links, dropped: 0 };
+  const kept = [];
+  let dropped = 0;
+  for (const line of ll.comment_links) {
+    const n = linkLineOrdinal(line);
+    if (n != null && archived.has(n)) dropped += 1;
+    else kept.push(line);
+  }
+  ll.comment_links = kept;
+  if (!kept.length && dropped) ll.force_clear_link_lists = true;
+  return { links: kept, dropped };
+}
 
 /**
  * POST /api/posting/run/:pageRowId
@@ -448,19 +566,78 @@ router.post("/scheduler/tick", async (_req, res) => {
 
 /** GET /api/posting/logs */
 router.get("/logs", (req, res) => {
-  const pageRowId = req.query.page_row_id
-    ? Number(req.query.page_row_id)
-    : undefined;
-  const limit = req.query.limit ? Number(req.query.limit) : 100;
-  res.json({ logs: listPostLogs({ pageRowId, limit }) });
+  try {
+    const pageRowId = req.query.page_row_id
+      ? Number(req.query.page_row_id)
+      : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : 100;
+    res.json({ logs: listPostLogs({ pageRowId, limit }) });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Không đọc được nhật ký bài" });
+  }
 });
 
-/** POST /api/posting/reconcile-scheduled — verify overdue schedules with Facebook. */
+/** POST /api/posting/reconcile-scheduled — verify overdue schedules with Facebook.
+ * Body: { limit?, day?: "YYYY-MM-DD", stream?: boolean }
+ * stream=true → SSE tiến trình % (event: progress | done | error)
+ */
 router.post("/reconcile-scheduled", async (req, res) => {
+  const wantStream =
+    req.body?.stream === true ||
+    String(req.query.stream || "") === "1" ||
+    String(req.headers.accept || "").includes("text/event-stream");
   try {
-    const result = await reconcileScheduledLogs({ limit: req.body?.limit || 50 });
-    res.json({ ok: true, ...result });
+    if (wantStream) {
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      if (typeof res.flushHeaders === "function") res.flushHeaders();
+      const send = (event, data) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+      send("progress", { percent: 0, message: "Bắt đầu…" });
+      const scope = {
+        limit: req.body?.limit || 50,
+        day: req.body?.day || null,
+        account_id: req.body?.account_id || null,
+        meta_app_key: req.body?.meta_app_key || null,
+        page_row_ids: req.body?.page_row_ids || null,
+        log_ids: req.body?.log_ids || null,
+        page_group_id: req.body?.page_group_id || null,
+        account_group_id: req.body?.account_group_id || null,
+      };
+      const result = await reconcileScheduledLogs({
+        ...scope,
+        onProgress: (p) => send("progress", p),
+      });
+      send("done", { ok: true, scope, ...result });
+      res.end();
+      return;
+    }
+    const scope = {
+      limit: req.body?.limit || 50,
+      day: req.body?.day || null,
+      account_id: req.body?.account_id || null,
+      meta_app_key: req.body?.meta_app_key || null,
+      page_row_ids: req.body?.page_row_ids || null,
+      log_ids: req.body?.log_ids || null,
+      page_group_id: req.body?.page_group_id || null,
+      account_group_id: req.body?.account_group_id || null,
+    };
+    const result = await reconcileScheduledLogs(scope);
+    res.json({ ok: true, scope, ...result });
   } catch (e) {
+    if (wantStream) {
+      try {
+        res.write(
+          `event: error\ndata: ${JSON.stringify({ ok: false, error: e.message })}\n\n`
+        );
+        res.end();
+      } catch {
+        /* */
+      }
+      return;
+    }
     res.status(400).json({ ok: false, error: e.message });
   }
 });
@@ -494,6 +671,28 @@ const DELIVERY_MODE_SQL = `
   END`;
 // Ngày VN (post_logs lưu UTC) — dùng scheduled_publish_time nếu có, else created_at.
 const VN_DAY_SQL = `date(COALESCE(NULLIF(scheduled_publish_time,''), created_at), '+7 hours')`;
+
+/** Graph đôi khi trả permalink dạng /reel/ID — thiếu host → link «mở» sai. */
+function normalizeFacebookPostUrl(url, postId = null) {
+  const raw = String(url || "").trim();
+  const id = postId != null ? String(postId).trim() : "";
+  if (raw) {
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith("//")) return `https:${raw}`;
+    if (raw.startsWith("/")) return `https://www.facebook.com${raw}`;
+    if (/^(facebook\.com|fb\.watch|fb\.com)/i.test(raw)) return `https://${raw}`;
+    return `https://www.facebook.com/${raw.replace(/^\/+/, "")}`;
+  }
+  if (id) {
+    // pageId_postId → https://www.facebook.com/pageId/posts/postId
+    if (/^\d+_\d+$/.test(id)) {
+      const [pageId, storyId] = id.split("_");
+      return `https://www.facebook.com/${pageId}/posts/${storyId}`;
+    }
+    return `https://www.facebook.com/${id}`;
+  }
+  return null;
+}
 const SUCCESS_STATUS = "('ok','ok_comment_failed','scheduled','published','schedule_overdue')";
 
 /**
@@ -545,101 +744,272 @@ router.get("/stats/summary", (req, res) => {
 
 /**
  * GET /api/posting/pending
- * Bài đã hẹn / chờ đăng (chưa tới giờ hoặc Graph chưa publish).
- * Query: days=7 (mặc định) · limit=500
+ * Bài đã hẹn / chờ đăng — hỗ trợ lịch Meta Suite-style.
+ * Query:
+ *  days | month=YYYY-MM | account_id | meta_app_key |
+ *  page_group_id | account_group_id | job_id | limit
  */
 router.get("/pending", (req, res) => {
   try {
     const db = getDb();
-    const days = Math.min(60, Math.max(1, Number(req.query.days) || 14));
-    const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 31));
+    const limit = Math.min(3000, Math.max(1, Number(req.query.limit) || 800));
+    const filterAccountId = Number(req.query.account_id || 0) || null;
+    const filterApp = String(req.query.meta_app_key || "").trim() || null;
+    const filterJobId = String(req.query.job_id || "").trim() || null;
+    const pageGroupId = String(req.query.page_group_id || "").trim() || null;
+    const accountGroupId = String(req.query.account_group_id || "").trim() || null;
+    const filterPageRowId = Number(req.query.page_row_id || 0) || null;
+    const filterPageQ = String(req.query.page_q || req.query.q || "")
+      .trim()
+      .toLowerCase();
+
+    let monthYear = null;
+    let monthNum = null;
+    const monthRaw = String(req.query.month || "").trim();
+    const mm = monthRaw.match(/^(\d{4})-(\d{2})$/);
+    if (mm) {
+      monthYear = Number(mm[1]);
+      monthNum = Number(mm[2]);
+    }
+    const fromDay = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from || ""))
+      ? String(req.query.from)
+      : null;
+    const toDay = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.to || ""))
+      ? String(req.query.to)
+      : null;
+    const inView = (day) => {
+      const d = String(day || "");
+      if (fromDay && toDay) return d >= fromDay && d <= toDay;
+      if (monthYear && monthNum) {
+        return d.startsWith(`${monthYear}-${String(monthNum).padStart(2, "0")}`);
+      }
+      return true;
+    };
+
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
     const minMs = nowMs - days * 24 * 3600 * 1000;
     const maxMs = nowMs + days * 24 * 3600 * 1000;
-    // ISO có chữ T/Z — không dùng datetime() SQLite (trả NULL). Lọc cửa sổ ngày ở JS.
+
+    // page_row_id → account / app
+    const pageMeta = new Map();
+    try {
+      const rows = db
+        .prepare(
+          `SELECT p.id AS page_row_id, p.account_id, p.name AS page_name,
+                  a.name AS account_name, COALESCE(a.meta_app_key,'app1') AS meta_app_key
+           FROM fb_pages p
+           LEFT JOIN fb_accounts a ON a.id = p.account_id`
+        )
+        .all();
+      for (const r of rows) {
+        pageMeta.set(Number(r.page_row_id), {
+          account_id: Number(r.account_id) || null,
+          account_name: r.account_name || null,
+          meta_app_key: r.meta_app_key || "app1",
+          page_name: r.page_name || null,
+        });
+      }
+    } catch (e) {
+      console.warn("[pending] pageMeta:", e.message);
+    }
+
+    let allowedPages = null;
+    if (pageGroupId || accountGroupId) {
+      try {
+        const resolved = resolveGroupToPageIds({
+          page_group_id: pageGroupId || undefined,
+          account_group_id: accountGroupId || undefined,
+        });
+        allowedPages = new Set(
+          (resolved?.page_row_ids || []).map(Number).filter((n) => n > 0)
+        );
+      } catch (e) {
+        console.warn("[pending] group resolve:", e.message);
+        allowedPages = new Set();
+      }
+    }
+
+    const passPageFilters = (pageRowId, pageName = null, fbPageId = null) => {
+      const pid = Number(pageRowId);
+      if (allowedPages && !allowedPages.has(pid)) return false;
+      if (filterPageRowId && pid !== filterPageRowId) return false;
+      const meta = pageMeta.get(pid);
+      if (filterAccountId && Number(meta?.account_id) !== filterAccountId) return false;
+      if (filterApp && String(meta?.meta_app_key || "app1") !== filterApp) return false;
+      if (filterPageQ) {
+        const name = String(pageName || meta?.page_name || "").toLowerCase();
+        const fbId = String(fbPageId || "").toLowerCase();
+        const rowId = String(pid);
+        if (
+          !name.includes(filterPageQ) &&
+          !fbId.includes(filterPageQ) &&
+          !rowId.includes(filterPageQ)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    // page_id (FB) map for search
+    const pageFbId = new Map();
+    try {
+      for (const r of db.prepare(`SELECT id, page_id FROM fb_pages`).all()) {
+        pageFbId.set(Number(r.id), String(r.page_id || ""));
+      }
+    } catch {
+      /* */
+    }
+
+    // Lọc ngày ngay trong SQL. Không lấy 2000 bài cũ nhất rồi cắt —
+    // nếu không, các ngày mới trong tháng bị mất khỏi lịch.
+    const daySqlParts = [];
+    const daySqlArgs = [];
+    if (fromDay && toDay) {
+      daySqlParts.push(`${VN_DAY_SQL} >= ? AND ${VN_DAY_SQL} <= ?`);
+      daySqlArgs.push(fromDay, toDay);
+    } else if (monthYear && monthNum) {
+      daySqlParts.push(`${VN_DAY_SQL} LIKE ?`);
+      daySqlArgs.push(`${monthYear}-${String(monthNum).padStart(2, "0")}%`);
+    }
     const rawFb = db
       .prepare(
         `SELECT id, page_row_id, page_name, post_type, status, error,
                 fb_post_id, fb_post_url, caption, media_path,
                 comment_text, comment_id,
-                created_at, scheduled_publish_time,
+                created_at, scheduled_publish_time, last_reconciled_at,
                 ${DELIVERY_MODE_SQL} AS delivery_mode,
                 ${VN_DAY_SQL} AS day_vn
          FROM post_logs
          WHERE status IN ('scheduled', 'schedule_overdue')
            AND scheduled_publish_time IS NOT NULL
            AND trim(scheduled_publish_time) <> ''
-         ORDER BY scheduled_publish_time ASC
-         LIMIT ?`
+           ${daySqlParts.length ? `AND ${daySqlParts.join(" AND ")}` : ""}
+         ORDER BY scheduled_publish_time ASC`
       )
-      .all(Math.min(5000, limit * 5));
+      .all(...daySqlArgs);
 
     const fbRows = [];
     for (const r of rawFb) {
+      if (
+        !passPageFilters(
+          r.page_row_id,
+          r.page_name,
+          pageFbId.get(Number(r.page_row_id))
+        )
+      ) {
+        continue;
+      }
       const ms = Date.parse(r.scheduled_publish_time);
       if (!Number.isFinite(ms)) continue;
-      // Giữ: quá giờ gần đây + chờ trong cửa sổ days tới
-      if (ms < minMs || ms > maxMs) continue;
-      fbRows.push(r);
-      if (fbRows.length >= limit) break;
-    }
-
-    // Nhóm theo ngày VN
-    const byDay = new Map();
-    for (const r of fbRows) {
-      const day = r.day_vn || "unknown";
-      if (!byDay.has(day)) byDay.set(day, []);
-      const ms = Date.parse(r.scheduled_publish_time);
-      const waiting = r.status === "scheduled" && Number.isFinite(ms) && ms > nowMs;
-      const overdue =
-        r.status === "schedule_overdue" ||
-        (r.status === "scheduled" && Number.isFinite(ms) && ms <= nowMs);
-      byDay.get(day).push({
+      if (fromDay && toDay) {
+        if (!inView(r.day_vn)) continue;
+      } else if (monthYear && monthNum) {
+        if (!inView(r.day_vn)) continue;
+      } else if (ms < minMs || ms > maxMs) {
+        continue;
+      }
+      const meta = pageMeta.get(Number(r.page_row_id)) || {};
+      // waiting = chưa tới giờ
+      // needs_reconcile = đã tới giờ + chưa đối soát (hoặc FB báo chưa public)
+      // reconciled_waiting = đã đối soát, FB vẫn còn trên lịch hẹn
+      const waiting = Number.isFinite(ms) && ms > nowMs;
+      const pastDue = Number.isFinite(ms) && ms <= nowMs;
+      const hasReconciled = !!(r.last_reconciled_at && String(r.last_reconciled_at).trim());
+      const needs_reconcile =
+        pastDue && (!hasReconciled || r.status === "schedule_overdue");
+      const reconciled_waiting = pastDue && hasReconciled && r.status === "scheduled";
+      fbRows.push({
         id: r.id,
         page_row_id: r.page_row_id,
-        page_name: r.page_name,
+        page_name: r.page_name || meta.page_name,
+        account_id: meta.account_id || null,
+        account_name: meta.account_name || null,
+        meta_app_key: meta.meta_app_key || "app1",
         post_type: r.post_type,
         status: r.status,
         scheduled_publish_time: r.scheduled_publish_time,
         created_at: r.created_at,
+        last_reconciled_at: r.last_reconciled_at || null,
         delivery_mode: r.delivery_mode || "fb_scheduled",
         fb_post_id: r.fb_post_id,
-        fb_post_url: r.fb_post_url,
+        fb_post_url: normalizeFacebookPostUrl(r.fb_post_url, r.fb_post_id),
         media_name: r.media_path ? String(r.media_path).split(/[/\\]/).pop() : null,
         caption_preview: r.caption ? String(r.caption).slice(0, 80) : null,
+        day_vn: r.day_vn || null,
         waiting,
-        overdue,
+        needs_reconcile,
+        reconciled_waiting,
+        // alias cũ
+        overdue: needs_reconcile,
       });
     }
 
-    // Job Direct Local đang chạy: task pending có run_at tương lai
+    const byDay = new Map();
+    for (const r of fbRows) {
+      const day = r.day_vn || "unknown";
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(r);
+    }
+
+    // Job Direct Local đang chạy
     let jobWaiting = [];
+    const jobOptions = [];
     try {
-      const jobs = listJobs(20) || [];
+      const jobs = listJobs(40) || [];
       const now = Date.now();
       for (const j of jobs) {
-        if (!j || (j.status !== "running" && j.status !== "paused" && j.status !== "pending")) {
-          continue;
+        if (!j) continue;
+        const st = String(j.status || "");
+        if (!["running", "paused", "pending", "queued"].includes(st) && st !== "ok") {
+          // vẫn cho chọn job gần đây trong filter dropdown
         }
+        jobOptions.push({
+          id: j.id,
+          title: j.title || j.id,
+          status: j.status,
+        });
+        if (!["running", "paused", "pending", "queued"].includes(st)) continue;
         const full = getJob(j.id) || j;
+        if (filterJobId && String(full.id || j.id) !== filterJobId) continue;
         for (const t of full?.tasks || []) {
           if (t.status !== "pending" && t.status !== "waiting") continue;
+          if (
+            !passPageFilters(
+              t.page_row_id,
+              t.page_name,
+              pageFbId.get(Number(t.page_row_id))
+            )
+          ) {
+            continue;
+          }
           const runAt = t.run_at || t.opts?.run_at;
           if (!runAt) continue;
           const ms = Date.parse(runAt);
           if (!Number.isFinite(ms)) continue;
+          const dayVn = new Date(ms + 7 * 3600 * 1000).toISOString().slice(0, 10);
+          if ((fromDay && toDay) || (monthYear && monthNum)) {
+            if (!inView(dayVn)) continue;
+          }
+          const meta = pageMeta.get(Number(t.page_row_id)) || {};
           jobWaiting.push({
             job_id: full.id || j.id,
             job_title: full.title || j.title,
             task_id: t.id,
-            page_name: t.page_name,
+            page_name: t.page_name || meta.page_name,
             page_row_id: t.page_row_id,
+            account_id: meta.account_id || null,
+            account_name: meta.account_name || null,
+            meta_app_key: meta.meta_app_key || "app1",
             label: t.label,
             post_type: t.opts?.post_type || null,
             run_at: runAt,
+            day_vn: dayVn,
             delivery_mode: "scheduled_direct",
             waiting: ms > now,
+            needs_reconcile: ms <= now,
             overdue: ms <= now,
             post_round: t.opts?.post_round || null,
           });
@@ -650,32 +1020,230 @@ router.get("/pending", (req, res) => {
       console.warn("[pending] jobs:", e.message);
     }
 
+    // Merge Direct Local into byDay for calendar cells
+    for (const t of jobWaiting) {
+      const day = t.day_vn || "unknown";
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push({
+        ...t,
+        id: `job:${t.job_id}:${t.task_id}`,
+        scheduled_publish_time: t.run_at,
+        status: "scheduled",
+        fb_post_id: null,
+        fb_post_url: null,
+        media_name: null,
+        caption_preview: t.label || null,
+      });
+    }
+
     const daysOut = [...byDay.entries()]
       .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
       .map(([day, rows]) => ({
         day,
         count: rows.length,
         waiting: rows.filter((x) => x.waiting).length,
-        overdue: rows.filter((x) => x.overdue).length,
+        needs_reconcile: rows.filter((x) => x.needs_reconcile || x.overdue).length,
+        overdue: rows.filter((x) => x.needs_reconcile || x.overdue).length,
+        sample_pages: [
+          ...new Set(rows.map((x) => x.page_name).filter(Boolean)),
+        ].slice(0, 6),
         rows,
       }));
 
+    // Calendar cells: tháng, hoặc đúng khoảng from–to (tuần giao tháng)
+    let calYear = monthYear;
+    let calMonth = monthNum;
+    if (!calYear || !calMonth) {
+      const anchor = fromDay || new Date(nowMs + 7 * 3600 * 1000).toISOString().slice(0, 10);
+      calYear = Number(anchor.slice(0, 4));
+      calMonth = Number(anchor.slice(5, 7));
+    }
+    const cells = [];
+    const pushCell = (day) => {
+      const pack = daysOut.find((x) => x.day === day);
+      cells.push({
+        day,
+        count: pack?.count || 0,
+        waiting: pack?.waiting || 0,
+        overdue: pack?.overdue || 0,
+        sample_pages: pack?.sample_pages || [],
+      });
+    };
+    if (fromDay && toDay && fromDay <= toDay) {
+      const cur = new Date(`${fromDay}T12:00:00Z`);
+      const end = new Date(`${toDay}T12:00:00Z`);
+      for (let i = 0; i < 40 && cur <= end; i++) {
+        pushCell(cur.toISOString().slice(0, 10));
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+    } else {
+      const dim = new Date(Date.UTC(calYear, calMonth, 0)).getUTCDate();
+      for (let d = 1; d <= dim; d++) {
+        pushCell(
+          `${calYear}-${String(calMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`
+        );
+      }
+    }
+
+    // Filter dropdown data
+    const accountsMap = new Map();
+    const appsMap = new Map();
+    for (const meta of pageMeta.values()) {
+      if (meta.account_id) {
+        if (!accountsMap.has(meta.account_id)) {
+          accountsMap.set(meta.account_id, {
+            id: meta.account_id,
+            name: meta.account_name || `TK #${meta.account_id}`,
+            meta_app_key: meta.meta_app_key,
+          });
+        }
+      }
+      const ak = meta.meta_app_key || "app1";
+      if (!appsMap.has(ak)) appsMap.set(ak, { meta_app_key: ak, name: ak });
+    }
+    let groups = { account_groups: [], page_groups: [] };
+    try {
+      groups = getSelectionGroups() || groups;
+    } catch {
+      /* */
+    }
+
+    const flat = [...byDay.values()].flat();
     res.json({
       ok: true,
       now: nowIso,
       days_ahead: days,
+      filters: {
+        account_id: filterAccountId,
+        meta_app_key: filterApp,
+        page_group_id: pageGroupId,
+        account_group_id: accountGroupId,
+        page_row_id: filterPageRowId,
+        page_q: filterPageQ || null,
+        job_id: filterJobId,
+        month: `${calYear}-${String(calMonth).padStart(2, "0")}`,
+      },
+      filter_options: {
+        accounts: [...accountsMap.values()].sort((a, b) =>
+          String(a.name).localeCompare(String(b.name), "vi")
+        ),
+        tokens: [...appsMap.values()],
+        account_groups: groups.account_groups || [],
+        page_groups: groups.page_groups || [],
+        jobs: jobOptions.slice(0, 40),
+        pages: [...pageMeta.entries()]
+          .map(([id, m]) => ({
+            id,
+            name: m.page_name || `Page #${id}`,
+            account_id: m.account_id,
+            page_id: pageFbId.get(id) || null,
+            meta_app_key: m.meta_app_key,
+          }))
+          .sort((a, b) => String(a.name).localeCompare(String(b.name), "vi")),
+      },
+      calendar: {
+        year: calYear,
+        month: calMonth,
+        cells,
+      },
       fb_scheduled: {
         total: fbRows.length,
-        waiting: [...byDay.values()].flat().filter((x) => x.waiting).length,
-        overdue: [...byDay.values()].flat().filter((x) => x.overdue).length,
+        waiting: flat.filter((x) => x.waiting && x.delivery_mode !== "scheduled_direct")
+          .length,
+        overdue: flat.filter((x) => x.overdue && x.delivery_mode !== "scheduled_direct")
+          .length,
         by_day: daysOut,
       },
       direct_local_waiting: jobWaiting,
       summary: {
-        fb_waiting: [...byDay.values()].flat().filter((x) => x.waiting).length,
-        fb_overdue: [...byDay.values()].flat().filter((x) => x.overdue).length,
+        fb_waiting: flat.filter(
+          (x) => x.waiting && x.delivery_mode !== "scheduled_direct"
+        ).length,
+        fb_overdue: flat.filter(
+          (x) => x.overdue && x.delivery_mode !== "scheduled_direct"
+        ).length,
         tool_waiting: jobWaiting.filter((x) => x.waiting).length,
+        total_in_view: flat.length,
       },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * POST /api/posting/pending/reconcile-day
+ * Đối soát Graph scheduled_posts cho các page có bài trong 1 ngày VN.
+ * Body: { day: "YYYY-MM-DD", page_row_ids?: number[], limit_pages?: number }
+ */
+router.post("/pending/reconcile-day", async (req, res) => {
+  try {
+    const day = String(req.body?.day || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return res.status(400).json({ ok: false, error: "Thiếu day YYYY-MM-DD" });
+    }
+    const limitPages = Math.min(
+      20,
+      Math.max(1, Number(req.body?.limit_pages) || 12)
+    );
+    let pageIds = Array.isArray(req.body?.page_row_ids)
+      ? req.body.page_row_ids.map(Number).filter((n) => n > 0)
+      : [];
+    if (!pageIds.length) {
+      const db = getDb();
+      const rows = db
+        .prepare(
+          `SELECT DISTINCT page_row_id FROM post_logs
+           WHERE status IN ('scheduled','schedule_overdue')
+             AND ${VN_DAY_SQL} = ?
+           LIMIT ?`
+        )
+        .all(day, limitPages);
+      pageIds = rows.map((r) => Number(r.page_row_id)).filter((n) => n > 0);
+    }
+    pageIds = [...new Set(pageIds)].slice(0, limitPages);
+
+    const results = [];
+    for (const pid of pageIds) {
+      try {
+        const data = await listFbScheduledForPage(pid);
+        const posts = (data.posts || []).map((p) => {
+          const unix = Number(p.scheduled_publish_time);
+          let dayVn = null;
+          if (Number.isFinite(unix) && unix > 0) {
+            dayVn = new Date(unix * 1000 + 7 * 3600 * 1000)
+              .toISOString()
+              .slice(0, 10);
+          }
+          return {
+            id: p.id,
+            scheduled_publish_time: p.scheduled_publish_time,
+            day_vn: dayVn,
+            message: String(p.message || "").slice(0, 80),
+          };
+        });
+        const onDay = posts.filter((p) => p.day_vn === day);
+        results.push({
+          page_row_id: pid,
+          page_name: data.page?.name || null,
+          ok: true,
+          fb_total: posts.length,
+          fb_on_day: onDay.length,
+          posts: onDay,
+        });
+      } catch (e) {
+        results.push({
+          page_row_id: pid,
+          ok: false,
+          error: e.message || String(e),
+        });
+      }
+    }
+    res.json({
+      ok: true,
+      day,
+      pages_checked: results.length,
+      results,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -696,6 +1264,272 @@ router.get("/history/days", (_req, res) => {
     )
     .all();
   res.json({ days: rows.map((r) => ({ day: r.day, count: Number(r.n || 0) })) });
+});
+
+/**
+ * GET /api/posting/published
+ * Bài đã đăng (publish) — lịch/list theo ngày VN + lọc TK/nhóm/App.
+ * Query: month=YYYY-MM | day=YYYY-MM-DD | account_id | meta_app_key |
+ *        page_group_id | account_group_id | days | limit
+ */
+router.get("/published", (req, res) => {
+  try {
+    const db = getDb();
+    const limit = Math.min(3000, Math.max(1, Number(req.query.limit) || 800));
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 31));
+    const filterAccountId = Number(req.query.account_id || 0) || null;
+    const filterApp = String(req.query.meta_app_key || "").trim() || null;
+    const pageGroupId = String(req.query.page_group_id || "").trim() || null;
+    const accountGroupId = String(req.query.account_group_id || "").trim() || null;
+    const filterPageRowId = Number(req.query.page_row_id || 0) || null;
+    const filterPageQ = String(req.query.page_q || req.query.q || "")
+      .trim()
+      .toLowerCase();
+    const dayExact =
+      typeof req.query.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.day)
+        ? req.query.day
+        : null;
+
+    let monthYear = null;
+    let monthNum = null;
+    const monthRaw = String(req.query.month || "").trim();
+    const mm = monthRaw.match(/^(\d{4})-(\d{2})$/);
+    if (mm) {
+      monthYear = Number(mm[1]);
+      monthNum = Number(mm[2]);
+    }
+    const fromDay = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from || ""))
+      ? String(req.query.from)
+      : null;
+    const toDay = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.to || ""))
+      ? String(req.query.to)
+      : null;
+
+    const pageMeta = new Map();
+    const pageFbId = new Map();
+    const rowsMeta = db
+      .prepare(
+        `SELECT p.id AS page_row_id, p.page_id, p.account_id, p.name AS page_name,
+                a.name AS account_name, COALESCE(a.meta_app_key,'app1') AS meta_app_key
+         FROM fb_pages p
+         LEFT JOIN fb_accounts a ON a.id = p.account_id`
+      )
+      .all();
+    for (const r of rowsMeta) {
+      pageMeta.set(Number(r.page_row_id), {
+        account_id: Number(r.account_id) || null,
+        account_name: r.account_name || null,
+        meta_app_key: r.meta_app_key || "app1",
+        page_name: r.page_name || null,
+      });
+      pageFbId.set(Number(r.page_row_id), String(r.page_id || ""));
+    }
+
+    let allowedPages = null;
+    if (pageGroupId || accountGroupId) {
+      try {
+        const resolved = resolveGroupToPageIds({
+          page_group_id: pageGroupId || undefined,
+          account_group_id: accountGroupId || undefined,
+        });
+        allowedPages = new Set(
+          (resolved?.page_row_ids || []).map(Number).filter((n) => n > 0)
+        );
+      } catch {
+        allowedPages = new Set();
+      }
+    }
+
+    const passPageFilters = (pageRowId, pageName = null) => {
+      const pid = Number(pageRowId);
+      if (allowedPages && !allowedPages.has(pid)) return false;
+      if (filterPageRowId && pid !== filterPageRowId) return false;
+      const meta = pageMeta.get(pid);
+      if (filterAccountId && Number(meta?.account_id) !== filterAccountId) return false;
+      if (filterApp && String(meta?.meta_app_key || "app1") !== filterApp) return false;
+      if (filterPageQ) {
+        const name = String(pageName || meta?.page_name || "").toLowerCase();
+        const fbId = String(pageFbId.get(pid) || "").toLowerCase();
+        if (
+          !name.includes(filterPageQ) &&
+          !fbId.includes(filterPageQ) &&
+          !String(pid).includes(filterPageQ)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    const nowMs = Date.now();
+    let calYear = monthYear;
+    let calMonth = monthNum;
+    if (!calYear || !calMonth) {
+      const vn = new Date(nowMs + 7 * 3600 * 1000);
+      calYear = vn.getUTCFullYear();
+      calMonth = vn.getUTCMonth() + 1;
+    }
+    const monthPrefix = `${calYear}-${String(calMonth).padStart(2, "0")}`;
+
+    // Published / successfully posted (not waiting scheduled)
+    const pubDayParts = [];
+    const pubDayArgs = [];
+    if (dayExact) {
+      pubDayParts.push(`${VN_DAY_SQL} = ?`);
+      pubDayArgs.push(dayExact);
+    } else if (fromDay && toDay) {
+      pubDayParts.push(`${VN_DAY_SQL} >= ? AND ${VN_DAY_SQL} <= ?`);
+      pubDayArgs.push(fromDay, toDay);
+    } else if (monthYear && monthNum) {
+      pubDayParts.push(`${VN_DAY_SQL} LIKE ?`);
+      pubDayArgs.push(`${monthPrefix}%`);
+    }
+    const raw = db
+      .prepare(
+        `SELECT id, page_row_id, page_name, post_type, status, error,
+                fb_post_id, fb_post_url, caption, media_path,
+                created_at, scheduled_publish_time,
+                ${DELIVERY_MODE_SQL} AS delivery_mode,
+                ${VN_DAY_SQL} AS day_vn
+         FROM post_logs
+         WHERE status IN ('ok','ok_comment_failed','published')
+           ${pubDayParts.length ? `AND ${pubDayParts.join(" AND ")}` : ""}
+         ORDER BY COALESCE(NULLIF(scheduled_publish_time,''), created_at) DESC`
+      )
+      .all(...pubDayArgs);
+
+    const items = [];
+    for (const r of raw) {
+      if (!passPageFilters(r.page_row_id, r.page_name)) continue;
+      const day = r.day_vn || "unknown";
+      if (dayExact && day !== dayExact) continue;
+      if (!dayExact && fromDay && toDay) {
+        if (String(day) < fromDay || String(day) > toDay) continue;
+      } else if (!dayExact && monthYear && monthNum) {
+        if (!String(day).startsWith(monthPrefix)) continue;
+      } else if (!dayExact) {
+        const ms = Date.parse(r.scheduled_publish_time || r.created_at);
+        if (Number.isFinite(ms)) {
+          const minMs = nowMs - days * 24 * 3600 * 1000;
+          if (ms < minMs) continue;
+        }
+      }
+      const meta = pageMeta.get(Number(r.page_row_id)) || {};
+      items.push({
+        id: r.id,
+        page_row_id: r.page_row_id,
+        page_name: r.page_name || meta.page_name,
+        account_id: meta.account_id || null,
+        account_name: meta.account_name || null,
+        meta_app_key: meta.meta_app_key || "app1",
+        post_type: r.post_type,
+        status: r.status,
+        scheduled_publish_time: r.scheduled_publish_time,
+        created_at: r.created_at,
+        delivery_mode: r.delivery_mode || null,
+        fb_post_id: r.fb_post_id,
+        fb_post_url: normalizeFacebookPostUrl(r.fb_post_url, r.fb_post_id),
+        media_name: r.media_path ? String(r.media_path).split(/[/\\]/).pop() : null,
+        caption_preview: r.caption ? String(r.caption).slice(0, 80) : null,
+        day_vn: day,
+      });
+    }
+
+    const byDay = new Map();
+    for (const r of items) {
+      const day = r.day_vn || "unknown";
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(r);
+    }
+    const daysOut = [...byDay.entries()]
+      .sort((a, b) => String(b[0]).localeCompare(String(a[0])))
+      .map(([day, rows]) => ({
+        day,
+        count: rows.length,
+        sample_pages: [...new Set(rows.map((x) => x.page_name).filter(Boolean))].slice(0, 6),
+        rows,
+      }));
+
+    const cells = [];
+    const pushPubCell = (day) => {
+      const pack = daysOut.find((x) => x.day === day);
+      cells.push({
+        day,
+        count: pack?.count || 0,
+        sample_pages: pack?.sample_pages || [],
+      });
+    };
+    if (fromDay && toDay && fromDay <= toDay) {
+      const cur = new Date(`${fromDay}T12:00:00Z`);
+      const end = new Date(`${toDay}T12:00:00Z`);
+      for (let i = 0; i < 40 && cur <= end; i++) {
+        pushPubCell(cur.toISOString().slice(0, 10));
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+    } else {
+      const dim = new Date(Date.UTC(calYear, calMonth, 0)).getUTCDate();
+      for (let d = 1; d <= dim; d++) {
+        pushPubCell(
+          `${calYear}-${String(calMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`
+        );
+      }
+    }
+
+    const accountsMap = new Map();
+    const appsMap = new Map();
+    for (const meta of pageMeta.values()) {
+      if (meta.account_id && !accountsMap.has(meta.account_id)) {
+        accountsMap.set(meta.account_id, {
+          id: meta.account_id,
+          name: meta.account_name || `TK #${meta.account_id}`,
+          meta_app_key: meta.meta_app_key,
+        });
+      }
+      const ak = meta.meta_app_key || "app1";
+      if (!appsMap.has(ak)) appsMap.set(ak, { meta_app_key: ak, name: ak });
+    }
+    let groups = { account_groups: [], page_groups: [] };
+    try {
+      groups = getSelectionGroups() || groups;
+    } catch {
+      /* */
+    }
+
+    res.json({
+      ok: true,
+      now: new Date().toISOString(),
+      filters: {
+        account_id: filterAccountId,
+        meta_app_key: filterApp,
+        page_group_id: pageGroupId,
+        account_group_id: accountGroupId,
+        day: dayExact,
+        month: monthPrefix,
+      },
+      filter_options: {
+        accounts: [...accountsMap.values()].sort((a, b) =>
+          String(a.name).localeCompare(String(b.name), "vi")
+        ),
+        tokens: [...appsMap.values()],
+        account_groups: groups.account_groups || [],
+        page_groups: groups.page_groups || [],
+        pages: [...pageMeta.entries()]
+          .map(([id, m]) => ({
+            id,
+            name: m.page_name || `Page #${id}`,
+            account_id: m.account_id,
+            page_id: pageFbId.get(id) || null,
+            meta_app_key: m.meta_app_key,
+          }))
+          .sort((a, b) => String(a.name).localeCompare(String(b.name), "vi")),
+      },
+      calendar: { year: calYear, month: calMonth, cells },
+      by_day: daysOut,
+      summary: { total_in_view: items.length },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 /**

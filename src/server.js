@@ -11,17 +11,17 @@ import postingRoutes from "./routes/posting.js";
 import jobsRoutes from "./routes/jobs.js";
 import licenseRoutes from "./routes/license.js";
 import deletePostsRoutes from "./routes/deletePosts.js";
-import deleteGroupPostsRoutes from "./routes/deleteGroupPosts.js";
+import storyHandRoutes from "./routes/storyHand.js";
 import httpOpsRoutes from "./routes/httpOps.js";
+import mediaVaultRoutes from "./routes/mediaVault.js";
 import { runSchedulerTick, getPagePostConfig, mediaStats, getCaptionStats } from "./services/poster.js";
-import { reconcileScheduledLogs } from "./services/schedule.js";
+import { flushDueScheduledComments } from "./services/schedule.js";
+import { settleWaitingCommentJobs } from "./services/jobRunner.js";
 import {
   initHttpOps,
   httpOpsSchedulerTick,
   getHttpOpsWorkerState,
 } from "./services/httpOps/index.js";
-import { exportAllDailyReports, exportPostingHistoryDaily, vnDay, yesterdayVn } from "./services/dailyReports.js";
-import { enrichAllPages } from "./services/enrich.js";
 import { ensureAntiSpamTables } from "./services/antiSpam.js";
 import {
   getLicenseStatus,
@@ -40,22 +40,8 @@ import {
   getCentralAccessToken,
   deployPublicInfo,
 } from "./services/deployMode.js";
-import { syncOauthRelayConfig } from "./services/oauthRelaySync.js";
-
 const app = express();
 const publicDir = getPublicDir();
-
-// OAUTH_RELAY: pull live domain from server (modelswiki.top) so old pack .env self-heals.
-try {
-  const relaySync = await syncOauthRelayConfig();
-  if (relaySync.synced && relaySync.changed) {
-    console.log(
-      `[oauth-relay] EXE đã nhận domain server: ${relaySync.public_url}`
-    );
-  }
-} catch (e) {
-  console.warn("[oauth-relay] sync:", e.message);
-}
 
 // Init DB + default media folders + anti-spam
 getDb();
@@ -122,7 +108,7 @@ if (!fs.existsSync(exampleBeside)) {
       "FB_APP_ID_2=",
       "FB_APP_NAME_2=App 2",
       "# FB_REDIRECT_URI_2=  (empty = same as App 1; register URI on BOTH Meta apps)",
-      "FB_GRAPH_VERSION=v21.0",
+      "FB_GRAPH_VERSION=v26.0",
       "NGROK_AUTHTOKEN=",
       "NGROK_AUTOSTART=0",
       "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,pages_manage_metadata,pages_read_user_content,business_management,read_insights,public_profile",
@@ -269,11 +255,12 @@ app.get("/api/meta", (_req, res) => {
 
 app.use("/auth", authRoutes);
 app.use("/api/license", licenseRoutes);
+app.use("/api/media-vault", mediaVaultRoutes);
 app.use("/api", apiRoutes);
 app.use("/api/posting", postingRoutes);
 app.use("/api/jobs", jobsRoutes);
 app.use("/api/delete-posts", deletePostsRoutes);
-app.use("/api/delete-group-posts", deleteGroupPostsRoutes);
+app.use("/api/story-hand", storyHandRoutes);
 // Session/login APIs only if explicitly enabled (default: separate Session Ops tool)
 if (process.env.ENABLE_HTTP_OPS === "1") {
   app.use("/api/http-ops", httpOpsRoutes);
@@ -293,23 +280,7 @@ if (process.env.ENABLE_HTTP_OPS === "1") {
   }
 }
 
-// Startup: log if GitHub has a newer release (non-blocking)
-import("./services/updater.js")
-  .then(({ checkForUpdate }) => checkForUpdate())
-  .then((r) => {
-    if (r?.ok && r.has_update) {
-      console.log(
-        `[update] Có bản mới v${r.latest_version} (hiện v${r.current_version})` +
-          (r.asset ? ` · ${r.asset.name}` : " · ⚠ release chưa có .exe") +
-          (r.release_url ? ` · ${r.release_url}` : "")
-      );
-    } else if (r?.ok) {
-      console.log(`[update] Đang là bản mới nhất v${r.current_version}`);
-    } else if (r?.error) {
-      console.warn(`[update] Check: ${r.error}`);
-    }
-  })
-  .catch((e) => console.warn("[update]", e.message));
+// Kiểm tra bản mới chỉ khi bấm «Kiểm tra GitHub». Không hỏi lúc mở app.
 
 // Scheduler: every 60s check enabled pages
 const SCHEDULER_MS = Number(process.env.SCHEDULER_INTERVAL_MS || 60000);
@@ -393,7 +364,7 @@ setInterval(() => {
   schedulerState.last_started_at = new Date().toISOString();
   schedulerState.last_error = null;
   runSchedulerTick()
-    .then((results) => {
+    .then(async (results) => {
       const posted = results.filter((r) => r.ok);
       schedulerState.tick_count++;
       schedulerState.last_summary = {
@@ -420,6 +391,22 @@ setInterval(() => {
       } catch (se) {
         console.warn("[http-ops/story]", se?.message || se);
       }
+      // Bài hẹn đã lưu câu + link: gửi sau giờ publish. Không đối soát cả lịch.
+      try {
+        const flushed = await flushDueScheduledComments();
+        if (flushed.sent) {
+          console.log(
+            `[scheduler] gắn comment link ${flushed.sent}:`,
+            flushed.names.join(", ")
+          );
+        }
+        const settled = settleWaitingCommentJobs();
+        if (settled.updated) {
+          console.log(`[scheduler] job đợi comment cập nhật ${settled.updated}`);
+        }
+      } catch (ce) {
+        console.warn("[scheduler] comment link", ce?.message || ce);
+      }
     })
     .catch((e) => {
       schedulerState.last_error = e.message;
@@ -432,59 +419,8 @@ setInterval(() => {
     });
 }, SCHEDULER_MS);
 
-// Reconcile schedules that have passed their publish time with Facebook.
-const RECONCILE_MS = 5 * 60 * 1000;
-let reconcileRunning = false;
-async function runScheduledReconcile() {
-  if (reconcileRunning) return;
-  reconcileRunning = true;
-  try {
-    const r = await reconcileScheduledLogs({ limit: 50 });
-    if (r.checked) {
-      console.log(`[reconcile] checked ${r.checked} · published ${r.published} · overdue ${r.overdue} · unknown ${r.unknown}`);
-    }
-  } catch (e) {
-    console.warn("[reconcile]", e.message);
-  } finally {
-    reconcileRunning = false;
-  }
-}
-setTimeout(runScheduledReconcile, 15000);
-setInterval(runScheduledReconcile, RECONCILE_MS);
-
-// Daily CSV + cumulative Excel sheets at 23:59 Vietnam time.
-let lastDailyExportDay = null;
-async function runEndOfDayExport(day, reason) {
-  try {
-    const followerSync = await enrichAllPages({ force: true });
-    const r = await exportAllDailyReports({ day });
-    lastDailyExportDay = day;
-    console.log(`[daily-report] ${reason} ${day} · follower accounts ${followerSync.accounts} · page files ${r.pages.files.length} · history rows ${r.history.rows}`);
-  } catch (e) {
-    console.warn("[daily-report]", e.message);
-  }
-}
-function dailyReportTick() {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Ho_Chi_Minh", hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(now);
-  const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
-  const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
-  const day = vnDay(now);
-  if (hour === 23 && minute === 59 && lastDailyExportDay !== day) {
-    runEndOfDayExport(day, "23:59 VN");
-  }
-}
-setTimeout(async () => {
-  try {
-    const r = await exportPostingHistoryDaily({ day: yesterdayVn() });
-    console.log(`[daily-report] startup history catch-up ${r.day} · ${r.rows} rows`);
-  } catch (e) {
-    console.warn("[daily-report] startup catch-up", e.message);
-  }
-}, 20000);
-setInterval(dailyReportTick, 30000);
+// Đối soát lịch không tự chạy. Nút và POST /api/posting/reconcile-scheduled vẫn gọi tay.
+// Báo cáo 23:59 và file lịch sử lúc mở app không tự chạy. Nút xuất báo cáo vẫn gọi tay.
 
 function openBrowser(url) {
   try {

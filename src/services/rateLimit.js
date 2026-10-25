@@ -7,6 +7,8 @@
  */
 
 import { config, graphBase } from "../config.js";
+import { getDb } from "../db/index.js";
+import { decryptToken } from "./crypto.js";
 
 let lastUsage = {
   call_count: 0,
@@ -20,15 +22,31 @@ let lastUsage = {
 };
 
 /**
- * Process-wide Graph pause — Meta best practice 2024–2026:
- * "When the limit has been reached, stop making API calls. Continuing to make
- * calls will continue to increase your call count."
- * Without a global gate, multi-page list workers thundering-herd after each
- * local wait and re-trigger code #4 forever (user log: Hết limit ×6 same second).
+ * Per-Meta-App Graph pause — Meta best practice 2024–2026:
+ * "When the limit has been reached, stop making API calls."
+ * IMPORTANT: pause is keyed by meta_app_key (App 1 / App 2…).
+ * Trước đây 1 GLOBAL pause → App 2 bị dừng dù chỉ App 1 bị #4.
  */
-let globalGraphPauseUntil = 0;
-let globalPauseHits = 0;
-let globalPauseCode = null;
+const DEFAULT_APP_KEY = "_default";
+/** @type {Map<string, { until: number, hits: number, code: number|null, lastNotifyAt: number }>} */
+const appGraphPauses = new Map();
+
+function normalizeAppKey(metaAppKey) {
+  const k = String(metaAppKey ?? "").trim();
+  return k || DEFAULT_APP_KEY;
+}
+
+function getAppPauseState(metaAppKey) {
+  const key = normalizeAppKey(metaAppKey);
+  let st = appGraphPauses.get(key);
+  if (!st) {
+    st = { until: 0, hits: 0, code: null, lastNotifyAt: 0 };
+    appGraphPauses.set(key, st);
+  }
+  return st;
+}
+
+/** @deprecated kept for older call sites — maps to default app bucket */
 let lastGlobalNotifyAt = 0;
 
 /** Max concurrent LIST page jobs (pagination is the #4 killer). Delete uses separate parallel. */
@@ -87,57 +105,173 @@ function applyAppUsage(u, source, raw) {
   };
 }
 
-/** Pull estimated_time_to_regain_access (minutes) from BUC header objects. */
-function extractRegainMinutes(parsed) {
-  if (!parsed || typeof parsed !== "object") return null;
-  // Shape: { "id": [ { estimated_time_to_regain_access, call_count, ... } ] }
-  let best = null;
-  for (const v of Object.values(parsed)) {
-    const arr = Array.isArray(v) ? v : [v];
-    for (const row of arr) {
-      if (!row || typeof row !== "object") continue;
-      const m = Number(row.estimated_time_to_regain_access);
-      if (Number.isFinite(m) && m > 0) {
-        best = best == null ? m : Math.max(best, m);
-      }
-      const cc = Number(row.call_count);
-      if (Number.isFinite(cc) && cc > (lastUsage.call_count || 0) && !lastUsage.raw) {
-        // soft fill if no x-app-usage
-        lastUsage.call_count = Math.max(lastUsage.call_count || 0, cc);
-        lastUsage.total_time = Math.max(
-          lastUsage.total_time || 0,
-          Number(row.total_time) || 0
-        );
-        lastUsage.total_cputime = Math.max(
-          lastUsage.total_cputime || 0,
-          Number(row.total_cputime) || 0
-        );
-      }
+/**
+ * Meta: hạn mức là max(call_count, total_time, total_cputime), không chỉ call_count.
+ * x-app-usage là object phẳng. x-business-use-case-usage là { id: [ row, ... ] }.
+ * Page token thường chỉ có header BUC. Cả hai đến từ cùng một response, không gọi thêm.
+ */
+export function peakFromUsageObjects(...sources) {
+  let call = null;
+  let time = null;
+  let cpu = null;
+  let regain = null;
+  const visit = (row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return;
+    const c = Number(row.call_count);
+    const t = Number(row.total_time);
+    const cpuN = Number(row.total_cputime);
+    const g = Number(row.estimated_time_to_regain_access);
+    if (Number.isFinite(c)) call = call == null ? c : Math.max(call, c);
+    if (Number.isFinite(t)) time = time == null ? t : Math.max(time, t);
+    if (Number.isFinite(cpuN)) cpu = cpu == null ? cpuN : Math.max(cpu, cpuN);
+    if (Number.isFinite(g) && g > 0) regain = regain == null ? g : Math.max(regain, g);
+  };
+  const walk = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
     }
-  }
-  return best;
+    if (
+      node.call_count != null ||
+      node.total_time != null ||
+      node.total_cputime != null ||
+      node.estimated_time_to_regain_access != null
+    ) {
+      visit(node);
+    }
+    for (const v of Object.values(node)) {
+      if (v && typeof v === "object") walk(v);
+    }
+  };
+  for (const src of sources) walk(src);
+  const parts = [call, time, cpu].filter((n) => Number.isFinite(n));
+  return {
+    peak: parts.length ? Math.max(...parts) : null,
+    call_count: call,
+    total_time: time || 0,
+    total_cputime: cpu || 0,
+    regain_min: regain,
+  };
 }
 
-/** Call after each Graph response */
-export function noteGraphResponse(res) {
+/** Pull estimated_time_to_regain_access (minutes) from BUC header objects. */
+function extractRegainMinutes(parsed) {
+  return peakFromUsageObjects(parsed).regain_min;
+}
+
+const tokenToAccount = new Map();
+let tokenIndexReady = false;
+
+function rememberTokenAccount(token, accountId) {
+  const t = String(token || "");
+  const id = Number(accountId);
+  if (!t || !id) return;
+  tokenToAccount.set(t, id);
+}
+
+/** Local only. Maps saved user/page tokens to the account that owns them. */
+function ensureTokenIndex() {
+  if (tokenIndexReady) return;
+  tokenIndexReady = true;
+  try {
+    const db = getDb();
+    const accounts = db
+      .prepare(
+        `SELECT id, user_token_enc FROM fb_accounts
+         WHERE status != 'deleted' AND user_token_enc IS NOT NULL AND TRIM(user_token_enc) != ''`
+      )
+      .all();
+    for (const row of accounts) {
+      try {
+        rememberTokenAccount(decryptToken(row.user_token_enc), row.id);
+      } catch {
+        /* token hỏng thì bỏ qua */
+      }
+    }
+    const pages = db
+      .prepare(
+        `SELECT account_id, page_token_enc FROM fb_pages
+         WHERE page_token_enc IS NOT NULL AND TRIM(page_token_enc) != ''`
+      )
+      .all();
+    for (const row of pages) {
+      try {
+        rememberTokenAccount(decryptToken(row.page_token_enc), row.account_id);
+      } catch {
+        /* token hỏng thì bỏ qua */
+      }
+    }
+  } catch {
+    tokenIndexReady = false;
+  }
+}
+
+const tokenMisses = new Set();
+
+function accountIdForToken(token) {
+  const t = String(token || "");
+  if (!t) return null;
+  ensureTokenIndex();
+  const hit = tokenToAccount.get(t);
+  if (hit) return hit;
+  if (tokenMisses.has(t)) return null;
+  tokenMisses.add(t);
+  tokenIndexReady = false;
+  ensureTokenIndex();
+  return tokenToAccount.get(t) || null;
+}
+
+function rememberAccountUsage(accountId, appUsage) {
+  const id = Number(accountId);
+  const call = Number(appUsage?.call_count);
+  if (!id || !Number.isFinite(call)) return;
+  const prev = usageByAccount.get(id) || {};
+  usageByAccount.set(id, {
+    ...prev,
+    call_count: call,
+    total_time: Number(appUsage.total_time) || 0,
+    total_cputime: Number(appUsage.total_cputime) || 0,
+    regain_min: Number(appUsage.regain_min) || prev.regain_min || 0,
+    updated_at: new Date().toISOString(),
+    error: null,
+  });
+}
+
+/** Call after each Graph response. accessToken attaches the % to that token. No extra request. */
+export function noteGraphResponse(res, accessToken) {
   const appRaw =
     res.headers.get("x-app-usage") || res.headers.get("X-App-Usage");
   const appUsage = parseUsageHeader(appRaw);
-  if (appUsage) {
-    applyAppUsage(appUsage, "x-app-usage", appUsage);
-  }
-
   const bucRaw =
     res.headers.get("x-business-use-case-usage") ||
     res.headers.get("X-Business-Use-Case-Usage");
-  if (bucRaw) {
-    const parsed = parseUsageHeader(bucRaw);
-    const regain = extractRegainMinutes(parsed);
+  const bucParsed = bucRaw ? parseUsageHeader(bucRaw) : null;
+  // Một response: lấy max của app header và BUC. call_count = 0 vẫn có thể bị #4 vì CPU/time.
+  const combined = peakFromUsageObjects(appUsage, bucParsed);
+  if (appUsage) applyAppUsage(appUsage, "x-app-usage", appUsage);
+  if (combined.peak != null) {
     lastUsage = {
       ...lastUsage,
-      page_usage_raw: parsed,
-      estimated_time_to_regain_access_min:
-        regain != null ? regain : lastUsage.estimated_time_to_regain_access_min,
+      call_count: combined.call_count ?? lastUsage.call_count,
+      total_time: combined.total_time || 0,
+      total_cputime: combined.total_cputime || 0,
+      page_usage_raw: bucParsed || lastUsage.page_usage_raw,
+      estimated_time_to_regain_access_min: combined.regain_min,
+      updated_at: new Date().toISOString(),
+      source: appUsage && bucParsed ? "x-app-usage+buc" : appUsage ? "x-app-usage" : "x-business-use-case-usage",
+      raw: appUsage || bucParsed,
+    };
+    rememberAccountUsage(accountIdForToken(accessToken), {
+      call_count: combined.peak,
+      total_time: combined.total_time,
+      total_cputime: combined.total_cputime,
+      regain_min: combined.regain_min || 0,
+    });
+  } else if (bucParsed) {
+    lastUsage = {
+      ...lastUsage,
+      page_usage_raw: bucParsed,
       updated_at: new Date().toISOString(),
     };
   }
@@ -145,34 +279,47 @@ export function noteGraphResponse(res) {
   return lastUsage;
 }
 
-export function getGlobalGraphPauseRemainingMs() {
-  return Math.max(0, globalGraphPauseUntil - Date.now());
-}
-
-export function isGlobalGraphPaused() {
-  return Date.now() < globalGraphPauseUntil;
+export function getGlobalGraphPauseRemainingMs(metaAppKey) {
+  const st = getAppPauseState(metaAppKey);
+  return Math.max(0, st.until - Date.now());
 }
 
 /**
- * Extend process-wide pause so EVERY list/delete worker stops (Meta: stop all calls).
- * Returns wait_ms until global resume (+ small jitter baked in once).
+ * @param {string} [metaAppKey] App đang gọi Graph. Bắt buộc để không chặn App khác.
+ *   Không truyền → chỉ check bucket default (không còn «pause mọi App»).
+ */
+export function isGlobalGraphPaused(metaAppKey) {
+  const st = getAppPauseState(metaAppKey);
+  return Date.now() < st.until;
+}
+
+/** True nếu BẤT KỲ App nào đang pause (chỉ dùng cho UI tổng). */
+export function isAnyAppGraphPaused() {
+  const now = Date.now();
+  for (const st of appGraphPauses.values()) {
+    if (now < st.until) return true;
+  }
+  return false;
+}
+
+/**
+ * Extend pause for ONE Meta App only (workers của App khác vẫn chạy).
  */
 export function noteGlobalRateLimit(errOrBody, opts = {}) {
-  globalPauseHits = Math.min(20, globalPauseHits + 1);
+  const appKey = normalizeAppKey(opts.metaAppKey ?? opts.meta_app_key);
+  const st = getAppPauseState(appKey);
+  st.hits = Math.min(20, st.hits + 1);
   const code = Number(
     extractGraphError(errOrBody)?.code ?? errOrBody?.code ?? NaN
   );
-  globalPauseCode = Number.isFinite(code) ? code : globalPauseCode;
+  if (Number.isFinite(code)) st.code = code;
 
   const regainMin = Number(lastUsage.estimated_time_to_regain_access_min);
   let waitMs;
   if (Number.isFinite(regainMin) && regainMin > 0) {
-    // Meta BUC: minutes until regain — community recommends trusting this
     waitMs = Math.min(15 * 60_000, Math.max(30_000, regainMin * 60_000));
   } else {
-    // Code 4 app limit: short 40–120s waits cause thrash if many workers resume together.
-    // Consecutive hits → longer cool-down (rolling hour window for Platform limits).
-    const attempt = Math.max(0, globalPauseHits - 1);
+    const attempt = Math.max(0, st.hits - 1);
     const isApp4 = code === 4;
     waitMs = estimateRateLimitWaitMs(errOrBody, {
       attempt,
@@ -192,55 +339,62 @@ export function noteGlobalRateLimit(errOrBody, opts = {}) {
         : 180_000,
     });
   }
-  // Single shared deadline — later hits only extend, never restart N independent timers
   const until = Date.now() + waitMs;
-  if (until > globalGraphPauseUntil) {
-    // tiny jitter only when setting new deadline (avoid thundering herd on resume)
-    globalGraphPauseUntil = until + Math.floor(Math.random() * 3_000);
+  if (until > st.until) {
+    st.until = until + Math.floor(Math.random() * 3_000);
   }
+  const left = getGlobalGraphPauseRemainingMs(appKey);
   return {
-    wait_ms: getGlobalGraphPauseRemainingMs(),
-    remaining_sec: Math.ceil(getGlobalGraphPauseRemainingMs() / 1000),
-    hits: globalPauseHits,
-    code: globalPauseCode,
-    resume_at: new Date(globalGraphPauseUntil).toISOString(),
+    wait_ms: left,
+    remaining_sec: Math.ceil(left / 1000),
+    hits: st.hits,
+    code: st.code,
+    meta_app_key: appKey,
+    resume_at: new Date(st.until).toISOString(),
   };
 }
 
 /**
- * Wait until global Graph pause ends. All workers share one countdown.
+ * Wait until pause for THIS Meta App ends (không chờ App khác).
  */
 export async function waitGlobalGraphPause(opts = {}) {
-  if (!isGlobalGraphPaused()) {
-    // decay hit counter slowly on healthy path
-    if (globalPauseHits > 0 && Date.now() - lastGlobalNotifyAt > 60_000) {
-      globalPauseHits = Math.max(0, globalPauseHits - 1);
+  const appKey = normalizeAppKey(opts.metaAppKey ?? opts.meta_app_key);
+  const st = getAppPauseState(appKey);
+  if (!isGlobalGraphPaused(appKey)) {
+    if (st.hits > 0 && Date.now() - (st.lastNotifyAt || 0) > 60_000) {
+      st.hits = Math.max(0, st.hits - 1);
     }
-    return { waited_ms: 0, stopped: false, was_paused: false };
+    return { waited_ms: 0, stopped: false, was_paused: false, meta_app_key: appKey };
   }
   const started = Date.now();
-  while (Date.now() < globalGraphPauseUntil) {
+  while (Date.now() < st.until) {
     if (opts.shouldStop?.()) {
       return {
         waited_ms: Date.now() - started,
         stopped: true,
         was_paused: true,
+        meta_app_key: appKey,
       };
     }
-    const left = globalGraphPauseUntil - Date.now();
+    const left = st.until - Date.now();
     const now = Date.now();
-    if (opts.onTick && (!opts.tickMinMs || now - lastGlobalNotifyAt >= (opts.tickMinMs || 2000))) {
+    if (
+      opts.onTick &&
+      (!opts.tickMinMs || now - (st.lastNotifyAt || 0) >= (opts.tickMinMs || 2000))
+    ) {
+      st.lastNotifyAt = now;
       lastGlobalNotifyAt = now;
       try {
         opts.onTick({
           wait_ms: left,
           remaining_ms: left,
           remaining_sec: Math.ceil(left / 1000),
-          hits: globalPauseHits,
-          code: globalPauseCode,
+          hits: st.hits,
+          code: st.code,
+          meta_app_key: appKey,
           message:
             opts.message ||
-            `⚠ FB limit (#${globalPauseCode || "?"}) — GLOBAL pause, còn ${Math.ceil(left / 1000)}s (lần ${globalPauseHits})`,
+            `⚠ FB limit (#${st.code || "?"}) — tạm dừng App «${appKey}», còn ${Math.ceil(left / 1000)}s (lần ${st.hits})`,
         });
       } catch {
         /* ignore */
@@ -250,7 +404,6 @@ export async function waitGlobalGraphPause(opts = {}) {
       setTimeout(r, Math.min(1000, Math.max(50, left)))
     );
   }
-  // Stagger resume: each waiter sleeps 0–1.5s so pages don't spike together
   const stagger = Math.floor(Math.random() * 1500);
   if (stagger > 0 && !opts.shouldStop?.()) {
     await new Promise((r) => setTimeout(r, stagger));
@@ -259,6 +412,7 @@ export async function waitGlobalGraphPause(opts = {}) {
     waited_ms: Date.now() - started,
     stopped: false,
     was_paused: true,
+    meta_app_key: appKey,
   };
 }
 
@@ -309,38 +463,127 @@ export function releaseListSlot() {
 }
 
 /** Soft success: reduce consecutive limit pressure after a good call streak. */
-export function noteGlobalGraphSuccess() {
-  if (globalPauseHits > 0 && !isGlobalGraphPaused()) {
-    globalPauseHits = Math.max(0, globalPauseHits - 1);
+export function noteGlobalGraphSuccess(metaAppKey) {
+  const st = getAppPauseState(metaAppKey);
+  if (st.hits > 0 && !isGlobalGraphPaused(metaAppKey)) {
+    st.hits = Math.max(0, st.hits - 1);
   }
   lastUsage.estimated_time_to_regain_access_min = null;
 }
 
-/**
- * Force-refresh app-level usage with App Access Token (matches developer dashboard %).
- */
+/** Không gọi Facebook. Số chỉ đến từ lệnh đăng thật hoặc nút Đo limit. */
 export async function refreshAppUsageFromMeta() {
-  const { appId, appSecret, graphVersion } = config.facebook;
-  if (!appId || !appSecret) {
-    return { ...lastUsage, error: "Missing FB_APP_ID/SECRET" };
-  }
-  const appToken = `${appId}|${appSecret}`;
-  const url = new URL(`${graphBase()}/${appId}`);
-  url.searchParams.set("fields", "id,name");
-  url.searchParams.set("access_token", appToken);
-
-  try {
-    const res = await fetch(url);
-    noteGraphResponse(res);
-    // Prefer explicit parse again
-    const appRaw = res.headers.get("x-app-usage");
-    const u = parseUsageHeader(appRaw);
-    if (u) applyAppUsage(u, "app_token_poll", u);
-    await res.json().catch(() => ({}));
-  } catch (e) {
-    return { ...lastUsage, error: e.message };
-  }
   return getLastUsage();
+}
+
+/** Một dòng chip = một token. % chỉ lấy từ header của lệnh Graph thật, không gọi thêm. */
+const usageByAccount = new Map();
+
+function listLimitTokens() {
+  try {
+    return getDb()
+      .prepare(
+        `SELECT id, name FROM fb_accounts
+         WHERE status != 'deleted'
+         ORDER BY id`
+      )
+      .all();
+  } catch {
+    return [];
+  }
+}
+
+function publicTokenUsage(row, snap) {
+  return {
+    key: `acc:${row.id}`,
+    name: String(row.name || "").trim() || `Token ${row.id}`,
+    call_count: snap?.call_count ?? null,
+    total_time: snap?.total_time || 0,
+    total_cputime: snap?.total_cputime || 0,
+    regain_min: snap?.regain_min || 0,
+    updated_at: snap?.updated_at || null,
+    error: snap?.error || null,
+  };
+}
+
+export async function refreshAllAppUsage() {
+  return getAppUsageBoard().apps;
+}
+
+export function getAppUsageBoard() {
+  const tokens = listLimitTokens();
+  return {
+    apps: tokens.map((row) => usageByAccount.get(row.id) || publicTokenUsage(row, null)),
+    usage_warning: usageWarning(),
+    polled_at: [...usageByAccount.values()].reduce((best, row) => {
+      if (!row?.updated_at) return best;
+      return !best || row.updated_at > best ? row.updated_at : best;
+    }, null),
+  };
+}
+
+let measureBusy = false;
+
+async function readOneTokenUsage(row) {
+  let token = "";
+  try {
+    token = decryptToken(row.user_token_enc) || "";
+  } catch {
+    return { error: "decrypt" };
+  }
+  if (!token) return { error: "no_token" };
+  const url = new URL(`${graphBase()}/me`);
+  url.searchParams.set("fields", "id");
+  url.searchParams.set("access_token", token);
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    const appUsage = parseUsageHeader(res.headers.get("x-app-usage"));
+    const buc = parseUsageHeader(
+      res.headers.get("x-business-use-case-usage") ||
+        res.headers.get("X-Business-Use-Case-Usage")
+    );
+    await res.json().catch(() => ({}));
+    const peak = peakFromUsageObjects(appUsage, buc);
+    if (peak.peak == null) return { error: "no_header" };
+    return {
+      call_count: peak.peak,
+      total_time: peak.total_time || 0,
+      total_cputime: peak.total_cputime || 0,
+      regain_min: peak.regain_min || 0,
+      updated_at: new Date().toISOString(),
+      error: null,
+    };
+  } catch {
+    return { error: "poll_fail" };
+  }
+}
+
+/** Một lần bấm = một GET /me cho mỗi token. Không có timer. */
+export async function measureTokenUsageNow() {
+  if (measureBusy) {
+    const err = new Error("Đang đo. Đợi lần này xong.");
+    err.status = 409;
+    throw err;
+  }
+  measureBusy = true;
+  try {
+    const tokens = getDb()
+      .prepare(
+        `SELECT id, name, user_token_enc FROM fb_accounts
+         WHERE status != 'deleted'
+           AND user_token_enc IS NOT NULL
+           AND TRIM(user_token_enc) != ''
+         ORDER BY id`
+      )
+      .all();
+    for (const row of tokens) {
+      const snap = await readOneTokenUsage(row);
+      usageByAccount.set(row.id, publicTokenUsage(row, snap));
+    }
+    return getAppUsageBoard();
+  } finally {
+    measureBusy = false;
+  }
 }
 
 /**
@@ -355,10 +598,10 @@ export function suggestedDelayMs(base = 200) {
 }
 
 export function usageWarning() {
-  const c = lastUsage.call_count || 0;
-  if (c >= 80) return "App usage rất cao — dừng enrich, chờ ~1h.";
-  if (c >= 50) return "App usage >50% — chỉ enrich page cần thiết.";
-  if (c >= 20) return "App usage >20% — tránh Sync details hàng loạt.";
+  const c = getUsagePeakPercent();
+  if (c >= 80) return "Hạn mức API rất cao — dừng enrich, chờ ~1h.";
+  if (c >= 50) return "Hạn mức API >50% — chỉ enrich page cần thiết.";
+  if (c >= 20) return "Hạn mức API >20% — tránh Sync details hàng loạt.";
   return null;
 }
 
@@ -444,8 +687,60 @@ export function extractGraphError(errOrBody) {
   return null;
 }
 
+/** Facebook chặn tần suất đăng/comment của tài khoản. Gửi lại chỉ làm khóa lâu hơn. */
+export function isCommunitySpamBlock(errOrBody) {
+  if (!errOrBody) return false;
+  const fb = extractGraphError(errOrBody) || {};
+  const sub = Number(
+    fb.error_subcode ?? errOrBody.error_subcode ?? errOrBody.subcode ?? NaN
+  );
+  const msg = String(
+    fb.error_user_msg ||
+      fb.message ||
+      errOrBody.error ||
+      errOrBody.message ||
+      (typeof errOrBody === "string" ? errOrBody : "")
+  );
+  if (sub === 1390008) return true;
+  return /bảo vệ cộng đồng khỏi spam|protect the community from spam|limit how often you can post/i.test(
+    msg
+  );
+}
+
+function graphErrorText(errOrBody) {
+  const fb = extractGraphError(errOrBody) || {};
+  return String(
+    fb.error_user_msg ||
+      fb.message ||
+      errOrBody?.error_user_msg ||
+      errOrBody?.message ||
+      errOrBody?.error ||
+      (typeof errOrBody === "string" ? errOrBody : "")
+  );
+}
+
+/** #368 và câu Facebook cấm tiếp. Gửi lại làm khóa lâu hơn. */
+export function isSpamBlockError(errOrBody) {
+  if (!errOrBody) return false;
+  if (isCommunitySpamBlock(errOrBody)) return true;
+  const fb = extractGraphError(errOrBody) || errOrBody;
+  const code = Number(fb?.code ?? errOrBody.code ?? errOrBody.error_code ?? NaN);
+  if (code === 368) return true;
+  return /temporarily blocked|deemed abusive|abusive.*disallowed/i.test(graphErrorText(errOrBody));
+}
+
+/** Thiếu quyền hoặc token chết. Không retry. */
+export function isPermissionError(errOrBody) {
+  if (!errOrBody) return false;
+  const fb = extractGraphError(errOrBody) || errOrBody;
+  const code = Number(fb?.code ?? errOrBody.code ?? errOrBody.error_code ?? NaN);
+  return code === 200 || code === 10 || code === 190;
+}
+
 export function isGraphRateLimitError(errOrBody) {
   if (!errOrBody) return false;
+  // 368 / 1390008 không phải limit tạm. Retry kéo dài khóa.
+  if (isSpamBlockError(errOrBody)) return false;
 
   const fb = extractGraphError(errOrBody) || errOrBody;
 
@@ -462,7 +757,7 @@ export function isGraphRateLimitError(errOrBody) {
   if (Number.isFinite(subcode) && RATE_LIMIT_SUBCODES.has(subcode)) return true;
 
   if (
-    /rate limit|request limit|too many calls|too many requests|user request limit|application request limit|page request limit|api calls.*exceed|reduce the amount|temporarily blocked|try again later|throttl|spam|slow down/i.test(
+    /rate limit|request limit|too many calls|too many requests|user request limit|application request limit|page request limit|api calls.*exceed|reduce the amount|try again later|throttl|spam|slow down/i.test(
       msg
     )
   ) {
@@ -489,6 +784,15 @@ export function isNetworkTransientError(errOrBody) {
   const msg = String(
     errOrBody.message || errOrBody.error || errOrBody.cause?.message || ""
   ).toLowerCase();
+  const http = Number(errOrBody.status ?? errOrBody.http_status ?? NaN);
+  // 413 = body quá lớn — retry cùng form POST vô ích (cần resumable upload)
+  if (
+    code === "PAYLOAD_TOO_LARGE" ||
+    http === 413 ||
+    /\bhttp\s*413\b|payload too large|request entity too large/i.test(msg)
+  ) {
+    return false;
+  }
   if (
     [
       "ECONNRESET",
@@ -526,6 +830,7 @@ export function isNetworkTransientError(errOrBody) {
  * Includes rate limits + Meta temp errors + network/fetch failures.
  */
 export function isTransientGraphError(errOrBody, httpCode) {
+  if (isSpamBlockError(errOrBody) || isPermissionError(errOrBody)) return false;
   if (isGraphRateLimitError(errOrBody)) return true;
   if (isNetworkTransientError(errOrBody)) return true;
   const fb = extractGraphError(errOrBody) || errOrBody || {};
@@ -541,7 +846,7 @@ export function isTransientGraphError(errOrBody, httpCode) {
     return true;
   }
   if (
-    /unknown error|unexpected error|temporarily|try again|service unavailable|server error|please retry|something went wrong|an unexpected error|internal error|is not available right now|please wait/i.test(
+    /unknown error|unexpected error|temporarily(?! blocked)|try again|service unavailable|server error|please retry|something went wrong|an unexpected error|internal error|is not available right now|please wait/i.test(
       msg
     )
   ) {
@@ -615,6 +920,17 @@ export function classifyDeleteBatchItem(response) {
 
   if (isAlreadyGoneGraphError(err || body) || isAlreadyGoneGraphError({ message: String(body || ""), code: http })) {
     return { kind: "gone", error: err || body };
+  }
+  if (isSpamBlockError(err || body) || isPermissionError(err || body)) {
+    const errMsg = err?.message || graphErrorText(err || body) || `HTTP ${http || "?"}`;
+    return {
+      kind: "fail",
+      permanent: true,
+      spam: isSpamBlockError(err || body),
+      permission: isPermissionError(err || body),
+      error: err || body || { code: http, message: errMsg },
+      message: errMsg,
+    };
   }
   if (isTransientGraphError(err || body, http) || http === 429) {
     return {
@@ -733,6 +1049,7 @@ export async function waitWhileRateLimited(waitMs, opts = {}) {
 export async function withRateLimitRetry(fn, opts = {}) {
   const maxAttempts = Math.min(30, Math.max(1, Number(opts.maxAttempts) || 12));
   const onlyRateLimit = !!opts.onlyRateLimit;
+  const appKey = normalizeAppKey(opts.metaAppKey ?? opts.meta_app_key);
   let attempt = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -741,9 +1058,10 @@ export async function withRateLimitRetry(fn, opts = {}) {
       err.code = "STOPPED";
       throw err;
     }
-    // Meta: stop ALL traffic during limit — wait shared global pause first
-    if (isGlobalGraphPaused()) {
+    // Chỉ chờ pause của ĐÚNG Meta App này — App khác vẫn chạy
+    if (isGlobalGraphPaused(appKey)) {
       const g = await waitGlobalGraphPause({
+        metaAppKey: appKey,
         shouldStop: opts.shouldStop,
         tickMinMs: 2000,
         onTick: (tick) => {
@@ -753,22 +1071,26 @@ export async function withRateLimitRetry(fn, opts = {}) {
             max_attempts: maxAttempts,
             rate_limit: true,
             global: true,
+            meta_app_key: appKey,
             label: opts.label || "Graph API",
           });
-          opts.onRetry?.({ ...tick, global: true });
+          opts.onRetry?.({ ...tick, global: true, meta_app_key: appKey });
         },
       });
       if (g.stopped) {
-        const err = new Error("Đã dừng khi đang chờ GLOBAL rate limit");
+        const err = new Error(
+          `Đã dừng khi đang chờ rate limit App «${appKey}»`
+        );
         err.code = "STOPPED";
         throw err;
       }
     }
     try {
       const out = await fn();
-      noteGlobalGraphSuccess();
+      noteGlobalGraphSuccess(appKey);
       return out;
     } catch (e) {
+      if (isSpamBlockError(e) || isPermissionError(e)) throw e;
       const retryable = onlyRateLimit
         ? isGraphRateLimitError(e)
         : isTransientGraphError(e);
@@ -787,11 +1109,12 @@ export async function withRateLimitRetry(fn, opts = {}) {
       const isLimit = isGraphRateLimitError(e);
       let waitMs;
       let resumeAt;
+      let hits = 0;
       if (isLimit) {
-        // One global pause for the whole process (no N× independent countdowns)
-        const gInfo = noteGlobalRateLimit(e, { attempt });
+        const gInfo = noteGlobalRateLimit(e, { attempt, metaAppKey: appKey });
         waitMs = gInfo.wait_ms;
         resumeAt = gInfo.resume_at;
+        hits = gInfo.hits;
       } else {
         waitMs = estimateTransientWaitMs(e, { attempt });
         resumeAt = new Date(Date.now() + waitMs).toISOString();
@@ -806,16 +1129,18 @@ export async function withRateLimitRetry(fn, opts = {}) {
         code: e.code,
         rate_limit: isLimit,
         global: isLimit,
+        meta_app_key: appKey,
         network: isNetworkTransientError(e),
         label: opts.label || "Graph API",
         message: isLimit
-          ? `⚠ FB limit (${e.code ?? "?"}): GLOBAL pause ~${Math.ceil(waitMs / 1000)}s (hit #${globalPauseHits}) — dừng mọi page`
+          ? `⚠ FB limit (${e.code ?? "?"}): tạm dừng App «${appKey}» ~${Math.ceil(waitMs / 1000)}s (hit #${hits}) — App khác vẫn chạy`
           : `⚠ FB tạm lỗi / mạng: chờ ~${Math.ceil(waitMs / 1000)}s rồi thử lại (${attempt + 1}/${maxAttempts})`,
       };
       opts.onRateLimit?.(info);
       opts.onRetry?.(info);
       const w = isLimit
         ? await waitGlobalGraphPause({
+            metaAppKey: appKey,
             shouldStop: opts.shouldStop,
             tickMinMs: 2000,
             message: info.message,
@@ -825,7 +1150,7 @@ export async function withRateLimitRetry(fn, opts = {}) {
                 wait_ms: tick.wait_ms,
                 remaining_sec: tick.remaining_sec,
                 remaining_ms: tick.remaining_ms,
-                message: `⚠ FB limit — GLOBAL, còn ${tick.remaining_sec}s… (lần ${attempt + 1}/${maxAttempts})`,
+                message: `⚠ FB limit — App «${appKey}», còn ${tick.remaining_sec}s… (lần ${attempt + 1}/${maxAttempts})`,
                 ticking: true,
               };
               opts.onRateLimit?.(tickInfo);

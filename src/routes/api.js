@@ -24,13 +24,19 @@ import {
   listExportSheets,
   getWorkbookPath,
 } from "../services/export.js";
+import {
+  exportFollowersTrack,
+  getFollowTrackWorkbookPath,
+  listActiveAccountsWithPages,
+} from "../services/followerTrackExport.js";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import {
   getLastUsage,
   usageWarning,
-  refreshAppUsageFromMeta,
+  getAppUsageBoard,
+  measureTokenUsageNow,
 } from "../services/rateLimit.js";
 import { config } from "../config.js";
 import { isPackaged, getExeDir, getEnvPath, debugPaths } from "../paths.js";
@@ -48,6 +54,8 @@ import {
   getAntiSpamStats,
   getRecommendations,
   listRecentBlocks,
+  listOpenPageCircuits,
+  closePageCircuit,
   ensureAntiSpamTables,
   clearMediaHashes,
   inspectMediaFolder,
@@ -1313,6 +1321,17 @@ router.get("/anti-spam/events", (req, res) => {
   res.json({ events: listRecentBlocks(Number(req.query.limit) || 40) });
 });
 
+router.get("/anti-spam/circuits", (_req, res) => {
+  res.json({ circuits: listOpenPageCircuits() });
+});
+
+router.post("/anti-spam/circuits/close", (req, res) => {
+  const pageRowId = Number(req.body?.page_row_id);
+  const action = String(req.body?.action || "");
+  const result = closePageCircuit(pageRowId, action);
+  res.json({ ok: true, ...result, circuits: listOpenPageCircuits() });
+});
+
 /**
  * POST /api/anti-spam/clear-media-hashes
  * Body: { folder?: string, all?: boolean }
@@ -1565,16 +1584,25 @@ router.post("/accounts/:id/sync", async (req, res) => {
   }
 });
 
-/** DELETE /api/accounts/:id */
+/** DELETE /api/accounts/:id — ?delete_media_folders=1 hoặc body.delete_media_folders */
 router.delete("/accounts/:id", (req, res) => {
-  const id = Number(req.params.id);
-  deleteAccount(id);
-  res.json({ ok: true, deleted: id });
+  try {
+    const id = Number(req.params.id);
+    const delete_media_folders = !!(
+      req.body?.delete_media_folders ||
+      req.query?.delete_media_folders === "1" ||
+      req.query?.delete_media_folders === "true"
+    );
+    const r = deleteAccount(id, { delete_media_folders });
+    res.json({ ok: true, deleted: id, ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 /**
  * POST /api/accounts/bulk-delete
- * Body: { ids: number[] } — tick từng account hoặc tất cả
+ * Body: { ids: number[], delete_media_folders?: boolean }
  */
 router.post("/accounts/bulk-delete", (req, res) => {
   try {
@@ -1582,7 +1610,11 @@ router.post("/accounts/bulk-delete", (req, res) => {
     if (!ids.length) {
       return res.status(400).json({ ok: false, error: "Chọn ít nhất 1 tài khoản (ids)" });
     }
-    const r = deleteAccounts(ids);
+    const delete_media_folders = !!(
+      req.body?.delete_media_folders ||
+      req.body?.deleteMediaFolders
+    );
+    const r = deleteAccounts(ids, { delete_media_folders });
     res.json({ ok: true, ...r });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -1718,10 +1750,8 @@ router.post("/pages/:id/enrich", async (req, res) => {
   }
 });
 
-/** Summary stats for dashboard */
-router.get("/stats", async (_req, res) => {
-  // Refresh app-level % (dashboard) via App Access Token — page tokens don't send x-app-usage
-  await refreshAppUsageFromMeta();
+/** Summary stats for dashboard. Local counts only — không gọi Facebook để đọc %. */
+router.get("/stats", (_req, res) => {
   const accounts = listAccounts();
   const totalPages = countPages({});
   const pages = listPages({ limit: 5000 });
@@ -1736,13 +1766,28 @@ router.get("/stats", async (_req, res) => {
   });
 });
 
-/** GET /api/usage — force poll Meta app usage % */
-router.get("/usage", async (_req, res) => {
-  const usage = await refreshAppUsageFromMeta();
+/** GET /api/usage/board — tên token và số đã đo lúc bấm. Không gọi Facebook. */
+router.get("/usage/board", (_req, res) => {
+  res.json(getAppUsageBoard());
+});
+
+/** POST /api/usage/measure — bấm tay. Một GET /me cho mỗi token, rồi dừng. */
+router.post("/usage/measure", async (_req, res) => {
+  try {
+    const board = await measureTokenUsageNow();
+    res.json(board);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || "Không đo được" });
+  }
+});
+
+/** GET /api/usage — không gọi Facebook. Số cũ từ lần bấm hoặc từ lệnh đăng thật. */
+router.get("/usage", (_req, res) => {
   res.json({
-    app_usage: usage,
+    app_usage: getLastUsage(),
     usage_warning: usageWarning(),
-    note: "call_count ≈ % limit app trên Meta dashboard (rolling window)",
+    board: getAppUsageBoard(),
+    note: "Không tự đo. Bấm ở tab Limit token.",
   });
 });
 
@@ -1821,6 +1866,53 @@ router.get("/export/sheets", async (_req, res) => {
 });
 
 /**
+ * GET /api/export/followers-track/accounts — list via/token để chọn xuất
+ */
+router.get("/export/followers-track/accounts", (_req, res) => {
+  try {
+    res.json({ ok: true, accounts: listActiveAccountsWithPages() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * POST /api/export/followers-track
+ * Body: { scope: "all"|"group"|"pages"|"account", page_group_id?, account_id?, page_row_ids?, refresh? }
+ * Enrich follow → ghi đè cột ngày VN hôm nay vào follow-theo-doi.xlsx
+ * Sheet: Tất cả + nhóm page + Via {tên token/via}
+ */
+router.post("/export/followers-track", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await exportFollowersTrack({
+      scope: body.scope || "all",
+      page_group_id: body.page_group_id || body.pageGroupId || null,
+      account_id: body.account_id || body.accountId || null,
+      account_ids: body.account_ids || body.accountIds || [],
+      page_row_ids: body.page_row_ids || body.pageRowIds || [],
+      refresh: body.refresh !== false,
+      delayMs: body.delay_ms != null ? Number(body.delay_ms) : 120,
+    });
+    res.json(result);
+  } catch (e) {
+    console.error("[followers-track]", e);
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/** GET /api/export/followers-track/file — tải follow-theo-doi.xlsx */
+router.get("/export/followers-track/file", (req, res) => {
+  const file = getFollowTrackWorkbookPath();
+  if (!fs.existsSync(file)) {
+    return res.status(404).json({
+      error: "Chưa có file. Bấm «Cập nhật + xuất follow» trước.",
+    });
+  }
+  res.download(file, "follow-theo-doi.xlsx");
+});
+
+/**
  * GET /api/export/csv — one-shot CSV (single snapshot; no multi-sheet)
  */
 router.get("/export/csv", (req, res) => {
@@ -1840,8 +1932,7 @@ router.get("/export/csv", (req, res) => {
     );
     res.setHeader("X-Export-Rows", String(rowCount));
     res.setHeader("X-Export-Date", exportDate);
-    // BOM for Excel UTF-8
-    res.send("\uFEFF" + csv);
+    res.send(Buffer.from("\uFEFF" + csv, "utf8"));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

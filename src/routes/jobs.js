@@ -14,9 +14,12 @@ import {
   pauseJob,
   resumeJob,
   retryFailedJob,
+  checkMediaFolderConflicts,
 } from "../services/jobRunner.js";
+import { startDeleteJob, findActiveDeleteForPostingJob } from "../services/deletePosts.js";
 import { reconcileJobWithFacebook } from "../services/jobFbCheck.js";
 import { scheduleBulk } from "../services/schedule.js";
+import { applyRunMedia } from "../services/tokenMedia.js";
 import { getReportPaths } from "../services/reportExport.js";
 import {
   loadRotationSettings,
@@ -206,13 +209,39 @@ router.post("/rotation/run", (req, res) => {
         plan,
       });
     }
+    {
+      const pageIds = [
+        ...new Set(slots.map((s) => Number(s.page_row_id)).filter((n) => n > 0)),
+      ];
+      const mediaGate = checkMediaFolderConflicts(pageIds, {
+        force: !!(body.force_shared_media || body.forceSharedMedia),
+      });
+      if (!mediaGate.ok) {
+        return res.status(409).json({
+          ok: false,
+          error: mediaGate.error,
+          media_conflicts: mediaGate.conflicts,
+          media_folders: mediaGate.folders,
+        });
+      }
+    }
     const job = startBulkScheduleJob({
       slots,
       title: `Rotation so-le · ${slots.length} slot · ${plan.summary?.groups || 1} nhóm`,
+      media_reuse: "once",
+      match_bundle: false,
+      comment_link_posts_per_run:
+        body.comment_link_posts_per_run ??
+        plan.settings?.comment_link_posts_per_run ??
+        0,
     });
+    if (job.comment_quota?.warn) {
+      console.warn("[jobs/rotation]", job.comment_quota.warn);
+    }
     res.json({
       ok: true,
       job,
+      comment_quota: job.comment_quota || null,
       plan_summary: plan.summary,
       preview_order: plan.preview_order,
       reports: getReportPaths(),
@@ -254,6 +283,7 @@ router.post("/rotation/run-now", (req, res) => {
       const plan = buildRunNowPlan(body);
       const planId = saveRunNowPlan(plan);
       const delivery = String(body.delivery || body.delivery_mode || "direct");
+      const { slots: _previewSlots, ...planView } = plan;
       return res.json({
         ok: true,
         dry_run: true,
@@ -264,7 +294,8 @@ router.post("/rotation/run-now", (req, res) => {
             : delivery === "immediate" || delivery === "now"
               ? "immediate"
               : "direct",
-        ...plan,
+        ...planView,
+        preview_total: (plan.slots || []).length,
       });
     }
     const planId = String(body.plan_id || "");
@@ -287,6 +318,26 @@ router.post("/rotation/run-now", (req, res) => {
           "Kế hoạch còn lỗi chặn; chưa thể chạy. Bấm «Xem lịch» xem chi tiết.",
         plan,
       });
+    }
+    {
+      const pageIds = [
+        ...new Set(
+          (plan.slots || [])
+            .map((s) => Number(s.page_row_id))
+            .filter((n) => n > 0)
+        ),
+      ];
+      const mediaGate = checkMediaFolderConflicts(pageIds, {
+        force: !!(body.force_shared_media || body.forceSharedMedia),
+      });
+      if (!mediaGate.ok) {
+        return res.status(409).json({
+          ok: false,
+          error: mediaGate.error,
+          media_conflicts: mediaGate.conflicts,
+          media_folders: mediaGate.folders,
+        });
+      }
     }
     if (!plan.slots.length) {
       return res.status(400).json({
@@ -361,12 +412,19 @@ router.post("/rotation/run-now", (req, res) => {
         title: `Chuẩn mới · Hẹn FB · ${slots.length} slot · ${plan.summary?.pages_planned || 0} page`,
         pages_expected: plan.summary?.pages_requested ?? null,
         pages_planned: plan.summary?.pages_planned ?? null,
-        media_reuse: body.media_reuse === "all_pages" ? "all_pages" : "once",
+        media_reuse: "once",
+        match_bundle: false,
+        parallel_apps: body.app_rotation_mode === "per_app" || !!body.parallel_apps,
+        comment_link_posts_per_run:
+          body.comment_link_posts_per_run ??
+          plan.settings?.comment_link_posts_per_run ??
+          0,
       });
       return res.json({
         ok: true,
         delivery: "fb_scheduled",
         job,
+        comment_quota: job.comment_quota || null,
         plan_summary: plan.summary,
         reports: getReportPaths(),
       });
@@ -394,7 +452,15 @@ router.post("/rotation/run-now", (req, res) => {
     }));
     const job = startJob({
       type: "rotation_run_now",
-      media_reuse: body.media_reuse === "all_pages" || plan.settings?.media_reuse === "all_pages" ? "all_pages" : "once",
+      media_reuse: "once",
+      match_bundle: false,
+      parallel_apps:
+        body.app_rotation_mode === "per_app" ||
+        plan.settings?.app_rotation_mode === "per_app",
+      comment_link_posts_per_run:
+        body.comment_link_posts_per_run ??
+        plan.settings?.comment_link_posts_per_run ??
+        0,
       title:
         `Đăng trực tiếp local · ${plan.summary.posts_per_page_per_day} bài/page · ${plan.summary.pages_planned || plan.summary.accounts} page · ${plan.summary.accounts} admin` +
         (continuous ? " · CHẠY LIÊN TỤC" : "") +
@@ -415,6 +481,10 @@ router.post("/rotation/run-now", (req, res) => {
             media_pattern: body.media_pattern || plan.settings?.media_pattern,
             post_type: body.post_type || plan.settings?.post_type,
             use_caption: body.use_caption !== false && plan.settings?.use_caption !== false,
+            comment_link_posts_per_run:
+              body.comment_link_posts_per_run ??
+              plan.settings?.comment_link_posts_per_run ??
+              0,
             app_rotation_mode: body.app_rotation_mode || plan.settings?.app_rotation_mode,
             same_page_gap_hours_min: body.same_page_gap_hours_min ?? plan.settings?.same_page_gap_hours_min,
             same_page_gap_hours_max: body.same_page_gap_hours_max ?? plan.settings?.same_page_gap_hours_max,
@@ -452,6 +522,14 @@ router.post("/bulk-post", (req, res) => {
       ignore_quota: !!req.body?.ignore_quota,
       ignore_interval: !!req.body?.ignore_interval,
       title: req.body?.title,
+      match_bundle: !!req.body?.match_bundle,
+      parallel_apps: req.body?.app_rotation_mode === "per_app" || !!req.body?.parallel_apps,
+      media_reuse: req.body?.media_reuse === "all_pages" ? "all_pages" : "once",
+      count_per_page: req.body?.count_per_page || 1,
+      post_type: req.body?.post_type || "video",
+      use_caption: req.body?.use_caption !== false,
+      comment_on: req.body?.comment_on === true ? true : req.body?.comment_on === false ? false : undefined,
+      account_group_ids: req.body?.account_group_ids,
     });
     res.json({ ok: true, job, reports: getReportPaths() });
   } catch (e) {
@@ -480,6 +558,18 @@ router.post("/bulk-schedule", async (req, res) => {
       return res.status(400).json({
         ok: false,
         error: "Chưa tick page — không tạo job (tránh chạy nhầm mọi page)",
+      });
+    }
+    applyRunMedia([...allowedIds], body.account_group_ids);
+    const mediaGate = checkMediaFolderConflicts([...allowedIds], {
+      force: !!(body.force_shared_media || body.forceSharedMedia),
+    });
+    if (!mediaGate.ok) {
+      return res.status(409).json({
+        ok: false,
+        error: mediaGate.error,
+        media_conflicts: mediaGate.conflicts,
+        media_folders: mediaGate.folders,
       });
     }
     const planned = await scheduleBulk({ ...body, dry_run: true });
@@ -575,10 +665,14 @@ router.post("/bulk-schedule", async (req, res) => {
       pages_expected: allowedIds.size,
       pages_planned: uniquePages.length,
       media_reuse: req.body?.media_reuse === "all_pages" ? "all_pages" : "once",
+      match_bundle: !!req.body?.match_bundle,
+      comment_link_posts_per_run: req.body?.comment_link_posts_per_run || 0,
+      parallel_apps: req.body?.app_rotation_mode === "per_app" || !!req.body?.parallel_apps,
     });
     res.json({
       ok: true,
       job,
+      comment_quota: job.comment_quota || null,
       plan_preview: planned,
       pages_requested: allowedIds.size,
       pages_planned: uniquePages.length,
@@ -655,6 +749,77 @@ router.post("/:id/retry-failed", (req, res) => {
     });
     if (!job) return res.status(404).json({ ok: false, error: "Job not found" });
     res.json({ ok: true, job, reports: getReportPaths() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * POST /api/jobs/:id/delete-posts
+ * Xóa trên Facebook đúng các bài OK của job đăng (hẹn hoặc đã lên).
+ * Body: { dry_run?: boolean, include_fail?: boolean }
+ */
+router.post("/:id/delete-posts", (req, res) => {
+  try {
+    const source = getJob(req.params.id) || getJobHistory(req.params.id);
+    if (!source) return res.status(404).json({ ok: false, error: "Job not found" });
+    if (["running", "paused", "queued"].includes(String(source.status || ""))) {
+      return res.status(400).json({
+        ok: false,
+        error: "Job vẫn đang chạy — dừng job đăng trước khi xóa bài của job này.",
+      });
+    }
+    const already = findActiveDeleteForPostingJob(source.id);
+    if (already && !req.body?.dry_run) {
+      return res.json({
+        ok: true,
+        already_running: true,
+        source_job_id: source.id,
+        source_title: source.title,
+        posts_queued: already.progress?.matched || already.progress?.total_delete || 0,
+        pages: (already.pages || []).length,
+        delete_job: already,
+      });
+    }
+    const includeFail = !!req.body?.include_fail;
+    const items = [];
+    for (const t of source.tasks || []) {
+      const st = String(t.status || "");
+      if (st !== "ok" && !(includeFail && st === "fail")) continue;
+      const postId = t.result?.post_id || t.result?.fb_post_id || t.fb_post_id || null;
+      if (!postId || !t.page_row_id) continue;
+      items.push({
+        page_row_id: Number(t.page_row_id),
+        page_name: t.page_name || null,
+        post_id: String(postId),
+      });
+    }
+    if (!items.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "Job không có bài nào có post_id để xóa (chưa OK / chưa có id FB).",
+      });
+    }
+    const del = startDeleteJob({
+      items,
+      dry_run: !!req.body?.dry_run,
+      delete_branding: false,
+      list_mode: "ids",
+      page_parallel: Number(req.body?.page_parallel) || 48,
+      list_parallel: 48,
+      batch_parallel: 24,
+      delay_ms: 0,
+      pace: "max",
+      source_posting_job_id: source.id,
+    });
+    res.json({
+      ok: true,
+      source_job_id: source.id,
+      source_title: source.title,
+      posts_queued: items.length,
+      pages: [...new Set(items.map((x) => x.page_row_id))].length,
+      delete_job: del,
+    });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }

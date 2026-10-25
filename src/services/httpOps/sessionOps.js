@@ -93,12 +93,6 @@ export async function runSessionOp(op, payload, jobRow) {
         "Groups Graph API đã deprecate — bắt buộc session map."
       );
 
-    case "group_delete_posts":
-      throw new SessionOpNotMappedError(
-        op,
-        "Có thể nối service deleteGroupPosts hiện có khi sẵn session flow."
-      );
-
     case "page_story_delete_schedule":
       throw new SessionOpNotMappedError(
         op,

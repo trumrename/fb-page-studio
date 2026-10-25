@@ -46,7 +46,41 @@ function escapeCsv(v) {
   return s;
 }
 
-/** Append one row to CSV + Excel. Returns paths. */
+const excelQueue = [];
+let excelTimer = null;
+let excelWriting = false;
+let excelSkipLogged = false;
+
+function queueExcelRow(data) {
+  excelQueue.push(data);
+  if (excelTimer || excelWriting) return;
+  excelTimer = setTimeout(() => {
+    excelTimer = null;
+    flushExcelQueue().catch((e) => console.warn("[report mirror]", e.message));
+  }, 1500);
+}
+
+async function flushExcelQueue() {
+  if (excelWriting) return;
+  const batch = excelQueue.splice(0, excelQueue.length);
+  if (!batch.length) return;
+  excelWriting = true;
+  try {
+    await writePostExcelRows(batch);
+  } catch (e) {
+    console.warn("[report mirror]", e.message);
+  } finally {
+    excelWriting = false;
+    if (excelQueue.length && !excelTimer) {
+      excelTimer = setTimeout(() => {
+        excelTimer = null;
+        flushExcelQueue().catch((e) => console.warn("[report mirror]", e.message));
+      }, 400);
+    }
+  }
+}
+
+/** Append one row to CSV immediately. Excel is flushed in one write per burst so đăng bài không đứng. */
 export async function appendPostReport(row) {
   ensureDir();
   const data = { ...row };
@@ -57,7 +91,6 @@ export async function appendPostReport(row) {
   }
   if (!data.created_at) data.created_at = new Date().toISOString();
 
-  // CSV
   const exists = fs.existsSync(REPORT_CSV);
   if (!exists) {
     fs.writeFileSync(REPORT_CSV, "\uFEFF" + HEADERS.join(",") + "\r\n", "utf8");
@@ -65,17 +98,40 @@ export async function appendPostReport(row) {
   const line = HEADERS.map((h) => escapeCsv(data[h])).join(",");
   fs.appendFileSync(REPORT_CSV, line + "\r\n", "utf8");
 
-  // Excel
-  await writePostExcelRow(data);
-
+  queueExcelRow(data);
   return { csv: REPORT_CSV, xlsx: REPORT_XLSX };
 }
 
-export async function writePostExcelRow(row) {
+async function writePostExcelRows(rows) {
   ensureDir();
+  if (!rows?.length) return REPORT_XLSX;
+  let size = 0;
+  try {
+    if (fs.existsSync(REPORT_XLSX)) size = fs.statSync(REPORT_XLSX).size;
+  } catch {
+    size = 0;
+  }
+  // File Excel chi tiết phình lên thì mỗi bài đọc+ghi lại cả file và chặn API. CSV vẫn đủ dòng.
+  if (size > 8 * 1024 * 1024) {
+    if (!excelSkipLogged) {
+      excelSkipLogged = true;
+      console.warn("[report mirror] xlsx lớn, chỉ ghi CSV dang_bai_chi_tiet.csv");
+    }
+    return REPORT_XLSX;
+  }
   const wb = new ExcelJS.Workbook();
-  if (fs.existsSync(REPORT_XLSX)) {
-    await wb.xlsx.readFile(REPORT_XLSX);
+  if (size > 0) {
+    try {
+      await wb.xlsx.readFile(REPORT_XLSX);
+    } catch (e) {
+      const bad = REPORT_XLSX.replace(/\.xlsx$/i, ".broken.xlsx");
+      try {
+        fs.renameSync(REPORT_XLSX, bad);
+      } catch {
+        try { fs.rmSync(REPORT_XLSX, { force: true }); } catch { /* ignore */ }
+      }
+      console.warn("[report mirror] xlsx hỏng, tạo file mới:", e.message);
+    }
   }
   let sheet = wb.getWorksheet("DangBai");
   if (!sheet) {
@@ -84,8 +140,7 @@ export async function writePostExcelRow(row) {
     sheet.getRow(1).font = { bold: true };
     sheet.views = [{ state: "frozen", ySplit: 1 }];
   }
-  sheet.addRow(HEADERS.map((h) => row[h] ?? ""));
-  // autosize light
+  for (const row of rows) sheet.addRow(HEADERS.map((h) => row[h] ?? ""));
   sheet.columns.forEach((col, i) => {
     const key = HEADERS[i];
     if (!key) return;
@@ -99,6 +154,10 @@ export async function writePostExcelRow(row) {
   });
   await wb.xlsx.writeFile(REPORT_XLSX);
   return REPORT_XLSX;
+}
+
+export async function writePostExcelRow(row) {
+  return writePostExcelRows([row]);
 }
 
 /** Also sync from post_logs row shape */

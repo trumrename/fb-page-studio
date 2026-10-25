@@ -122,7 +122,6 @@
             </div>
             <div style="margin-top:.85rem;display:flex;flex-wrap:wrap;gap:.5rem">
               <a class="btn btn-ghost btn-sm" href="/delete-posts.html">⌫ Xóa bài Fanpage</a>
-              <a class="btn btn-ghost btn-sm" href="/delete-group-posts.html">⊟ Xóa bài Group</a>
             </div>
           </div>
           <span class="badge live" id="appVer">v—</span>
@@ -172,10 +171,10 @@
             <div class="panel-body" style="border-top:1px solid var(--border)">
               <!-- ĐĂNG NGAY -->
               <div style="padding:.75rem;border-radius:12px;border:1px solid rgba(61,214,140,.35);background:rgba(61,214,140,.08);margin-bottom:.85rem">
-                <div style="font-weight:700;color:#8fd9a8;margin-bottom:.35rem">① ĐĂNG NGAY (Feed API)</div>
+                <div style="font-weight:700;color:#8fd9a8;margin-bottom:.35rem">Đăng ngay</div>
                 <p class="muted" style="margin:0 0 .65rem;font-size:.8rem">
-                  Đăng <b>ngay lập tức</b> 1 bài lên mỗi page đã tick (text/ảnh/video theo config page).
-                  Cần media trong <code>data/media/inbox</code> + caption kho.
+                  Gửi ngay 1 bài cho mỗi page đã tick, theo cấu hình page.
+                  Nhiều token chạy cùng lúc. Một token cách 30 giây sau khi xong video, tiêu đề và comment.
                 </p>
                 <button type="button" class="btn-ok btn-lg" id="btnPost" style="width:100%">
                   ▶ Đăng ngay — 1 bài / page đã chọn
@@ -184,9 +183,9 @@
 
               <!-- HẸN GIỜ -->
               <div style="padding:.75rem;border-radius:12px;border:1px solid rgba(245,197,66,.3);background:rgba(245,197,66,.06)">
-                <div style="font-weight:700;color:#e8c96a;margin-bottom:.35rem">② HẸN GIỜ Facebook</div>
+                <div style="font-weight:700;color:#e8c96a;margin-bottom:.35rem">Hẹn Facebook</div>
                 <p class="muted" style="margin:0 0 .5rem;font-size:.8rem">
-                  Tạo bài <b>scheduled</b> trên FB (10 phút–30 ngày). Khác với đăng ngay.
+                  Facebook giữ giờ lên bài. Reel từ 10 phút đến 29 ngày, ảnh và chữ đến 30 ngày. Tắt tool vẫn lên bài.
                 </p>
                 <div class="row2">
                   <div>
@@ -308,6 +307,8 @@
                     <th>Facebook sẽ đăng lúc</th>
                     <th>Page</th>
                     <th>Loại</th>
+                    <th>Caption</th>
+                    <th>Comment</th>
                     <th>Kết quả</th>
                     <th>Link</th>
                     <th>Lỗi</th>
@@ -392,7 +393,7 @@
     }
 
     function statusLabel(status) {
-      return ({ queued:"Đang xếp hàng", running:"Đang chạy", paused:"Tạm dừng", ok:"Hoàn tất", partial:"Xong một phần", fail:"Thất bại", stopped:"Đã dừng", interrupted:"Bị gián đoạn khi App đóng", pending:"Chờ", skipped:"Bỏ qua" })[status] || status || "—";
+      return ({ queued:"Đang xếp hàng", running:"Đang chạy", paused:"Tạm dừng", waiting_comment:"Đợi comment", ok:"Hoàn tất", partial:"Xong một phần", fail:"Thất bại", stopped:"Đã dừng", interrupted:"Bị gián đoạn khi App đóng", pending:"Chờ", skipped:"Bỏ qua" })[status] || status || "—";
     }
 
     function vnDateKey(value) {
@@ -532,9 +533,9 @@
         const [r, appsData] = await Promise.all([api("/api/jobs/rotation/settings"), api("/auth/apps")]);
         const s = r.settings || {};
         const appCount = (appsData.apps || []).filter((a) => a.configured).length;
-        const strategy = s.app_rotation_mode === "interleave_apps" ? "Hai App so le" : "Chạy lần lượt từng App";
+        const strategy = s.app_rotation_mode === "interleave_apps" ? "Xoay token trong một hàng" : "Nhiều token chạy cùng lúc";
         const perDay = Number(s.posts_per_page_per_day || s.posts_per_day || 0);
-        const warning = s.app_rotation_mode === "interleave_apps" && appCount < 2 ? " · ⚠ hiện chỉ có 1 Meta App, sẽ chạy như chế độ 1 App" : "";
+        const warning = s.app_rotation_mode === "interleave_apps" && appCount < 2 ? " · chỉ 1 app Meta, vẫn xoay theo token" : "";
         setText("rotationSummary", `${strategy} · ${perDay || "—"} bài/Page/ngày · chờ task ${s.between_tasks_gap_minutes_min ?? 0}–${s.between_tasks_gap_minutes_max ?? 0} phút${warning}`);
       } catch (e) {
         setText("rotationSummary", "Không đọc được cấu hình rotation: " + e.message);
@@ -651,6 +652,8 @@
         p.done,
         p.ok,
         p.fail,
+        p.comments_pending || 0,
+        p.comments_ok || 0,
         p.current_task_id || "",
         p.current_label || "",
         (job.pages || []).length,
@@ -697,7 +700,13 @@
         pp.innerHTML = "<p class='muted'>Không có page khớp bộ lọc.</p>";
         return;
       }
-      pp.innerHTML = list
+      const pageRows = list.length > 40
+        ? list.filter((pg) => pg.status === "running" || pg.status === "fail" || pg.status === "partial" || Number(pg.fail) > 0).concat(list.filter((pg) => pg.status === "ok")).slice(0, 40)
+        : list;
+      const pageHidden = list.length - pageRows.length;
+      pp.innerHTML = (pageHidden > 0
+        ? `<p class="muted" style="margin:0 0 .4rem">Hiện ${pageRows.length}/${list.length} page để không đơ. Lọc trạng thái để xem nhóm khác.</p>`
+        : "") + pageRows
         .map((pg) => {
           const errBlock = pg.last_error
             ? `<div class="task-error" style="margin-top:.35rem">⚠ ${esc(pg.last_error)}</div>`
@@ -746,18 +755,32 @@
 
         const p = job.progress || {};
         setText("jobTitle", job.title || job.id);
-        setText("jobPct", (p.percent || 0) + "%");
+        const waitingComment = job.status === "waiting_comment" || Number(p.comments_pending || 0) > 0;
+        const shownPct = waitingComment ? Math.min(Number(p.percent || 0), 99) : Number(p.percent || 0);
+        setText("jobPct", shownPct + "%");
         const pageN = (job.pages || []).length;
         const pageExp = job.pages_expected != null ? Number(job.pages_expected) : pageN;
         const pageLine =
           pageExp > 0
             ? ` · Page ${pageN}/${pageExp}${pageN < pageExp ? " ⚠ thiếu page" : ""}`
             : "";
+        const commentLine =
+          Number(p.comments_pending || 0) > 0
+            ? ` · đợi comment ${p.comments_pending}`
+            : Number(p.comments_ok || 0) > 0
+              ? ` · comment ✓${p.comments_ok}`
+              : "";
         setText(
           "jobStats",
-          ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}${pageLine}`
+          ` · OK ${p.ok || 0} · FAIL ${p.fail || 0} · SKIP ${p.skipped || 0} · ${p.done || 0}/${p.total || 0}${pageLine}${commentLine}`
         );
-        setText("jobStatus", statusLabel(job.status));
+        const statusText =
+          waitingComment
+            ? "Đợi comment"
+            : job.status === "ok" && Number(p.comments_ok || 0) > 0 && !Number(p.comments_fail || 0)
+              ? "Đủ bài và comment"
+              : statusLabel(job.status);
+        setText("jobStatus", statusText);
         setClass(
           "jobStatus",
           "badge " +
@@ -767,7 +790,7 @@
                 ? "err"
                 : "live")
         );
-        setStyle("jobBarFill", "width", (p.percent || 0) + "%");
+        setStyle("jobBarFill", "width", shownPct + "%");
         setClass(
           "jobBar",
           "progress-big " +
@@ -779,8 +802,15 @@
         );
         setText(
           "jobCurrent",
-          p.current_label || (job.status === "paused" ? "⏸ Đang tạm dừng…" : "—")
+          waitingComment
+            ? `Đợi comment lên · ${p.comments_ok || 0} đã có · còn ${p.comments_pending || 0}. Chưa báo 100% cho đến khi comment đủ.`
+            : (p.current_label || (job.status === "paused" ? "⏸ Đang tạm dừng…" : "—"))
         );
+        const jobCurrentEl = $("jobCurrent");
+        if (jobCurrentEl) {
+          jobCurrentEl.style.color = waitingComment ? "#f0d78c" : "";
+          jobCurrentEl.style.fontWeight = waitingComment ? "700" : "";
+        }
         const finished = ["ok", "fail", "partial", "stopped", "interrupted"].includes(job.status);
         const failedList =
           job.failed_tasks || (job.tasks || []).filter((t) => t.status === "fail");
@@ -842,7 +872,23 @@
               ? "<p class='muted'>Job cũ chưa lưu từng task. Chạy job mới (sau bản này) sẽ có đủ video 1–2–3. Vẫn bấm «Đối soát Facebook» nếu có post_id trong log.</p>"
               : "<p class='muted'>—</p>";
           } else {
-            tl.innerHTML = tasks
+            const taskView = tasks.length <= 50 ? { rows: tasks, hidden: 0 } : (() => {
+              const open = tasks.filter((t) => t.status === "running" || t.status === "pending").slice(0, 16);
+              const fails = tasks.filter((t) => t.status === "fail").slice(-20);
+              const oks = tasks.filter((t) => t.status === "ok").slice(-12);
+              const seen = new Set();
+              const rows = [];
+              for (const t of [...open, ...fails, ...oks]) {
+                const id = String(t.id || t.index || rows.length);
+                if (seen.has(id)) continue;
+                seen.add(id);
+                rows.push(t);
+              }
+              return { rows, hidden: Math.max(0, tasks.length - rows.length) };
+            })();
+            tl.innerHTML = (taskView.hidden
+              ? `<p class="muted">Hiện ${taskView.rows.length}/${tasks.length} dòng (đang chạy và lỗi) để vẫn bấm được Tiến trình và Báo cáo.</p>`
+              : "") + taskView.rows
               .map((t) => {
                 const isFail = t.status === "fail";
                 const err = isFail ? t.error || t.message || "Thất bại" : "";
@@ -893,16 +939,21 @@
           fresh.forEach((n) => seenNotifs.add(n.id));
           if (fresh.length > 3) {
             const errors = fresh.filter((n) => n.level === "error").length;
+            const waits = fresh.filter((n) => n.level === "warn" || n.level === "info").length;
             const successes = fresh.filter((n) => n.level === "success").length;
             toast(
-              errors ? "error" : "success",
-              `${fresh.length} cập nhật mới`,
-              `OK ${successes} · FAIL ${errors}. Xem chi tiết trong bảng Thông báo bên dưới.`
+              errors ? "error" : waits && !successes ? "warn" : "success",
+              errors ? `${fresh.length} cập nhật mới` : waits && !successes ? "Đợi comment" : `${fresh.length} cập nhật mới`,
+              errors
+                ? `OK ${successes} · FAIL ${errors}. Xem chi tiết trong bảng Thông báo bên dưới.`
+                : waits && !successes
+                  ? "Comment chưa đủ. Chưa báo 100%."
+                  : `OK ${successes} · FAIL ${errors}. Xem chi tiết trong bảng Thông báo bên dưới.`
             );
           } else {
             for (const n of fresh.slice(0, 3).reverse()) {
               toast(
-                n.level === "error" ? "error" : n.level === "warn" ? "warn" : "success",
+                n.level === "error" ? "error" : n.level === "warn" ? "warn" : n.level === "info" ? "info" : "success",
                 n.title,
                 n.body
               );
@@ -941,8 +992,19 @@
           loadLogs();
           loadJobHistory();
         }
-        const active = ["running", "paused", "queued"].includes(job.status);
-        setText("opsState", active ? (job.status === "paused" ? "Tạm dừng" : "Đang chạy") : "Sẵn sàng");
+        const active = ["running", "paused", "queued", "waiting_comment"].includes(job.status);
+        setText(
+          "opsState",
+          job.status === "waiting_comment" || Number(p.comments_pending || 0) > 0
+            ? "Đợi comment"
+            : job.status === "paused"
+              ? "Tạm dừng"
+              : ["running", "queued"].includes(job.status)
+                ? "Đang chạy"
+                : "Sẵn sàng"
+        );
+        const opsEl = $("opsState");
+        if (opsEl) opsEl.style.color = job.status === "waiting_comment" || Number(p.comments_pending || 0) > 0 ? "#f0d78c" : "";
         updateHistoryPinUi();
       } catch (e) {
         console.warn("[renderJob]", e);
@@ -1005,7 +1067,7 @@
         const live = await api("/api/jobs/" + id).catch(() => null);
         if (live?.job) {
           renderJob(live.job, { force: true });
-          if (["running", "paused", "queued"].includes(live.job.status)) {
+          if (["running", "paused", "queued", "waiting_comment"].includes(live.job.status)) {
             pollTimer = setInterval(async () => {
               try {
                 const data = await api("/api/jobs/" + id);
@@ -1137,15 +1199,21 @@
       try {
         const data = await api("/api/jobs");
         const list = data.jobs || [];
-        const active = list.find((j) => ["running", "paused", "queued"].includes(j.status));
+        const active = list.find((j) => ["running", "paused", "queued", "waiting_comment"].includes(j.status));
         const target = active || list[0];
         if (target && target.id !== currentJobId) {
           await watchJob(target.id);
           if (!quiet) {
             toast(
-              active ? "info" : "success",
-              active ? "Đã phát hiện job đang chạy" : "Đã tải job gần nhất",
-              target.title || target.id
+              active?.status === "waiting_comment" ? "warn" : active ? "info" : "success",
+              active?.status === "waiting_comment"
+                ? "Đợi comment"
+                : active
+                  ? "Đã phát hiện job đang chạy"
+                  : "Đã tải job gần nhất",
+              active?.status === "waiting_comment"
+                ? "Comment chưa đủ. Chưa báo 100%."
+                : (target.title || target.id)
             );
           }
         } else if (target && target.id === currentJobId && !pollTimer) {
@@ -1250,7 +1318,7 @@
         setText("opsFail", String(bad));
         if (!tb) return;
         if (!data.logs?.length) {
-          tb.innerHTML = `<tr><td colspan="7" class="muted">Chưa có log</td></tr>`;
+          tb.innerHTML = `<tr><td colspan="9" class="muted">Chưa có log</td></tr>`;
           return;
         }
         tb.innerHTML = data.logs.map((l) => {
@@ -1261,14 +1329,21 @@
             <td>${esc(fmtVn(l.created_at))} giờ VN</td>
             <td class="${l.scheduled_publish_time ? "sched" : "muted"}">${esc(sched.label)}</td>
             <td>${esc(l.page_name)}</td>
-            <td>${esc(l.post_type)}<div class="muted">${esc(deliveryMode)}</div></td>
+            <td>${esc(l.delivery_note || l.post_type)}<div class="muted">${esc(deliveryMode)}</div></td>
+            <td title="${esc(l.caption_preview || "")}">${esc(l.caption_note || "—")}<div class="muted">${esc(l.caption_preview || "")}</div></td>
+            <td title="${esc(l.comment_preview || "")}">${esc(l.comment_note || "—")}<div class="muted">${esc(l.comment_preview || "")}</div></td>
             <td class="${ok ? "ok" : "fail"}">${esc(l.scheduled_publish_time ? sched.state : statusLabel(l.status))}</td>
             <td>${safeHttpUrl(l.fb_post_url) ? `<a href="${esc(safeHttpUrl(l.fb_post_url))}" target="_blank" rel="noopener">link</a>` : esc(l.fb_post_id || "—")}</td>
             <td class="fail">${esc(l.error || "")}</td>
           </tr>`;
         }).join("");
       } catch (e) {
-        toast("error", "Không tải được báo cáo", e.message);
+        const msg = e.message || "Không đọc được nhật ký bài";
+        const table = $("logs");
+        if (table) {
+          table.innerHTML = `<tr><td colspan="9" class="fail">${esc(msg)}</td></tr>`;
+        }
+        toast("error", "Không tải được nhật ký bài", msg);
       }
     }
 

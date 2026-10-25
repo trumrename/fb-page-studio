@@ -88,16 +88,10 @@ export function mentionsEnabled(cfg = {}, where = "caption") {
     ll.mention_enabled ??
     ll.tag_enabled;
   if (on === false || on === 0 || on === "0" || on === "off") return false;
-  // Nếu có list ID thì coi như bật (trừ khi explicit off)
   const list = getMentionsFromConfig(cfg);
   if (!list.length) return false;
-  if (on === true || on === 1 || on === "1" || on === "on") {
-    /* explicit on */
-  } else if (on == null || on === "") {
-    // có list = bật
-  } else {
-    return false;
-  }
+  // Tick = bật. Không tự bật chỉ vì còn list ID.
+  if (!(on === true || on === 1 || on === "1" || on === "on")) return false;
   const target = String(
     cfg.mention_target ?? ll.mention_target ?? "both"
   ).toLowerCase();

@@ -12,8 +12,9 @@ export function getDb() {
   db = new Database(config.databasePath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  db.pragma("busy_timeout = 8000");
   migrate(db);
-  // One-shot: page cũ thiếu comment_when → immediate (comment ngay sau hẹn API)
+  // One-shot: page chưa chọn lúc comment → sau khi bài publish
   try {
     migrateCommentWhenDefault(db);
   } catch {
@@ -22,7 +23,7 @@ export function getDb() {
   return db;
 }
 
-/** Pages with auto-comment but no comment_when → set immediate (user expectation: after schedule API). */
+/** Pages with auto-comment but no comment_when → comment after the post publishes. */
 function migrateCommentWhenDefault(database) {
   const rows = database
     .prepare(
@@ -40,7 +41,7 @@ function migrateCommentWhenDefault(database) {
       ll = {};
     }
     if (ll.comment_when) continue; // already explicit
-    ll.comment_when = "immediate";
+    ll.comment_when = "after_publish";
     // Don't force min_likes wait if they never opted in
     if (ll.comment_min_likes == null) ll.comment_min_likes = 0;
     if (ll.comment_delay_minutes == null) ll.comment_delay_minutes = 0;
@@ -167,6 +168,23 @@ function migrate(database) {
   // Multi Meta App: tag each account with meta_app_key (app1 / app2)
   migrateMetaAppColumns(database);
 
+  // One video/photo inbox per Facebook user token. Added after the account rebuild.
+  const accMediaCols = database
+    .prepare(`PRAGMA table_info(fb_accounts)`)
+    .all()
+    .map((c) => c.name);
+  if (!accMediaCols.includes("media_folder")) {
+    database.exec(`ALTER TABLE fb_accounts ADD COLUMN media_folder TEXT`);
+  }
+  if (!accMediaCols.includes("posted_folder")) {
+    database.exec(`ALTER TABLE fb_accounts ADD COLUMN posted_folder TEXT`);
+  }
+  if (!accMediaCols.includes("use_own_media")) {
+    database.exec(
+      `ALTER TABLE fb_accounts ADD COLUMN use_own_media INTEGER NOT NULL DEFAULT 0`
+    );
+  }
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS page_post_config (
       page_row_id INTEGER PRIMARY KEY,
@@ -246,6 +264,12 @@ function migrate(database) {
   }
   if (logColsAfter.length && !logColsAfter.includes("delivery_mode")) {
     database.exec(`ALTER TABLE post_logs ADD COLUMN delivery_mode TEXT`);
+  }
+  if (logColsAfter.length && !logColsAfter.includes("last_reconciled_at")) {
+    database.exec(`ALTER TABLE post_logs ADD COLUMN last_reconciled_at TEXT`);
+  }
+  if (logColsAfter.length && !logColsAfter.includes("comment_due_at")) {
+    database.exec(`ALTER TABLE post_logs ADD COLUMN comment_due_at TEXT`);
   }
 
   const configCols = database.prepare(`PRAGMA table_info(page_post_config)`).all().map((c) => c.name);

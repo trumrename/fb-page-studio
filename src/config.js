@@ -82,7 +82,7 @@ export const config = {
       "FB_REDIRECT_URI",
       `http://localhost:${process.env.PORT || 3847}/auth/facebook/callback`
     ),
-    graphVersion: process.env.FB_GRAPH_VERSION || "v21.0",
+    graphVersion: resolveGraphVersion(process.env.FB_GRAPH_VERSION),
     // business_management: cần cho Page gắn Business Suite / New Pages Experience
     // — thiếu scope này /me/accounts thường trả data:[] dù user đã chọn page khi login.
     // Match use case «Manage everything on your Page» (+ optional permissions Meta gợi ý)
@@ -98,6 +98,21 @@ export const config = {
   },
 };
 
+/**
+ * Graph mới nhất là v26.0 (29/7/2026). File .env cũ ghi sẵn v21.0
+ * nên chuỗi đó được hiểu là chưa chọn phiên bản.
+ */
+export function resolveGraphVersion(raw) {
+  const v = String(raw ?? "").trim();
+  if (!v || /^v21\.0$/i.test(v)) return "v26.0";
+  return v;
+}
+
 export function graphBase() {
   return `https://graph.facebook.com/${config.facebook.graphVersion}`;
+}
+
+/** Host chuyên upload video lớn (chunked / resumable). */
+export function graphVideoBase() {
+  return `https://graph-video.facebook.com/${config.facebook.graphVersion}`;
 }

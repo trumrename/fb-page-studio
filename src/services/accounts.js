@@ -11,6 +11,7 @@ import {
   graphGetSoft,
 } from "./facebook.js";
 import { checkQuota } from "./license.js";
+import { deleteVaultForAccount, maybeAutoCreateAfterSync } from "./mediaVault.js";
 
 /** Synthetic account for individually pasted Page tokens (not a Facebook user). */
 export const PAGE_TOKEN_IMPORT_UID = "__page_token_import__";
@@ -193,10 +194,53 @@ export async function connectFromUserToken(userToken, opts = {}) {
 }
 
 function splitAccessTokens(raw) {
-  return String(raw || "")
-    .split(/[\r\n,;]+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 20);
+  const text = String(raw || "")
+    .replace(/[\u200B-\u200D\uFEFF\u2060]/g, "")
+    .replace(/\u00A0/g, " ")
+    .replace(/\r\n/g, "\n");
+  const found = [];
+  const seen = new Set();
+  const push = (token) => {
+    const s = String(token || "").trim();
+    if (s.length >= 20 && !seen.has(s)) {
+      seen.add(s);
+      found.push(s);
+    }
+  };
+  const frags = [];
+  const flush = () => {
+    if (frags.length) push(frags.join(""));
+    frags.length = 0;
+  };
+  for (const chunk of text.split(/[\n,;]+/)) {
+    const compact = chunk
+      .trim()
+      .replace(/^bearer\s+/i, "")
+      .replace(/^["']+|["']+$/g, "")
+      .replace(/\s+/g, "");
+    if (!compact) continue;
+    const embedded = compact.match(/EAA[A-Za-z0-9]{17,}/g);
+    if (embedded) {
+      flush();
+      for (const token of embedded) push(token);
+      continue;
+    }
+    if (/^[A-Za-z0-9]+$/.test(compact) && compact.length < 80) {
+      if (compact.startsWith("EAA")) {
+        flush();
+        frags.push(compact);
+        continue;
+      }
+      if (frags.length && compact.length >= 8) {
+        frags.push(compact);
+        continue;
+      }
+    }
+    flush();
+    if (/^[A-Za-z0-9]{20,}$/.test(compact)) push(compact);
+  }
+  flush();
+  return found;
 }
 
 function isPageTokenAccountsError(err) {
@@ -240,8 +284,11 @@ async function classifyAccessToken(token, graphOpts) {
 export async function importFromAccessToken(rawToken, opts = {}) {
   const tokens = splitAccessTokens(rawToken);
   if (!tokens.length) {
+    const n = String(rawToken || "").trim().length;
     throw new Error(
-      "Dán System User token (BM) hoặc Page token. Lấy trong Business Settings → System users → Generate token."
+      n
+        ? `Không nhận token trong phần vừa dán (${n} ký tự). Dán nguyên chuỗi EAA…, mỗi token một dòng.`
+        : "Dán System User token (BM) hoặc Page token. Lấy trong Business Settings → System users → Generate token."
     );
   }
 
@@ -251,7 +298,7 @@ export async function importFromAccessToken(rawToken, opts = {}) {
   const graphOpts = {
     appSecret: String(app.appSecret || "").trim() || undefined,
     metaAppKey,
-    skipAppsecretProof: true,
+    skipAppsecretProof: !String(app.appSecret || "").trim(),
   };
 
   const results = [];
@@ -269,7 +316,7 @@ export async function importFromAccessToken(rawToken, opts = {}) {
         metaAppKey,
         app,
         label,
-        skipAppsecretProof: true,
+        skipAppsecretProof: !String(app.appSecret || "").trim(),
       });
       results.push({
         kind: "system_or_user",
@@ -286,7 +333,7 @@ export async function importFromAccessToken(rawToken, opts = {}) {
         metaAppKey,
         app,
         label,
-        skipAppsecretProof: true,
+        skipAppsecretProof: !String(app.appSecret || "").trim(),
       });
       results.push({
         kind: "page",
@@ -343,7 +390,7 @@ async function importSystemUserToken(token, me, opts = {}) {
       app,
       upgradeLongLived: false,
       label,
-      skipAppsecretProof: true,
+      skipAppsecretProof: !String(app.appSecret || "").trim(),
     });
   }
 
@@ -359,7 +406,7 @@ async function importSystemUserToken(token, me, opts = {}) {
       app,
       upgradeLongLived: false,
       label,
-      skipAppsecretProof: true,
+      skipAppsecretProof: !String(app.appSecret || "").trim(),
     });
   }
 
@@ -385,7 +432,7 @@ async function importSystemUserToken(token, me, opts = {}) {
   const finishExtra = async (accountId) => {
     const pages = await syncPagesForAccount(accountId, token, {
       appSecret: String(app.appSecret || "").trim() || undefined,
-      skipAppsecretProof: true,
+      skipAppsecretProof: !String(app.appSecret || "").trim(),
     });
     return {
       extra_slot: true,
@@ -827,6 +874,8 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
           bm_owned: bmOwned,
           bm_client: bmClient,
           bm_assigned: bmAssigned,
+          bm_asset_groups: Number(graphMeta.bm_asset_groups || 0),
+          bm_group_pages: Number(graphMeta.bm_group_pages || 0),
           granular_page_ids: graphMeta.granular_page_ids || 0,
           token_resolved: graphMeta.token_resolved || 0,
           token_resolve_fail: graphMeta.token_resolve_fail || 0,
@@ -851,6 +900,17 @@ export async function syncPagesForAccount(accountId, userTokenOptional, opts = {
       : null,
     hint,
   };
+
+  // Kho media theo via → page_id: chỉ mkdir nếu bật auto_create_on_sync (chưa gắn config)
+  try {
+    result.sync_summary.media_vault = maybeAutoCreateAfterSync(accountId);
+  } catch (e) {
+    result.sync_summary.media_vault = {
+      skipped: true,
+      reason: e.message || String(e),
+    };
+  }
+
   return result;
 }
 
@@ -872,11 +932,87 @@ export async function diagnoseAccountPages(accountId) {
     metaAppKey: metaKey,
     appId: row.meta_app_id || process.env.FB_APP_ID || config.facebook?.appId,
   });
+  const graph_edges = [];
+  const graphOpts = {
+    appSecret,
+    metaAppKey: metaKey,
+    skipAppsecretProof: false,
+  };
+  const probe = async (path, query = {}, label = path) => {
+    const r = await graphGetSoft(path, userToken, query, graphOpts);
+    const count = Array.isArray(r.data?.data) ? r.data.data.length : null;
+    const rows = Array.isArray(r.data?.data) ? r.data.data : [];
+    const withAccessToken = rows.filter((item) => !!item?.access_token).length;
+    const withCreateContent = rows.filter((item) => {
+      const tasks = [...(item?.tasks || []), ...(item?.permitted_tasks || [])].map((task) => String(task).toUpperCase());
+      return tasks.includes("CREATE_CONTENT") || tasks.includes("CONTENT");
+    }).length;
+    graph_edges.push({
+      label,
+      path,
+      ok: !!r.ok,
+      code: r.ok ? null : r.code || r.fb?.code || null,
+      error: r.ok ? null : String(r.error || "").slice(0, 240),
+      count,
+      with_access_token: withAccessToken,
+      with_create_content: withCreateContent,
+    });
+    return r;
+  };
+  const pageIds = new Set();
+  const businesses = await probe("/me/businesses", { fields: "id,name", limit: 50 }, "businesses");
+  const assigned = await probe(
+    "/me/assigned_pages",
+    { fields: "id,name,access_token,tasks,permitted_tasks", limit: 100 },
+    "assigned_pages"
+  );
+  const businessUsers = await probe(
+    "/me/business_users",
+    { fields: "id,name,role,business{id,name}", limit: 100 },
+    "business_users"
+  );
+  const businessIds = new Set((businesses.data?.data || []).map((b) => String(b.id)).filter(Boolean));
+  for (const user of businessUsers.data?.data || []) {
+    if (user?.business?.id) businessIds.add(String(user.business.id));
+  }
+  for (const page of assigned.data?.data || []) {
+    if (page?.id) pageIds.add(String(page.id));
+  }
+  for (const businessId of businessIds) {
+    for (const edge of ["owned_pages", "client_pages", "owned_asset_groups", "client_asset_groups"]) {
+      const listed = await probe(
+        `/${businessId}/${edge}`,
+        { fields: "id,name,asset_type", limit: 100 },
+        `${businessId}/${edge}`
+      );
+      for (const item of listed.data?.data || []) {
+        const type = String(item?.asset_type || item?.type || "").toLowerCase();
+        if (edge.endsWith("pages") || type === "page") pageIds.add(String(item.id));
+        if (edge.endsWith("asset_groups") && item?.id) {
+          const assets = await probe(
+            `/${item.id}/contained_assets`,
+            { fields: "id,name,asset_type", limit: 100 },
+            `${item.id}/contained_assets`
+          );
+          for (const asset of assets.data?.data || []) {
+            const assetType = String(asset?.asset_type || asset?.type || "").toLowerCase();
+            if ((!assetType || assetType === "page") && asset?.id) pageIds.add(String(asset.id));
+          }
+        }
+      }
+    }
+  }
+  for (const pageId of [...pageIds].slice(0, 100)) {
+    const page = await probe(`/${pageId}`, { fields: "id,name,access_token,tasks,permitted_tasks" }, `page:${pageId}`);
+    const edge = graph_edges[graph_edges.length - 1];
+    if (page.ok) edge.has_page_token = !!page.data?.access_token;
+  }
   return {
     account_id: accountId,
     name: row.name,
     meta_app_key: metaKey,
     ...diag,
+    graph_edges,
     checklist_vi: buildZeroPageChecklist(diag),
   };
 }
@@ -943,7 +1079,7 @@ export function listAccounts() {
     .prepare(
       `SELECT id, fb_user_id, name, email, picture_url, user_token_expires_at,
               status, last_sync_at, last_error, page_count, created_at, updated_at,
-              meta_app_key, meta_app_id
+              meta_app_key, meta_app_id, media_folder, posted_folder, use_own_media
        FROM fb_accounts ORDER BY meta_app_key, id DESC`
     )
     .all()
@@ -955,7 +1091,7 @@ export function getAccountPublic(id) {
     .prepare(
       `SELECT id, fb_user_id, name, email, picture_url, user_token_expires_at,
               status, last_sync_at, last_error, page_count, created_at, updated_at,
-              meta_app_key, meta_app_id
+              meta_app_key, meta_app_id, media_folder, posted_folder, use_own_media
        FROM fb_accounts WHERE id = ?`
     )
     .get(id);
@@ -1070,16 +1206,17 @@ export function countPages({ accountId, q } = {}) {
   return getDb().prepare(sql).get(...params).c;
 }
 
-export function deleteAccount(id) {
-  return getDb().prepare(`DELETE FROM fb_accounts WHERE id = ?`).run(id);
+export function deleteAccount(id, opts = {}) {
+  return deleteAccounts([id], opts);
 }
 
 /**
  * Xóa nhiều tài khoản OAuth (+ page tokens CASCADE).
  * @param {number[]} ids
- * @returns {{ deleted: number[], missing: number[], deleted_count: number }}
+ * @param {{ delete_media_folders?: boolean }} [opts]
+ * @returns {{ deleted: number[], missing: number[], deleted_count: number, media_vault?: object[] }}
  */
-export function deleteAccounts(ids) {
+export function deleteAccounts(ids, { delete_media_folders = false } = {}) {
   const list = [
     ...new Set(
       (Array.isArray(ids) ? ids : [])
@@ -1088,7 +1225,18 @@ export function deleteAccounts(ids) {
     ),
   ];
   if (!list.length) {
-    return { deleted: [], missing: [], deleted_count: 0 };
+    return { deleted: [], missing: [], deleted_count: 0, media_vault: [] };
+  }
+  const media_vault = [];
+  // Xóa folder TRƯỚC khi xóa DB (cần account.name)
+  if (delete_media_folders) {
+    for (const id of list) {
+      try {
+        media_vault.push(deleteVaultForAccount(id));
+      } catch (e) {
+        media_vault.push({ account_id: id, ok: false, error: e.message || String(e) });
+      }
+    }
   }
   const db = getDb();
   const del = db.prepare(`DELETE FROM fb_accounts WHERE id = ?`);
@@ -1106,7 +1254,7 @@ export function deleteAccounts(ids) {
     }
   });
   tx(list);
-  return { deleted, missing, deleted_count: deleted.length };
+  return { deleted, missing, deleted_count: deleted.length, media_vault };
 }
 
 /** Internal: decrypt page token for future publish module */

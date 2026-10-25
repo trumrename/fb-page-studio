@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Limit token · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <h1>Limit từng token</h1>
+            <div class="sub">Bấm tay mới gọi Facebook</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" class="btn-ok" id="btnMeasure">Đo limit</button>
+        </div>
+      </header>
+      <main class="content">
+        <section class="panel">
+          <h2 class="panel-hd"><span>Hạn mức từng token</span></h2>
+          <div class="panel-body">
+            <p class="muted" style="margin-top:0">
+              Mở tab này không gọi Facebook. Bấm <b>Đo limit</b> thì mỗi token bị gọi đúng một lần.
+              Số % là hạn mức API: lấy mức cao nhất trong lượt gọi, CPU và thời gian, kể cả header business-use-case.
+              0% không có nghĩa Facebook đang chặn spam. Chặn spam là lỗi riêng trên từng page khi đăng.
+              Đứng im thì số không tự tăng.
+            </p>
+            <p id="limitStatus" class="muted">Chưa đo.</p>
+            <div class="limit-list" id="limitList"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="/js/shell.js"></script>
+  <script src="/js/update.js"></script>
+  <script>
+    const btn = document.getElementById("btnMeasure");
+    const list = document.getElementById("limitList");
+    const status = document.getElementById("limitStatus");
+
+    function rowClass(n) {
+      if (n == null || !Number.isFinite(n)) return "";
+      if (n >= 80) return " hot";
+      if (n >= 50) return " warm";
+      return "";
+    }
+
+    function pctText(row) {
+      if (row.call_count == null) {
+        if (row.error) return "không đọc được";
+        return "—";
+      }
+      let text = row.call_count + "% API";
+      if (Number(row.regain_min) > 0) text += " · chờ " + row.regain_min + " phút";
+      return text;
+    }
+
+    function paint(board) {
+      const apps = Array.isArray(board?.apps) ? board.apps : [];
+      if (!apps.length) {
+        list.innerHTML = '<p class="muted">Chưa có token.</p>';
+        return;
+      }
+      list.innerHTML = apps
+        .map((row) => {
+          const name = String(row.name || "Token");
+          const n = row.call_count == null ? null : Number(row.call_count);
+          return (
+            '<div class="limit-row' + rowClass(n) + '">' +
+            "<b></b><span class=\"pct\"></span></div>"
+          );
+        })
+        .join("");
+      const nodes = list.querySelectorAll(".limit-row");
+      apps.forEach((row, i) => {
+        const el = nodes[i];
+        if (!el) return;
+        el.querySelector("b").textContent = String(row.name || "Token");
+        el.querySelector(".pct").textContent = pctText(row);
+      });
+    }
+
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      status.textContent = "Đang gọi từng token một lần…";
+      try {
+        const res = await fetch("/api/usage/measure", { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Không đo được");
+        paint(data);
+        const when = new Date().toLocaleString("vi-VN", {
+          timeZone: "Asia/Ho_Chi_Minh",
+          hour12: false,
+        });
+        status.textContent = "Đo lúc " + when + ". Không tự đo lại.";
+      } catch (e) {
+        status.textContent = e.message || "Không đo được";
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -75,6 +75,15 @@
           <div class="stat"><div class="n" id="stBack">—</div><div class="l">Backoff (giây)</div></div>
         </div>
         <div class="panel section-gap" style="margin-top:.75rem">
+          <h2 class="panel-hd">Page đang bị khóa</h2>
+          <div class="panel-body">
+            <p class="muted" style="margin:0 0 .55rem;font-size:.84rem;line-height:1.45">
+              Page bị Facebook chặn spam hoặc mất quyền thì tool ngừng gọi action đó đến khi hết giờ. Page khác vẫn chạy.
+            </p>
+            <div id="circuitList" class="muted">Chưa có page bị khóa</div>
+          </div>
+        </div>
+        <div class="panel section-gap" style="margin-top:.75rem">
           <h2 class="panel-hd">Media hash — đăng lại file đã đăng</h2>
           <div class="panel-body">
             <p class="muted" style="margin:0 0 .55rem;font-size:.84rem;line-height:1.45">
@@ -254,6 +263,35 @@
       $("stMedia").textContent = data.media_hashes;
       $("stCap").textContent = data.captions_tracked;
       $("stBack").textContent = data.backoff?.active ? data.backoff.seconds_left : "0";
+      const box = $("circuitList");
+      const circuits = data.circuits || [];
+      if (!circuits.length) {
+        box.innerHTML = `<span class="muted">Chưa có page bị khóa</span>`;
+      } else {
+        box.innerHTML = circuits.map((c) => {
+          const left = Math.max(0, Number(c.seconds_left) || 0);
+          const hh = Math.floor(left / 3600);
+          const mm = Math.floor((left % 3600) / 60);
+          const ss = left % 60;
+          const clock = `${hh}g ${mm}p ${ss}s`;
+          return `<div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.35rem 0">
+            <b>${esc(c.page_name || c.page_id || c.page_row_id)}</b>
+            <span>${esc(c.action)}</span>
+            <span>còn ${clock}</span>
+            <span class="muted">${esc(c.reason || "")}</span>
+            <button type="button" class="btn-primary circuit-close" data-page="${c.page_row_id}" data-action="${esc(c.action)}">Mở lại thử</button>
+          </div>`;
+        }).join("");
+        box.querySelectorAll(".circuit-close").forEach((btn) => {
+          btn.onclick = async () => {
+            await api("/api/anti-spam/circuits/close", {
+              method: "POST",
+              body: JSON.stringify({ page_row_id: Number(btn.dataset.page), action: btn.dataset.action }),
+            });
+            await load();
+          };
+        });
+      }
       $("tips").innerHTML = (data.recommendations || []).map((t) => `· ${esc(t)}`).join("<br/>");
       renderForm(data.settings);
       const ev = await api("/api/anti-spam/events?limit=30");

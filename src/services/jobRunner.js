@@ -8,6 +8,7 @@ import path from "path";
 import { nanoid } from "nanoid";
 import { config } from "../config.js";
 import {
+  archiveConsumedBundle,
   runOnePost,
   getPagePostConfig,
   mediaStats,
@@ -16,19 +17,33 @@ import {
 import { scheduleOnePost } from "./schedule.js";
 import {
   createCommentSiteTracker,
+  extractOrdinalFromName,
   getCommentMaxPagesPerSite,
+  moveToPosted,
 } from "./mediaLibrary.js";
+import { getDb } from "../db/index.js";
 import { getReportPaths } from "./reportExport.js";
 import {
   isTransientGraphError,
   isGraphRateLimitError,
   isNetworkTransientError,
+  isCommunitySpamBlock,
+  isSpamBlockError,
+  isPermissionError,
   estimateTransientWaitMs,
   waitWhileRateLimited,
 } from "./rateLimit.js";
+import { isPageCircuitOpen, openPageCircuit } from "./antiSpam.js";
+import { applyCommentLinkQuota } from "./commentQuota.js";
+import { applyRunMedia } from "./tokenMedia.js";
+import { formatFbNotice } from "./fbNotice.js";
 
 /** Auto-retry per task for Meta temp / throttle / network (bulk schedule & post). */
 const TASK_TRANSIENT_MAX_ATTEMPTS = 8;
+/** Một token đăng 1 page, rồi chờ. 20 page cùng lúc bị Facebook chặn spam. */
+const SAME_TOKEN_POST_GAP_MS = 30_000;
+/** Sau một lần Facebook chặn tần suất: page sau cùng token vẫn đăng, chỉ giãn thêm. Không bỏ page. */
+const SPAM_SAME_TOKEN_GAP_MS = 90_000;
 
 const bus = new EventEmitter();
 bus.setMaxListeners(50);
@@ -42,6 +57,64 @@ const MAX_HISTORY = 200;
 const HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const PERSIST_THROTTLE_MS = 1500;
 const TERMINAL_STATUSES = new Set(["ok", "fail", "partial", "stopped", "interrupted"]);
+
+/** Cùng bộ: giữ file trong kho lúc chạy. Hết job thì chuyển đúng file đã đăng sang ổ đã đăng. */
+function flushSharedInboxToPosted(job) {
+  if (!job || job.media_reuse !== "all_pages") return;
+  const bag = job._sharedMedia || {};
+  const paths = new Set();
+  for (const [key, value] of Object.entries(bag)) {
+    if (String(key).endsWith("__pool") || key === "__bundleOrdinals") continue;
+    if (typeof value === "string") paths.add(value);
+  }
+  let postedFolder = "";
+  let pageCfg = null;
+  for (const task of job.tasks || []) {
+    if (!task.page_row_id) continue;
+    try {
+      const cfg = getPagePostConfig(task.page_row_id);
+      if (!postedFolder) postedFolder = String(cfg?.posted_folder || "").trim();
+      if (!pageCfg && cfg?.media_folder) pageCfg = cfg;
+    } catch {
+      /* page không còn config */
+    }
+    if (postedFolder && pageCfg) break;
+  }
+  if (postedFolder) {
+    for (const filePath of paths) {
+      try {
+        if (!filePath || !fs.existsSync(filePath)) continue;
+        const dest = moveToPosted(filePath, postedFolder);
+        console.log(`[job] đã chuyển sang ổ đã đăng: ${dest}`);
+      } catch (e) {
+        console.warn(`[job] không chuyển được ${filePath}: ${e.message || e}`);
+      }
+    }
+  }
+  if (!job.match_bundle || !pageCfg) return;
+  const ordinals = [...new Set(
+    (Array.isArray(bag.__bundleOrdinals) ? bag.__bundleOrdinals : [])
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n > 0)
+  )];
+  const stuck = new Set();
+  for (const filePath of paths) {
+    if (!filePath || !fs.existsSync(filePath)) continue;
+    const n = extractOrdinalFromName(filePath);
+    if (n != null) stuck.add(n);
+  }
+  for (const ordinal of ordinals) {
+    if (stuck.has(ordinal)) {
+      console.warn(`[job] bộ ${ordinal} còn trong kho — giữ caption, comment, link`);
+      continue;
+    }
+    try {
+      archiveConsumedBundle({ cfg: pageCfg, ordinal });
+    } catch (e) {
+      console.warn(`[job] không chuyển bộ ${ordinal}: ${e.message || e}`);
+    }
+  }
+}
 
 let persistTimer = null;
 let persistDirty = false;
@@ -256,7 +329,11 @@ export function listJobHistory(limit = 50) {
         new Date(b.finished_at || b.archived_at || b.created_at) -
         new Date(a.finished_at || a.archived_at || a.created_at)
     )
-    .slice(0, Math.max(1, Math.min(200, Number(limit) || 50)));
+    .slice(0, Math.max(1, Math.min(200, Number(limit) || 50)))
+    .map((row) => {
+      const status = healedStatus(row);
+      return status === row.status ? row : { ...row, status };
+    });
 }
 
 export function getJobHistory(id) {
@@ -264,7 +341,11 @@ export function getJobHistory(id) {
   const want = String(id);
   const all = readHistoryRaw();
   for (let i = all.length - 1; i >= 0; i--) {
-    if (String(all[i]?.id) === want) return all[i];
+    if (String(all[i]?.id) === want) {
+      const row = all[i];
+      const status = healedStatus(row);
+      return status === row.status ? row : { ...row, status };
+    }
   }
   return null;
 }
@@ -295,16 +376,15 @@ function restoreJobs() {
         }
         job.stop_requested = false;
         if (hasPending) {
-          // Còn task chưa chạy → re-arm: đưa về queued rồi runJob chạy tiếp.
-          job.status = "queued";
-          job.paused = false;
+          // Còn task chưa chạy: dừng lại. Chỉ chạy khi bấm Tiếp tục.
+          job.status = "paused";
+          job.paused = true;
           job.finished_at = null;
           job.notifications = job.notifications || [];
           job.notifications.unshift({
-            id: nanoid(6), level: "info", title: "Chạy tiếp job dở",
-            body: "App vừa mở lại — tiếp tục các nhiệm vụ chưa hoàn tất.", at: nowIso(),
+            id: nanoid(6), level: "info", title: "Job đang dừng",
+            body: "App vừa mở lại. Bấm Tiếp tục thì các nhiệm vụ còn lại mới chạy.", at: nowIso(),
           });
-          job._resume = true;
         } else {
           // Không còn task pending → coi như kết thúc theo trạng thái task.
           job.status = job.progress?.fail ? "partial" : "ok";
@@ -316,10 +396,6 @@ function restoreJobs() {
       jobs.set(job.id, job);
       if (TERMINAL_STATUSES.has(job.status)) {
         archiveJobHistory(job);
-      }
-      if (job._resume) {
-        delete job._resume;
-        setImmediate(() => runJob(job.id).catch((e) => console.error("[job resume]", e)));
       }
     }
     persistJobs(true);
@@ -339,7 +415,7 @@ function trimJobs() {
   );
   while (list.length > MAX_JOBS) {
     const old = list.shift();
-    if (old && old.status !== "running") jobs.delete(old.id);
+    if (old && old.status !== "running" && old.status !== "waiting_comment") jobs.delete(old.id);
     // skip running jobs — continue to evict older non-running ones
   }
 }
@@ -352,6 +428,70 @@ function emit(job) {
   bus.emit(`job:${job.id}`, job);
 }
 
+/** Job không còn task dở mà vẫn running — lịch sử bị kẹt «Đang chạy» dù 100%. */
+function healedStatus(job) {
+  if (!job || job.continuous) return job?.status;
+  const status = String(job.status || "");
+  if (!["running", "queued", "paused"].includes(status)) return status;
+  const tasks = Array.isArray(job.tasks) ? job.tasks : [];
+  if (tasks.some((t) => ["pending", "running", "queued", "waiting"].includes(t.status))) {
+    return status;
+  }
+  const p = job.progress || {};
+  const total = tasks.length || Number(p.total) || 0;
+  const done = tasks.length
+    ? tasks.filter((t) => ["ok", "fail", "skipped"].includes(t.status)).length
+    : Number(p.done) || 0;
+  const progressDone = Number(p.total) > 0 && Number(p.done) >= Number(p.total);
+  if (!(total > 0 && done >= total) && !progressDone) return status;
+  if ((tasks.length ? tasks : []).some((t) => taskCommentWaiting(t))) return "waiting_comment";
+  const fail = tasks.length
+    ? tasks.filter((t) => t.status === "fail").length
+    : Number(p.fail) || 0;
+  const ok = tasks.length
+    ? tasks.filter((t) => t.status === "ok").length
+    : Number(p.ok) || 0;
+  const commentsFail = Number(p.comments_fail) || 0;
+  return fail && !ok ? "fail" : fail || commentsFail ? "partial" : "ok";
+}
+
+function taskCommentWaiting(t) {
+  const r = t?.result;
+  if (!r || t.status !== "ok") return false;
+  if (r.comment_id || r.comment_error) return false;
+  if (String(r.comment_text || "").startsWith("[comment failed]")) return false;
+  return !!(r.comment_pending || String(r.comment_text || "").trim());
+}
+
+function closeJobIfDrained(job) {
+  const next = healedStatus(job);
+  if (!next || next === job.status) return false;
+  job.status = next;
+  if (next === "waiting_comment") {
+    job.finished_at = null;
+    job.paused = false;
+    recompute(job);
+    notify(
+      job,
+      "warn",
+      `Đợi comment · ${job.title || ""}`.trim(),
+      `Bài đã xong ${job.progress?.ok || 0}/${job.progress?.total || 0}. Còn ${job.progress?.comments_pending || 0} comment chưa lên. Chưa báo 100%.`
+    );
+    return true;
+  }
+  if (!job.finished_at) job.finished_at = nowIso();
+  job.paused = false;
+  const p = job.progress || {};
+  job.outcome = job.outcome || {
+    expected: p.total || (job.tasks || []).length,
+    success: p.ok || 0,
+    failed: p.fail || 0,
+    skipped: p.skipped || 0,
+    shortfall: Math.max(0, (p.total || 0) - (p.ok || 0)),
+  };
+  return true;
+}
+
 function recompute(job) {
   const tasks = job.tasks || [];
   const total = tasks.length || 1;
@@ -361,8 +501,15 @@ function recompute(job) {
   const ok = tasks.filter((t) => t.status === "ok").length;
   const fail = tasks.filter((t) => t.status === "fail").length;
   const skipped = tasks.filter((t) => t.status === "skipped").length;
-  const running = tasks.find((t) => t.status === "running");
-  const progressUnits = done + (running ? (Number(running.percent) || 0) / 100 : 0);
+  const runningTasks = tasks.filter((t) => t.status === "running");
+  const running = runningTasks[0] || null;
+  const commentStillOpen = (t) => taskCommentWaiting(t);
+  const progressUnits = tasks.reduce((sum, t) => {
+    if (t.status === "running") return sum + (Number(t.percent) || 0) / 100;
+    if (!["ok", "fail", "skipped"].includes(t.status)) return sum;
+    if (commentStillOpen(t)) return sum + 0.9;
+    return sum + 1;
+  }, 0);
   // Phân loại tiến trình theo 3 loại giao hàng:
   // fb_scheduled = hẹn giờ FB (kind schedule); scheduled_direct = hẹn giờ đăng
   // trực tiếp (kind post có run_at); direct = đăng ngay.
@@ -400,17 +547,26 @@ function recompute(job) {
     ok,
     fail,
     skipped,
-    percent: Math.min(100, Math.round((progressUnits / total) * 100)),
+    percent: (() => {
+      const raw = total ? (progressUnits / total) * 100 : 0;
+      // 420 bài: 1 bài đang chạy làm tròn thành 0% và trông như đứng.
+      let n = Math.round(raw);
+      if ((done > 0 || runningTasks.length) && n < 1) n = 1;
+      if (comments_pending > 0) n = Math.min(n, 99);
+      return Math.min(100, n);
+    })(),
     by_mode,
     comments_ok,
     comments_fail,
     comments_pending,
     current_task_id: running?.id || null,
-    current_label: running
-      ? `${running.page_name || "?"} · ${running.label || running.kind}`
-      : done >= total
-        ? "Hoàn tất"
-        : "Chờ…",
+    current_label: runningTasks.length
+      ? `Đang chạy ${runningTasks.length} page · ${running.page_name || "?"} · ${running.label || running.kind}`
+      : comments_pending > 0
+        ? `Đợi comment ${comments_ok}/${comments_ok + comments_pending + comments_fail} — chưa báo 100%`
+        : done >= (tasks.length || total)
+          ? "Hoàn tất"
+          : "Chờ…",
   };
   // per-page rollup (+ last / all errors for UI)
   const byPage = {};
@@ -540,7 +696,45 @@ export function subscribeJob(id, fn) {
  * Lightweight list for discover/poll — avoid cloning full tasks/opts every 1–2s.
  * Use getJob(id) when UI needs full detail.
  */
+function recentProgressLines(tasks) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  const running = list.filter((t) => t.status === "running").slice(0, 6);
+  const fails = list.filter((t) => t.status === "fail").slice(-4);
+  const oks = list.filter((t) => t.status === "ok").slice(-8);
+  const seen = new Set();
+  const rows = [];
+  for (const t of [...running, ...fails, ...oks]) {
+    const id = String(t.id || "");
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    rows.push(t);
+    if (rows.length >= 12) break;
+  }
+  return rows.map((t) => {
+    const r = t.result || {};
+    let comment = "";
+    if (r.comment_error) comment = `Comment lỗi · ${String(r.comment_error).slice(0, 80)}`;
+    else if (r.comment_id) comment = `Comment đã lên · ${String(r.comment_text || "").replace(/\s+/g, " ").slice(0, 90)}`;
+    else if (r.comment_pending || r.comment_text) {
+      comment = `Đợi comment lên · chưa tính xong · ${String(r.comment_text || "").replace(/\s+/g, " ").slice(0, 90)}`;
+    }
+    return {
+      page: t.page_name || "",
+      status: t.status || "",
+      when: r.scheduled_at ? formatVnClock(r.scheduled_at) : "",
+      comment,
+      message: t.status === "fail" ? String(t.error || t.message || "").slice(0, 140) : "",
+    };
+  });
+}
+
 export function listJobs(limit = 20) {
+  for (const job of jobs.values()) {
+    if (closeJobIfDrained(job)) {
+      recompute(job);
+      emit(job);
+    }
+  }
   return [...jobs.values()]
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
     .slice(0, limit)
@@ -577,8 +771,10 @@ export function listJobs(limit = 20) {
               current_label: j.progress.current_label,
               comments_ok: j.progress.comments_ok || 0,
               comments_fail: j.progress.comments_fail || 0,
+              comments_pending: j.progress.comments_pending || 0,
             }
           : null,
+        recent_lines: recentProgressLines(tasks),
       };
     });
 }
@@ -587,15 +783,57 @@ export function getJob(id) {
   const j = jobs.get(id);
   if (j && ["running", "paused", "queued"].includes(j.status)) {
     const lastRefresh = new Date(j.resources?.updated_at || 0).getTime();
-    if (!Number.isFinite(lastRefresh) || Date.now() - lastRefresh >= 10_000) {
+    if (!Number.isFinite(lastRefresh) || Date.now() - lastRefresh >= 45_000) {
       refreshResources(j);
     }
   }
   return j ? publicJob(j) : null;
 }
 
+function slimTask(t) {
+  const r = t?.result;
+  const runAt = t?.run_at || t?.opts?.run_at || null;
+  return {
+    id: t?.id,
+    index: t?.index,
+    kind: t?.kind,
+    status: t?.status,
+    percent: t?.percent,
+    page_row_id: t?.page_row_id,
+    page_name: t?.page_name,
+    page_id: t?.page_id,
+    label: t?.label,
+    error: t?.error || null,
+    message: t?.message || null,
+    run_at: runAt,
+    started_at: t?.started_at || null,
+    finished_at: t?.finished_at || null,
+    opts: runAt ? { run_at: runAt } : undefined,
+    result: r
+      ? {
+          ok: r.ok,
+          error: r.error || null,
+          post_id: r.post_id || r.post?.post_id || null,
+          post_url: r.post_url || null,
+          post_type: r.post_type || null,
+          scheduled_at: r.scheduled_at || null,
+          comment_id: r.comment_id || null,
+          comment_pending: r.comment_pending || false,
+          comment_error: r.comment_error || null,
+          comment_text: r.comment_text ? String(r.comment_text).slice(0, 140) : null,
+        }
+      : undefined,
+  };
+}
+
 function publicJob(j) {
-  return JSON.parse(JSON.stringify(j));
+  return {
+    ...j,
+    tasks: (j.tasks || []).map(slimTask),
+    failed_tasks: (j.failed_tasks || []).map(slimTask),
+    _commentSiteTracker: undefined,
+    _sharedMedia: undefined,
+  };
 }
 
 restoreJobs();
@@ -616,16 +854,36 @@ process.once("exit", () => {
 export function startJob({
   type,
   title,
-  tasks,
+  tasks: rawTasks,
   continuous = false,
   continuous_settings = null,
   next_plan_day = null,
   pages_expected = null,
   pages_planned = null,
   media_reuse = "once",
+  match_bundle = false,
+  comment_link_posts_per_run = 0,
+  parallel_apps = false,
 } = {}) {
   trimJobs();
   const id = nanoid(10);
+  // Quota comment-link theo cả job (trước khi chạy)
+  const quotaResult = applyCommentLinkQuota(
+    Array.isArray(rawTasks) ? rawTasks.map((t) => ({ ...t, opts: { ...(t.opts || {}) } })) : [],
+    comment_link_posts_per_run
+  );
+  const tasks = quotaResult.items;
+  if (quotaResult.warn) console.warn("[comment-quota]", quotaResult.warn);
+  try {
+    stampAccountIds(tasks);
+    freezeRunFolders(tasks);
+    // Task order is part of the run contract: post 1 must visit every Page
+    // (token by token) before post 2 starts. Keep this ordering for both
+    // direct-post and Facebook-schedule jobs.
+    tasks.splice(0, tasks.length, ...orderTasksByPostPageToken(tasks));
+  } catch (e) {
+    console.warn("[job] stamp account:", e.message);
+  }
   // Comment site budget: mặc định TẮT (0). Chỉ bật khi page config set N > 0.
   let commentSiteMax = 0;
   try {
@@ -652,8 +910,25 @@ export function startJob({
     paused: false,
     /** Shared across tasks — limit comment links per domain to N pages */
     _commentSiteTracker: createCommentSiteTracker(commentSiteMax),
+    comment_quota: {
+      quota: quotaResult.quota,
+      eligible: quotaResult.eligible,
+      selected: quotaResult.selected,
+      warn: quotaResult.warn,
+    },
     /** once = random file chưa đăng rồi MOVE posted · all_pages = 1 file cho mọi page, giữ kho */
     media_reuse: media_reuse === "all_pages" ? "all_pages" : "once",
+    /** Tick «khớp bộ»: file theo số tên + caption + link cùng số. Tắt = random media / mode comment riêng. */
+    match_bundle: !!match_bundle,
+    parallel_apps: !!parallel_apps,
+    execution_policy: {
+      order: "post_page_token",
+      sequential: true,
+      same_account_gap_ms: SAME_TOKEN_POST_GAP_MS,
+      uncertain_delivery: "manual_review_no_auto_retry",
+      scheduled: "enqueue_only",
+      comment: "after_publish",
+    },
     _sharedMedia: {},
     /** Direct Local: replan next day after finishing */
     continuous: !!continuous,
@@ -679,6 +954,7 @@ export function startJob({
       page_row_id: t.page_row_id,
       page_name: t.page_name || "—",
       page_id: t.page_id || null,
+      account_id: Number(t.account_id) || 0,
       status: "pending",
       percent: 0,
       message: "Chờ…",
@@ -710,6 +986,23 @@ export function stopJob(jobId) {
   }
   job.stop_requested = true;
   job.paused = false;
+  if (!liveJobIds.has(job.id)) {
+    for (const task of job.tasks || []) {
+      if (task.status === "pending" || task.status === "running") {
+        task.status = "skipped";
+        task.percent = 100;
+        task.message = "Đã dừng — bỏ qua";
+        task.finished_at = nowIso();
+      }
+    }
+    job.status = "stopped";
+    job.finished_at = nowIso();
+    recompute(job);
+    refreshResources(job);
+    notify(job, "warn", `Job dừng · ${job.title}`, "Đã dừng. Không gửi tiếp.");
+    emit(job);
+    return publicJob(job);
+  }
   notify(job, "warn", "Dừng job", "Sẽ dừng sau task hiện tại…");
   recompute(job);
   emit(job);
@@ -732,11 +1025,16 @@ export function resumeJob(jobId) {
   const job = jobs.get(jobId);
   if (!job) return null;
   if (!job.paused && job.status !== "paused") return publicJob(job);
+  const needsStart = !liveJobIds.has(job.id);
   job.paused = false;
+  job.stop_requested = false;
   if (job.status === "paused") job.status = "running";
   notify(job, "info", "Tiếp tục", "Job tiếp tục chạy.");
   recompute(job);
   emit(job);
+  if (needsStart) {
+    setImmediate(() => runJob(job.id).catch((e) => console.error("[job resume]", e)));
+  }
   return publicJob(job);
 }
 
@@ -748,6 +1046,75 @@ export function resumeJob(jobId) {
  *
  * Keeps original kind (post/schedule) and opts so schedule times / post_type are preserved.
  */
+/**
+ * Chặn 2 job dùng chung 1 media_folder (tránh once «ăn» kho all_pages / đè media).
+ * @returns {{ ok: true, folders: string[] } | { ok: false, error: string, conflicts: object[], folders: string[] }}
+ */
+export function checkMediaFolderConflicts(pageRowIds = [], { force = false } = {}) {
+  const folders = new Set();
+  const folderSamples = [];
+  for (const id of pageRowIds || []) {
+    const n = Number(id);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    try {
+      const cfg = getPagePostConfig(n);
+      const raw = String(cfg?.media_folder || "").trim();
+      if (!raw) continue;
+      const key = path.resolve(raw).toLowerCase();
+      if (!folders.has(key)) {
+        folders.add(key);
+        folderSamples.push(raw);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const conflicts = [];
+  for (const job of jobs.values()) {
+    if (!["running", "paused", "queued"].includes(String(job.status || ""))) continue;
+    const seen = new Set();
+    for (const t of job.tasks || []) {
+      const pid = Number(t.page_row_id);
+      if (!Number.isFinite(pid) || pid <= 0 || seen.has(pid)) continue;
+      seen.add(pid);
+      try {
+        const raw = String(t.opts?.media_folder || getPagePostConfig(pid)?.media_folder || "").trim();
+        if (!raw) continue;
+        const key = path.resolve(raw).toLowerCase();
+        if (folders.has(key)) {
+          conflicts.push({
+            job_id: job.id,
+            title: job.title,
+            status: job.status,
+            media_reuse: job.media_reuse || "once",
+            media_folder: raw,
+          });
+          break;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  if (conflicts.length && !force) {
+    const lines = conflicts.map(
+      (c) =>
+        `• [${c.status}] ${c.title || c.job_id} · reuse=${c.media_reuse} · kho=${c.media_folder}`
+    );
+    return {
+      ok: false,
+      folders: folderSamples,
+      conflicts,
+      error:
+        `Đang có job khác dùng CÙNG kho media — dễ đè file / thiếu media page sau.\n` +
+        `${lines.join("\n")}\n` +
+        `Cách xử lý: dừng job kia, hoặc tách media_folder khác nhau cho từng nhóm page, ` +
+        `hoặc (không khuyến nghị) gửi force_shared_media=true.`,
+    };
+  }
+  return { ok: true, folders: folderSamples, conflicts };
+}
+
 export function retryFailedJob(sourceJobId, { task_ids, page_row_ids } = {}) {
   const source = jobs.get(sourceJobId);
   if (!source) return null;
@@ -807,10 +1174,36 @@ export function retryFailedJob(sourceJobId, { task_ids, page_row_ids } = {}) {
     };
   });
 
+  // Giữ mode media của job gốc (all_pages = giữ kho). Trước đây quên truyền → mặc định
+  // "once" nên Đăng lại lỗi vẫn chuyển file vào «đã đăng» dù user đã tick cùng bộ media.
+  let mediaReuse = source.media_reuse === "all_pages" ? "all_pages" : "once";
+  if (mediaReuse !== "all_pages") {
+    let cur = source;
+    const seen = new Set([source.id]);
+    while (cur?.type === "retry_failed") {
+      const parentId = cur.tasks?.[0]?.opts?.retry_of_job_id;
+      if (!parentId || seen.has(parentId)) break;
+      seen.add(parentId);
+      const parent = jobs.get(parentId);
+      if (!parent) break;
+      if (parent.media_reuse === "all_pages") {
+        mediaReuse = "all_pages";
+        break;
+      }
+      cur = parent;
+    }
+  }
+
   return startJob({
     type: "retry_failed",
-    title: `Đăng lại lỗi · ${failed.length} task · từ ${source.title || source.id}`,
+    title:
+      `Đăng lại lỗi · ${failed.length} task · từ ${source.title || source.id}` +
+      (mediaReuse === "all_pages" ? " · cùng bộ media" : ""),
     tasks,
+    media_reuse: mediaReuse,
+    match_bundle: !!source.match_bundle,
+    pages_expected: source.pages_expected ?? null,
+    pages_planned: source.pages_planned ?? null,
   });
 }
 
@@ -891,15 +1284,116 @@ async function waitUntilTaskDue(job, task) {
   return false;
 }
 
-function burstGroupFrom(job, task) {
+function groupTasksByPage(tasks) {
+  const groups = new Map();
+  for (const task of tasks || []) {
+    const key = Number(task.page_row_id) || 0;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(task);
+  }
+  const chains = [...groups.values()];
+  return chains.length ? chains : [tasks || []];
+}
+
+function splitTasksByAccount(tasks) {
+  const groups = new Map();
+  for (const task of tasks || []) {
+    const key = Number(task.account_id) || 0;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(task);
+  }
+  const lanes = [...groups.values()];
+  return lanes.length ? lanes : [tasks || []];
+}
+
+function freezeRunFolders(tasks) {
+  for (const task of tasks || []) {
+    const id = Number(task.page_row_id);
+    if (!id) continue;
+    const cfg = getPagePostConfig(id);
+    task.opts = {
+      ...(task.opts || {}),
+      media_folder: String(cfg?.media_folder || ""),
+      posted_folder: String(cfg?.posted_folder || ""),
+      captions_folder: String(cfg?.captions_folder || ""),
+    };
+  }
+}
+
+function stampAccountIds(tasks) {
+  const ids = [...new Set((tasks || []).map((t) => Number(t.page_row_id)).filter((n) => n > 0))];
+  if (!ids.length) return;
+  const rows = getDb()
+    .prepare(
+      `SELECT id, account_id FROM fb_pages WHERE id IN (${ids.map(() => "?").join(",")})`
+    )
+    .all(...ids);
+  const map = new Map(rows.map((r) => [Number(r.id), Number(r.account_id) || 0]));
+  for (const task of tasks) {
+    task.account_id = map.get(Number(task.page_row_id)) || 0;
+  }
+}
+
+/**
+ * Contractual task order: BÀI → PAGE → TOKEN.
+ *
+ * A token is represented by account_id. Page numbers are local to each
+ * token, so Page 1 from every token is grouped together even when the
+ * underlying page_row_id values differ. Tasks without post_round retain
+ * their original single-round semantics.
+ */
+export function orderTasksByPostPageToken(tasks = []) {
+  const accountOrder = new Map();
+  const pageOrderByAccount = new Map();
+
+  for (const [index, task] of tasks.entries()) {
+    const accountId = Number(task.account_id) || 0;
+    if (!accountOrder.has(accountId)) accountOrder.set(accountId, accountOrder.size);
+    if (!pageOrderByAccount.has(accountId)) pageOrderByAccount.set(accountId, new Map());
+    const pageKey = Number(task.page_row_id) || String(task.page_name || task.id || `page-${index}`);
+    const pageOrder = pageOrderByAccount.get(accountId);
+    if (!pageOrder.has(pageKey)) pageOrder.set(pageKey, pageOrder.size);
+    const rawRound = task.post_round ?? task.opts?.post_round;
+    const round = Number.isFinite(Number(rawRound)) && Number(rawRound) > 0 ? Number(rawRound) : 1;
+  }
+
+  return tasks
+    .map((task, index) => {
+      const accountId = Number(task.account_id) || 0;
+      const pageKey = Number(task.page_row_id) || String(task.page_name || task.id || `page-${index}`);
+      const rawRound = task.post_round ?? task.opts?.post_round;
+      const round = Number.isFinite(Number(rawRound)) && Number(rawRound) > 0 ? Number(rawRound) : 1;
+      return {
+        task,
+        index,
+        round,
+        page: pageOrderByAccount.get(accountId).get(pageKey),
+        account: accountOrder.get(accountId),
+      };
+    })
+    .sort((a, b) =>
+      a.round - b.round ||
+      a.page - b.page ||
+      a.account - b.account ||
+      a.index - b.index
+    )
+    .map((item) => item.task);
+}
+
+// Backward-compatible export for integrations that imported the old helper.
+export function roundRobinTasksByAccount(tasks = []) {
+  return orderTasksByPostPageToken(tasks);
+}
+
+function burstGroupFrom(taskList, task) {
   if (!task?.opts?.burst) return [task];
-  const idx = job.tasks.indexOf(task);
+  const idx = taskList.indexOf(task);
   if (idx < 0) return [task];
   const pageId = Number(task.page_row_id);
   const t0 = Date.parse(task.run_at || task.opts?.run_at || "") || 0;
   const group = [task];
-  for (let i = idx + 1; i < job.tasks.length; i++) {
-    const t = job.tasks[i];
+  for (let i = idx + 1; i < taskList.length; i++) {
+    const t = taskList[i];
     if (["ok", "fail", "skipped", "running"].includes(t.status)) break;
     if (!t.opts?.burst || Number(t.page_row_id) !== pageId) break;
     const t1 = Date.parse(t.run_at || t.opts?.run_at || "") || 0;
@@ -915,8 +1409,8 @@ async function finishTaskResult(job, task, result) {
   task.percent = 100;
   if (result?.ok === false || result?.scheduled === false) {
     task.status = "fail";
-    task.error = result.error || "Thất bại";
-    task.message = `Thất bại: ${task.error}`;
+    task.error = noticeFromOutcome(result);
+    task.message = task.error;
     notify(job, "error", `FAIL · ${task.page_name}`, `${task.label}: ${task.error}`);
   } else {
     task.status = "ok";
@@ -934,11 +1428,16 @@ async function finishTaskResult(job, task, result) {
         String(cr.comment_text || cr.comment_id || "").slice(0, 160)
       );
     } else if (cr?.comment_pending) {
+      const due = cr.comment_ready_at ? formatVnClock(cr.comment_ready_at) : "";
       notify(
         job,
         "info",
-        `Comment ⏳ · ${task.page_name}`,
-        "Chờ bài publish rồi gửi comment (after_publish / retry)"
+        `Comment đã hẹn · ${task.page_name}`,
+        due
+          ? `Gửi comment lúc ${due}${
+              Number(cr.comment_delay_minutes) > 0 ? ` (${cr.comment_delay_minutes} phút sau publish)` : ""
+            }. Tool phải đang mở.`
+          : "Đã lưu câu. Gửi sau khi bài publish. Tool phải đang mở."
       );
     }
   }
@@ -963,8 +1462,7 @@ async function runBurstParallel(job, group) {
     return;
   }
   const t0 = Date.parse(group[0].run_at || group[0].opts?.run_at || "") || Date.now();
-  await Promise.all(
-    group.map(async (task, i) => {
+  for (const [i, task] of group.entries()) {
       const t1 = Date.parse(task.run_at || task.opts?.run_at || "") || t0;
       const delay = Math.max(0, Math.min(30_000, t1 - t0, i * 15_000));
       if (delay > 0) await sleep(delay);
@@ -987,21 +1485,47 @@ async function runBurstParallel(job, group) {
       } catch (e) {
         task.status = "fail";
         task.percent = 100;
-        task.error = e.message;
-        task.message = `Thất bại: ${e.message}`;
-        notify(job, "error", `FAIL · ${task.page_name}`, e.message);
+        task.error = noticeFromOutcome(e);
+        task.message = task.error;
+        notify(job, "error", `FAIL · ${task.page_name}`, task.error);
       }
       task.finished_at = nowIso();
       refreshResources(job);
       recompute(job);
       emit(job);
-    })
-  );
+  }
+}
+
+const liveJobIds = new Set();
+
+/** Execute the already ordered task list one task at a time. */
+async function runRoundRobinAccounts(job, tasks) {
+  const laneState = new Map();
+  for (const task of tasks || []) {
+    if (job.stop_requested) return;
+    const accountId = accountOf(task);
+    if (!laneState.has(accountId)) laneState.set(accountId, { lastDone: 0, nextGap: SAME_TOKEN_POST_GAP_MS });
+    const state = laneState.get(accountId);
+    if (state.lastDone) {
+      const wait = state.nextGap - (Date.now() - state.lastDone);
+      if (wait > 0) await sleepUnlessStopped(job, wait);
+    }
+    if (job.stop_requested) return;
+    await runPageChain(job, [task]);
+    state.lastDone = Date.now();
+    state.nextGap = task.community_spam ? SPAM_SAME_TOKEN_GAP_MS : SAME_TOKEN_POST_GAP_MS;
+  }
 }
 
 async function runJob(jobId) {
+  if (liveJobIds.has(jobId)) return;
+  liveJobIds.add(jobId);
   const job = jobs.get(jobId);
-  if (!job) return;
+  if (!job) {
+    liveJobIds.delete(jobId);
+    return;
+  }
+  try {
   if (!job._commentSiteTracker) {
     let max = 0;
     try {
@@ -1014,36 +1538,80 @@ async function runJob(jobId) {
   }
   job.status = "running";
   job.started_at = nowIso();
-  notify(job, "info", `Job bắt đầu · ${job.title}`, `${job.tasks.length} nhiệm vụ đang chạy tuần tự.`);
+  const accountCount = new Set((job.tasks || []).map((task) => accountOf(task))).size;
+  notify(
+    job,
+    "info",
+    `Job bắt đầu · ${job.title}`,
+    accountCount > 1
+      ? `${accountCount} token · tuần tự Bài → Page → Token · comment đi cùng từng bài · ${job.tasks.length} nhiệm vụ.`
+      : `1 token · đăng tuần tự, cách tối thiểu ${SAME_TOKEN_POST_GAP_MS / 1000}s · ${job.tasks.length} nhiệm vụ.`
+  );
   recompute(job);
+  if (job.progress && !job.progress.percent && job.tasks.length) {
+    job.progress.current_label = `Đã nhận ${job.tasks.length} bài · đang gửi Facebook`;
+  }
   emit(job);
 
+  try {
+    await runRoundRobinAccounts(job, job.tasks);
+    await finishJobRun(job);
+  } catch (e) {
+    console.error("[job]", e);
+    notify(job, "error", "Job lỗi khi kết thúc", e.message || String(e));
+  } finally {
+    if (closeJobIfDrained(job)) {
+      recompute(job);
+      emit(job);
+    }
+  }
+  } finally {
+    liveJobIds.delete(jobId);
+  }
+}
+
+function accountOf(task) {
+  return Number(task?.account_id) || 0;
+}
+
+async function sleepUnlessStopped(job, ms) {
+  const end = Date.now() + Math.max(0, ms);
+  while (!job.stop_requested && Date.now() < end) {
+    await sleep(Math.min(1000, end - Date.now()));
+  }
+}
+
+async function runAccountLane(job, lane, state = null) {
+  const chains = Array.isArray(lane?.[0]) ? lane : groupTasksByPage(lane);
+  const laneState = state || { lastDone: new Map(), nextGap: new Map() };
+  const lastDone = laneState.lastDone;
+  const nextGap = laneState.nextGap;
+  for (const chain of chains) {
+    if (job.stop_requested) return;
+    const accountId = accountOf(chain[0]);
+    const prev = lastDone.get(accountId) || 0;
+    if (prev) {
+      const gapMs = nextGap.get(accountId) || SAME_TOKEN_POST_GAP_MS;
+      const wait = gapMs - (Date.now() - prev);
+      if (wait > 0) await sleepUnlessStopped(job, wait);
+    }
+    if (job.stop_requested) return;
+    await runPageChain(job, chain);
+    lastDone.set(accountId, Date.now());
+    if ((chain || []).some((t) => t.community_spam)) {
+      nextGap.set(accountId, SPAM_SAME_TOKEN_GAP_MS);
+    }
+  }
+}
+
+async function runPageChain(job, chain) {
   const consumed = new Set();
-  for (const task of job.tasks) {
+  for (const task of chain) {
     // Resume-safe: task đã có kết quả cuối (ok/fail/skipped) thì KHÔNG chạy lại
     // — tránh đăng trùng khi job được re-arm sau khi mở lại app.
     if (consumed.has(task) || ["ok", "fail", "skipped"].includes(task.status)) {
       continue;
     }
-    const burstGroup = burstGroupFrom(job, task);
-    if (burstGroup.length > 1) {
-      for (const t of burstGroup) consumed.add(t);
-      if (job.stop_requested) {
-        for (const t of burstGroup) {
-          if (t.status === "pending") {
-            t.status = "skipped";
-            t.percent = 100;
-            t.message = "Đã dừng — bỏ qua";
-            t.finished_at = nowIso();
-          }
-        }
-        continue;
-      }
-      await waitWhilePaused(job);
-      await runBurstParallel(job, burstGroup);
-      continue;
-    }
-
     if (job.stop_requested) {
       if (task.status === "pending") {
         task.status = "skipped";
@@ -1073,7 +1641,8 @@ async function runJob(jobId) {
     emit(job);
 
     try {
-      const due = await waitUntilTaskDue(job, task);
+      // Hẹn giờ Facebook gửi lịch ngay. Không chờ đến giờ đã hẹn (đó là đăng trực tiếp).
+      const due = task.kind === "schedule" ? true : await waitUntilTaskDue(job, task);
       if (!due) {
         task.status = "skipped";
         task.percent = 100;
@@ -1084,7 +1653,9 @@ async function runJob(jobId) {
         continue;
       }
       task.percent = 40;
-      task.message = "Đã đến giờ · đang đăng trực tiếp qua Facebook API…";
+      task.message = task.kind === "schedule"
+        ? `Đang hẹn lên Facebook · ${task.page_name || ""}`
+        : "Đã đến giờ · đang đăng trực tiếp qua Facebook API…";
       recompute(job);
       emit(job);
       const result = await executeTaskWithRetry(job, task);
@@ -1092,8 +1663,13 @@ async function runJob(jobId) {
       task.percent = 100;
       if (result?.ok === false || result?.scheduled === false) {
         task.status = "fail";
-        task.error = result.error || "Thất bại";
-        task.message = `Thất bại: ${task.error}`;
+        task.error = noticeFromOutcome(result);
+        if (isDeliveryUncertain(result)) {
+          task.delivery_uncertain = true;
+          task.error = `Không rõ Facebook đã nhận bài hay chưa — không tự đăng lại. ${task.error}`;
+        }
+        task.message = task.error;
+        noteTaskCommunitySpam(task, result);
         notify(
           job,
           "error",
@@ -1122,9 +1698,14 @@ async function runJob(jobId) {
     } catch (e) {
       task.status = "fail";
       task.percent = 100;
-      task.error = e.message;
-      task.message = `Thất bại: ${e.message}`;
-      notify(job, "error", `FAIL · ${task.page_name}`, e.message);
+      task.error = noticeFromOutcome(e);
+      if (isDeliveryUncertain(e)) {
+        task.delivery_uncertain = true;
+        task.error = `Không rõ Facebook đã nhận bài hay chưa — không tự đăng lại. ${task.error}`;
+      }
+      task.message = task.error;
+      noteTaskCommunitySpam(task, e);
+      notify(job, "error", `FAIL · ${task.page_name}`, task.error);
       const paths = getReportPaths();
       job.report_files = uniqueFiles(job.report_files, {
         csv: paths.csv_exists ? paths.csv : null,
@@ -1138,7 +1719,7 @@ async function runJob(jobId) {
     emit(job);
 
     // Pace: gap 0 / cùng mốc giờ → bắn nhanh (chỉ ~80ms chống rate limit nhẹ)
-    const next = job.tasks[job.tasks.indexOf(task) + 1];
+    const next = chain[chain.indexOf(task) + 1];
     const tDue = Date.parse(task.run_at || task.opts?.run_at || "") || 0;
     const nDue = next
       ? Date.parse(next.run_at || next.opts?.run_at || "") || 0
@@ -1148,10 +1729,29 @@ async function runJob(jobId) {
       tDue > 0 &&
       nDue > 0 &&
       Math.abs(nDue - tDue) < 15_000; // cùng đợt < 15s
-    await sleep(burst ? 80 : 350);
+    const paceMs = next
+      ? task.community_spam
+        ? SPAM_SAME_TOKEN_GAP_MS
+        : SAME_TOKEN_POST_GAP_MS
+      : task.kind === "schedule"
+        ? 40
+        : burst
+          ? 80
+          : 350;
+    if (paceMs >= 1000) await sleepUnlessStopped(job, paceMs);
+    else if (paceMs > 0) await sleep(paceMs);
   }
+}
 
-  // Mark remaining pending as skipped if stopped mid-run
+async function runTasksParallel(job, tasks) {
+  const list = tasks || [];
+  if (!list.length) return;
+  stampAccountIds(list);
+  freezeRunFolders(list);
+  await runRoundRobinAccounts(job, list);
+}
+
+async function finishJobRun(job) {
   for (const task of job.tasks) {
     if (task.status === "pending") {
       task.status = "skipped";
@@ -1163,6 +1763,7 @@ async function runJob(jobId) {
 
   if (job.stop_requested) {
     job.status = "stopped";
+    flushSharedInboxToPosted(job);
     job.finished_at = nowIso();
     recompute(job);
     refreshResources(job);
@@ -1191,7 +1792,7 @@ async function runJob(jobId) {
     !job.stop_requested
   ) {
     try {
-      const { buildRunNowPlan } = await import("./rotationPlan.js");
+      const { buildRunNowPlan, continuousReplanSettings } = await import("./rotationPlan.js");
       job.day_cycle = (job.day_cycle || 0) + 1;
       const forceDay = job.next_plan_day || null;
       notify(
@@ -1207,14 +1808,14 @@ async function runJob(jobId) {
 
       // Giữ đúng phạm vi page lúc bấm Chạy (selected + page_row_ids) — không mở rộng all
       const cont = job.continuous_settings || {};
+      const replan = continuousReplanSettings(cont, forceDay);
       const plan = buildRunNowPlan({
-        ...cont,
+        ...replan,
         page_target_mode: cont.page_target_mode === "all" ? "all" : "selected",
         page_row_ids:
           cont.page_target_mode === "all"
             ? []
             : (cont.page_row_ids || []).map(Number).filter((n) => n > 0),
-        force_plan_day: forceDay || undefined,
       });
       if (plan.blockers?.length || !plan.slots?.length) {
         notify(
@@ -1232,6 +1833,21 @@ async function runJob(jobId) {
       }
 
       const firstMs = plan.slots[0].unix * 1000;
+      if (firstMs - Date.now() <= 60_000) {
+        notify(
+          job,
+          "info",
+          "Chưa tới ngày tiếp",
+          "Không đăng thêm bài ngay. Chờ đúng giờ ngày kế."
+        );
+        job.message = `Chạy liên tục · chờ ngày ${plan.summary?.plan_day || "kế"} · không đăng thêm ngay`;
+        emit(job);
+        for (let w = 0; w < 30 && !job.stop_requested; w++) {
+          await sleep(60_000);
+          await waitWhilePaused(job);
+        }
+        continue;
+      }
       while (!job.stop_requested && firstMs - Date.now() > 60_000) {
         const remain = firstMs - Date.now();
         job.message = `Chạy liên tục · chờ ngày ${plan.summary?.plan_day || "mới"} · còn ${Math.ceil(remain / 60000)} phút`;
@@ -1242,17 +1858,41 @@ async function runJob(jobId) {
       if (job.stop_requested) break;
 
       const base = job.tasks.length;
-      for (const s of plan.slots) {
+      let dayTasks = plan.slots.map((s) => ({
+        kind: "post",
+        page_row_id: s.page_row_id,
+        page_name: s.page_name,
+        page_id: s.page_id,
+        run_at: s.iso,
+        label: s.immediate
+          ? `Ngày ${plan.summary?.plan_day || "?"} · Vòng ${s.post_round} · đăng ngay · ${s.account_name}`
+          : `Ngày ${plan.summary?.plan_day || "?"} · Vòng ${s.post_round} · chờ ${s.local_label} · ${s.account_name}`,
+        opts: {
+          // Direct Local continuous: gap/quota do lịch, không chặn lại
+          ignore_quota: true,
+          ignore_interval: true,
+          burst: !!s.burst,
+          post_type: s.planned_post_type,
+          run_at: s.iso,
+          use_caption: job.continuous_settings?.use_caption !== false,
+          post_round: s.post_round || 1,
+        },
+        _slot: s,
+      }));
+      // Quota comment-link theo ngày mới (chung cả job ngày đó)
+      dayTasks = applyCommentLinkQuota(
+        dayTasks,
+        cont.comment_link_posts_per_run || 0
+      ).items;
+      for (const t of dayTasks) {
         job.tasks.push({
           id: `${job.id}-t${job.tasks.length + 1}`,
           index: job.tasks.length + 1,
           kind: "post",
-          label: s.immediate
-            ? `Ngày ${plan.summary?.plan_day || "?"} · Vòng ${s.post_round} · đăng ngay · ${s.account_name}`
-            : `Ngày ${plan.summary?.plan_day || "?"} · Vòng ${s.post_round} · chờ ${s.local_label} · ${s.account_name}`,
-          page_row_id: s.page_row_id,
-          page_name: s.page_name,
-          page_id: s.page_id,
+          label: t.label,
+          page_row_id: t.page_row_id,
+          page_name: t.page_name,
+          page_id: t.page_id,
           status: "pending",
           percent: 0,
           message: "Chờ…",
@@ -1260,17 +1900,8 @@ async function runJob(jobId) {
           result: null,
           started_at: null,
           finished_at: null,
-          run_at: s.iso,
-          opts: {
-            // Direct Local continuous: cùng first batch — gap/quota do lịch, không chặn lại
-            ignore_quota: true,
-            ignore_interval: true,
-            burst: !!s.burst,
-            post_type: s.planned_post_type,
-            run_at: s.iso,
-            use_caption: job.continuous_settings?.use_caption !== false,
-            post_round: s.post_round || 1,
-          },
+          run_at: t.run_at,
+          opts: t.opts || {},
         });
       }
       job.next_plan_day = plan.summary?.next_plan_day || null;
@@ -1286,86 +1917,7 @@ async function runJob(jobId) {
       );
       emit(job);
 
-      const consumedDay = new Set();
-      for (let i = base; i < job.tasks.length; i++) {
-        if (job.stop_requested) break;
-        const task = job.tasks[i];
-        if (consumedDay.has(task) || ["ok", "fail", "skipped"].includes(task.status)) continue;
-        const burstGroup = burstGroupFrom(job, task);
-        if (burstGroup.length > 1) {
-          for (const t of burstGroup) consumedDay.add(t);
-          await waitWhilePaused(job);
-          if (job.stop_requested) {
-            for (const t of burstGroup) {
-              if (t.status === "pending") {
-                t.status = "skipped";
-                t.percent = 100;
-                t.message = "Đã dừng — bỏ qua";
-                t.finished_at = nowIso();
-              }
-            }
-            continue;
-          }
-          await runBurstParallel(job, burstGroup);
-          continue;
-        }
-        await waitWhilePaused(job);
-        if (job.stop_requested) {
-          if (task.status === "pending") {
-            task.status = "skipped";
-            task.percent = 100;
-            task.message = "Đã dừng — bỏ qua";
-            task.finished_at = nowIso();
-          }
-          continue;
-        }
-        task.status = "running";
-        task.percent = 10;
-        task.message = "Đang chạy…";
-        task.started_at = nowIso();
-        recompute(job);
-        emit(job);
-        try {
-          const due = await waitUntilTaskDue(job, task);
-          if (!due) {
-            task.status = "skipped";
-            task.percent = 100;
-            task.message = "Đã dừng trong lúc chờ giờ đăng trực tiếp";
-            task.finished_at = nowIso();
-            recompute(job);
-            emit(job);
-            continue;
-          }
-          task.percent = 40;
-          task.message = "Đã đến giờ · đang đăng trực tiếp qua Facebook API…";
-          recompute(job);
-          emit(job);
-          const result = await executeTask(task, job);
-          task.result = summarizeResult(result);
-          task.percent = 100;
-          if (result?.ok === false || result?.scheduled === false) {
-            task.status = "fail";
-            task.error = result.error || "Thất bại";
-            task.message = `Thất bại: ${task.error}`;
-            notify(job, "error", `FAIL · ${task.page_name}`, `${task.label}: ${task.error}`);
-          } else {
-            task.status = "ok";
-            task.message = "Xong";
-            notify(job, "success", `OK · ${task.page_name}`, task.label);
-          }
-        } catch (e) {
-          task.status = "fail";
-          task.error = e.message;
-          task.percent = 100;
-          task.message = `Thất bại: ${e.message}`;
-          notify(job, "error", `FAIL · ${task.page_name}`, e.message);
-        }
-        task.finished_at = nowIso();
-        refreshResources(job);
-        recompute(job);
-        emit(job);
-        await sleep(350);
-      }
+      await runTasksParallel(job, job.tasks.slice(base));
     } catch (e) {
       console.error("[job continuous]", e);
       notify(job, "error", "Lỗi lập ngày liên tục", e.message);
@@ -1375,6 +1927,7 @@ async function runJob(jobId) {
 
   if (job.stop_requested) {
     job.status = "stopped";
+    flushSharedInboxToPosted(job);
     job.finished_at = nowIso();
     recompute(job);
     refreshResources(job);
@@ -1383,13 +1936,40 @@ async function runJob(jobId) {
     return;
   }
 
+  recompute(job);
+  if ((job.progress?.comments_pending || 0) > 0) {
+    const alreadyWaiting = job.status === "waiting_comment";
+    job.status = "waiting_comment";
+    job.finished_at = null;
+    recompute(job);
+    refreshResources(job);
+    if (!alreadyWaiting) {
+      notify(
+        job,
+        "warn",
+        `Đợi comment · ${job.title}`,
+        `Bài đã xong ${job.progress.ok}/${job.progress.total}. Còn ${job.progress.comments_pending} comment chưa lên. Chưa báo 100%.`
+      );
+    }
+    emit(job);
+    return;
+  }
+  closeFinishedJob(job);
+}
+
+function closeFinishedJob(job) {
+  const commentsFail = job.progress.comments_fail || 0;
+  const commentsOk = job.progress.comments_ok || 0;
+  const commentsPending = job.progress.comments_pending || 0;
   job.status =
     job.progress.fail && !job.progress.ok
       ? "fail"
-      : job.progress.fail
+      : job.progress.fail || commentsFail
         ? "partial"
         : "ok";
+  flushSharedInboxToPosted(job);
   job.finished_at = nowIso();
+  recompute(job);
   job.outcome = {
     expected: job.progress.total,
     success: job.progress.ok,
@@ -1397,14 +1977,81 @@ async function runJob(jobId) {
     skipped: job.progress.skipped,
     shortfall: Math.max(0, job.progress.total - job.progress.ok),
   };
-  recompute(job);
+  const commentNote =
+    commentsOk + commentsFail > 0
+      ? ` · comment ✓${commentsOk} ✗${commentsFail}`
+      : "";
+  const fullComments = commentsOk > 0 && !commentsFail && !commentsPending;
   notify(
     job,
     job.status === "ok" ? "success" : job.status === "partial" ? "warn" : "error",
-    job.continuous ? `Kết thúc chu kỳ · ${job.title}` : `Job xong · ${job.title}`,
-    `OK ${job.progress.ok} · FAIL ${job.progress.fail} · ${job.progress.percent}%`
+    fullComments
+      ? `Đủ bài và comment · ${job.title}`
+      : job.continuous
+        ? `Kết thúc chu kỳ · ${job.title}`
+        : `Job xong · ${job.title}`,
+    `OK ${job.progress.ok} · FAIL ${job.progress.fail} · ${job.progress.percent}%${commentNote}`
   );
   emit(job);
+}
+
+/** Job đang đợi comment: đọc log, lên 100% khi comment đã có hoặc đã fail hẳn. */
+export function settleWaitingCommentJobs() {
+  const waiting = [...jobs.values()].filter((j) => j.status === "waiting_comment");
+  if (!waiting.length) return { jobs: 0, updated: 0 };
+  const db = getDb();
+  let updated = 0;
+  for (const job of waiting) {
+    const pending = (job.tasks || []).filter((t) => {
+      const r = t.result || {};
+      return t.status === "ok" && !r.comment_id && !r.comment_error && (r.comment_pending || r.comment_text);
+    });
+    const ids = [...new Set(pending.map((t) => String(t.result?.post_id || "").trim()).filter(Boolean))];
+    if (!ids.length) {
+      closeFinishedJob(job);
+      continue;
+    }
+    const rows = db
+      .prepare(
+        `SELECT fb_post_id, comment_id, comment_text FROM post_logs WHERE fb_post_id IN (${ids.map(() => "?").join(",")})`
+      )
+      .all(...ids);
+    const byId = new Map(rows.map((r) => [String(r.fb_post_id), r]));
+    let changed = false;
+    for (const task of pending) {
+      const row = byId.get(String(task.result.post_id));
+      if (!row) continue;
+      const text = String(row.comment_text || "");
+      if (row.comment_id) {
+        task.result = {
+          ...task.result,
+          comment_id: row.comment_id,
+          comment_text: text || task.result.comment_text,
+          comment_pending: false,
+          comment_error: null,
+        };
+        task.message = successMessage(task, task.result);
+        changed = true;
+        updated += 1;
+      } else if (text.startsWith("[comment failed]")) {
+        task.result = {
+          ...task.result,
+          comment_error: text.replace(/^\[comment failed\]\s*/, "").slice(0, 180),
+          comment_pending: false,
+        };
+        task.message = successMessage(task, task.result);
+        changed = true;
+        updated += 1;
+      }
+    }
+    recompute(job);
+    if ((job.progress.comments_pending || 0) === 0) {
+      closeFinishedJob(job);
+    } else if (changed) {
+      emit(job);
+    }
+  }
+  return { jobs: waiting.length, updated };
 }
 
 function uniqueFiles(list, paths) {
@@ -1422,39 +2069,83 @@ function summarizeResult(result) {
     result.log?.comment_text ||
     null;
   const commentId = result.comment_id || result.log?.comment_id || null;
-  const commentError = result.comment_error || null;
-  const commentPending =
-    !!result.comment_pending ||
-    (!!commentText && !commentId && !commentError && !!result.scheduled);
+  const hardFail = String(commentText || "").startsWith("[comment failed]");
+  const willRetry =
+    !commentId &&
+    !hardFail &&
+    !!String(commentText || "").trim() &&
+    (!!result.comment_pending || (!!result.scheduled && !result.comment_error));
+  const commentError = willRetry
+    ? null
+    : result.comment_error || (hardFail ? String(commentText).replace(/^\[comment failed\]\s*/, "").slice(0, 180) : null);
+  const commentPending = willRetry;
   return {
     ok: result.ok !== false && result.scheduled !== false,
-    post_id: result.post?.post_id || result.log?.fb_post_id || null,
-    post_url: result.post?.post_url || result.log?.fb_post_url || null,
+    post_id: result.post?.post_id || result.post_id || result.log?.fb_post_id || null,
+    post_url: result.post?.post_url || result.post_url || result.log?.fb_post_url || null,
     post_type: result.post_type || result.log?.post_type || null,
     caption: result.log?.caption || null,
     media_moved_to: result.media_moved_to || null,
-    scheduled_at: result.scheduled_at_iso || result.log?.scheduled_publish_time || null,
+    scheduled_at: result.scheduled_at_iso || result.scheduled_at || result.log?.scheduled_publish_time || null,
     error: result.error || null,
     comment_id: commentId,
     comment_text: commentText,
     comment_error: commentError,
     comment_pending: commentPending,
     comment_when: result.comment_when || null,
+    comment_delay_minutes:
+      result.comment_delay_minutes != null ? Number(result.comment_delay_minutes) : null,
+    comment_min_likes: result.comment_min_likes != null ? Number(result.comment_min_likes) : null,
+    comment_ready_at: result.comment_ready_at || result.log?.comment_due_at || null,
+    comment_preview_fallback: !!result.comment_preview_fallback,
+    comment_preview_note: result.comment_preview_note || null,
+    caption_sent: result.caption_sent != null ? !!result.caption_sent : !!String(result.log?.caption || result.caption || "").trim(),
     comment_immediate: !!result.comment_immediate || !!commentId,
+    link_held_for_comment: Array.isArray(result.link_held_for_comment || result.post?.link_held_for_comment)
+      ? (result.link_held_for_comment || result.post?.link_held_for_comment).length > 0
+      : !!(result.link_held_for_comment || result.post?.link_held_for_comment),
   };
+}
+
+function formatVnClock(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "");
+  return date.toLocaleString("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    hour12: false,
+  });
+}
+
+function noticeFromOutcome(resultOrErr) {
+  const formatted = formatFbNotice(resultOrErr);
+  if (formatted) return formatted;
+  return String(resultOrErr?.error || resultOrErr?.message || "Thất bại");
 }
 
 function successMessage(task, result) {
   const r = summarizeResult(result);
-  const link = r?.post_url || r?.post_id || "—";
-  let base =
+  const link = r?.post_url || (r?.post_id ? `https://www.facebook.com/${r.post_id}` : "—");
+  const kind = r?.post_type || task.opts?.post_type || "";
+  const when =
     task.kind === "schedule" || result?.scheduled
-      ? `Đã hẹn ${r?.post_type || ""} · ${r?.scheduled_at || ""} · ${link}`
-      : `Đã đăng ${r?.post_type || ""} · ${link}`;
-  if (r?.comment_error) base += ` · comment ✗ ${r.comment_error}`;
-  else if (r?.comment_id) base += " · comment ✓";
-  else if (r?.comment_pending) base += " · comment ⏳ chờ sau publish";
-  else if (r?.comment_text) base += " · comment đã gán";
+      ? `Đã hẹn ${kind} · giờ đã gửi Facebook ${formatVnClock(r?.scheduled_at)}`
+      : `Đã đăng ${kind} ngay`;
+  const comment = r?.comment_id
+    ? r.comment_preview_fallback
+      ? "comment: đã lên, Facebook không tạo thẻ preview"
+      : "comment: đã lên"
+    : r?.comment_error
+      ? `comment: ${r.comment_error}`
+      : r?.comment_pending
+        ? r.comment_ready_at
+          ? `comment: đã hẹn ${formatVnClock(r.comment_ready_at)}${
+              Number(r.comment_delay_minutes) > 0 ? ` · sau ${r.comment_delay_minutes} phút publish` : " · sau khi bài publish"
+            }${Number(r.comment_min_likes) > 0 ? ` · chờ ≥ ${r.comment_min_likes} like` : ""}`
+          : "comment: đã lưu câu, gửi sau khi bài publish"
+        : "comment: không gửi";
+  let base = `${when} · ${task.page_name || ""} · ${link} · caption: ${r?.caption_sent ? "có" : "không"} · ${comment}`;
+  if (r?.link_held_for_comment) base += " · link trong caption đã chuyển xuống comment";
+  if (r?.comment_preview_note) base += `\n${r.comment_preview_note}`;
   return base;
 }
 
@@ -1477,6 +2168,14 @@ async function executeTask(task, job = null) {
       comment_site_tracker: job?._commentSiteTracker || null,
       media_reuse: job?.media_reuse || "once",
       shared_media: job?._sharedMedia || null,
+      match_bundle: !!job?.match_bundle,
+      comment_skip: !!task.opts.comment_skip,
+      media_folder: task.opts.media_folder || "",
+      posted_folder: task.opts.posted_folder || "",
+      captions_folder: task.opts.captions_folder || "",
+      ...(task.opts.comment_on === true || task.opts.comment_on === false
+        ? { comment_on: task.opts.comment_on }
+        : {}),
     });
   }
   if (kind === "schedule") {
@@ -1490,6 +2189,11 @@ async function executeTask(task, job = null) {
       comment_site_tracker: job?._commentSiteTracker || null,
       media_reuse: job?.media_reuse || "once",
       shared_media: job?._sharedMedia || null,
+      match_bundle: !!job?.match_bundle,
+      comment_skip: !!task.opts.comment_skip,
+      media_folder: task.opts.media_folder || "",
+      posted_folder: task.opts.posted_folder || "",
+      captions_folder: task.opts.captions_folder || "",
     });
   }
   throw new Error(`Unknown task kind: ${kind}`);
@@ -1510,19 +2214,64 @@ function asTransientProbe(resultOrErr) {
   return { message: String(resultOrErr) };
 }
 
+function noteTaskCommunitySpam(task, source) {
+  const probe = asTransientProbe(source);
+  if (!isCommunitySpamBlock(source) && !isCommunitySpamBlock(probe)) return;
+  task.community_spam = true;
+  const notice = noticeFromOutcome(source?.fb ? source : probe);
+  if (notice) {
+    task.error = notice;
+    task.message = notice;
+  }
+}
+
+function taskCircuitAction(task) {
+  const kind = String(task?.kind || "");
+  if (kind === "schedule" || kind.includes("schedule")) return "schedule";
+  return "post";
+}
+
+function openCircuitForTask(task, err, action) {
+  const probe = asTransientProbe(err);
+  const code = Number(probe?.code ?? probe?.fb?.code ?? err?.code ?? err?.fb?.code ?? NaN);
+  const act = code === 190 ? "auth" : action;
+  if (!isSpamBlockError(probe) && !isPermissionError(probe)) return false;
+  openPageCircuit(task?.page_row_id, act, probe?.message || err?.message || err?.error || "");
+  return true;
+}
+
 function isRetryableTaskOutcome(resultOrErr) {
   const probe = asTransientProbe(resultOrErr);
+  // A timeout / empty response may happen after Facebook accepted the post.
+  // Never resend automatically when delivery is uncertain.
+  if (isDeliveryUncertain(resultOrErr) || isDeliveryUncertain(probe)) return false;
+  if (isSpamBlockError(resultOrErr) || isSpamBlockError(probe)) return false;
+  if (isPermissionError(resultOrErr) || isPermissionError(probe)) return false;
+  if (isCommunitySpamBlock(resultOrErr) || isCommunitySpamBlock(probe)) return false;
   const msg = String(probe?.message || resultOrErr?.message || resultOrErr?.error || "");
   const code = String(probe?.code || resultOrErr?.code || "");
-  // File media mất (job khác đã move) — không retry 7 lần vô ích
+  // File media mất / HTTP 413 form — không retry 7 lần vô ích
   if (
     code === "MEDIA_FILE_MISSING" ||
+    code === "PAYLOAD_TOO_LARGE" ||
     resultOrErr?.permanent === true ||
-    /file not found|cannot move missing file|ENOENT/i.test(msg)
+    Number(resultOrErr?.status ?? resultOrErr?.http_status ?? NaN) === 413 ||
+    /file not found|cannot move missing file|ENOENT|\bhttp\s*413\b|payload too large|file quá lớn cho POST form/i.test(
+      msg
+    )
   ) {
     return false;
   }
   return isTransientGraphError(probe);
+}
+
+function isDeliveryUncertain(value) {
+  if (!value) return false;
+  if (value.delivery_uncertain === true || value.uncertain === true || value.network === true) return true;
+  const code = String(value.code || "").toUpperCase();
+  const msg = String(value.message || value.error || "");
+  return ["FETCH_FAILED", "EMPTY_GRAPH_BODY", "BAD_GRAPH_JSON", "UND_ERR_CONNECT_TIMEOUT", "ETIMEDOUT", "ECONNRESET"].includes(code) ||
+    /fetch failed|timeout|timed out|trả về rỗng|json lỗi|ECONNRESET|socket hang up/i.test(msg);
 }
 
 /**
@@ -1537,11 +2286,24 @@ async function executeTaskWithRetry(job, task) {
   let lastError = null;
   let autoRetries = 0;
 
+  const circuitAction = taskCircuitAction(task);
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (job.stop_requested) {
       const err = new Error("Đã dừng khi đang retry Facebook");
       err.code = "STOPPED";
       throw err;
+    }
+    const authGate = isPageCircuitOpen(task.page_row_id, "auth");
+    const gate = authGate.open
+      ? authGate
+      : isPageCircuitOpen(task.page_row_id, circuitAction);
+    const gateAction = authGate.open ? "auth" : circuitAction;
+    if (gate.open) {
+      return {
+        ok: false,
+        skipped: true,
+        error: `Page đang khóa ${gateAction}. Còn ${gate.seconds_left}s. ${gate.reason || ""}`.trim(),
+      };
     }
     try {
       if (attempt > 0) {
@@ -1559,7 +2321,7 @@ async function executeTaskWithRetry(job, task) {
         }
         return result;
       }
-      if (!isRetryableTaskOutcome(result) || attempt >= maxAttempts - 1) {
+      if (openCircuitForTask(task, result, circuitAction) || !isRetryableTaskOutcome(result) || attempt >= maxAttempts - 1) {
         if (autoRetries > 0 && result && typeof result === "object") {
           result.error = `${result.error || "Thất bại"} (đã tự retry ${autoRetries} lần)`;
         }
@@ -1570,7 +2332,7 @@ async function executeTaskWithRetry(job, task) {
       lastError.code = result.fb?.code || result.code;
     } catch (e) {
       lastError = e;
-      if (!isRetryableTaskOutcome(e) || attempt >= maxAttempts - 1) {
+      if (openCircuitForTask(task, e, circuitAction) || !isRetryableTaskOutcome(e) || attempt >= maxAttempts - 1) {
         if (autoRetries > 0) {
           e.message = `${e.message || e} (đã tự retry ${autoRetries} lần)`;
         }
@@ -1633,23 +2395,54 @@ export function startBulkPostJob({
   ignore_quota = false,
   ignore_interval = false,
   title,
+  comment_link_posts_per_run = 0,
+  match_bundle = false,
+  parallel_apps = false,
+  media_reuse = "once",
+  count_per_page = 1,
+  post_type = "video",
+  use_caption = true,
+  comment_on,
+  account_group_ids = [],
 } = {}) {
+  applyRunMedia(page_row_ids, account_group_ids);
   const meta = new Map(pagesMeta.map((p) => [p.id, p]));
-  const tasks = (page_row_ids || []).map((id) => {
+  const rounds = Math.max(1, Math.min(200, Number(count_per_page) || 1));
+  const tasks = [];
+  for (const id of page_row_ids || []) {
     const p = meta.get(id) || {};
-    return {
-      kind: "post",
-      page_row_id: id,
-      page_name: p.name || `page#${id}`,
-      page_id: p.page_id || null,
-      label: "Đăng 1 bài ngay",
-      opts: { ignore_quota, ignore_interval },
-    };
-  });
+    for (let round = 1; round <= rounds; round++) {
+      tasks.push({
+        kind: "post",
+        page_row_id: id,
+        page_name: p.name || `page#${id}`,
+        page_id: p.page_id || null,
+        label: match_bundle
+          ? `Theo bộ · bài ${round}/${rounds}`
+          : rounds > 1
+            ? `Đăng ngay · bài ${round}/${rounds}`
+            : "Đăng 1 bài ngay",
+        opts: {
+          ignore_quota,
+          ignore_interval,
+          post_round: round,
+          post_type: ["photo", "image", "text", "video"].includes(String(post_type).toLowerCase())
+            ? (String(post_type).toLowerCase() === "image" ? "photo" : String(post_type).toLowerCase())
+            : "video",
+          use_caption: use_caption !== false,
+          ...(comment_on === true || comment_on === false ? { comment_on } : {}),
+        },
+      });
+    }
+  }
   return startJob({
     type: "bulk_post",
-    title: title || `Đăng ngay · ${tasks.length} page`,
+    title: title || `Đăng ngay · ${tasks.length} bài`,
     tasks,
+    media_reuse,
+    match_bundle,
+    comment_link_posts_per_run,
+    parallel_apps,
   });
 }
 
@@ -1663,6 +2456,9 @@ export function startBulkScheduleJob({
   pages_expected = null,
   pages_planned = null,
   media_reuse = "once",
+  match_bundle = false,
+  comment_link_posts_per_run = 0,
+  parallel_apps = false,
 } = {}) {
   // kind=schedule → hẹn giờ Facebook (Graph). Ảnh/video/text đều qua path này.
   // Mode «chờ giờ đăng trực tiếp» là kind=post + run_at (job khác / rotation), không gộp vào đây.
@@ -1689,5 +2485,8 @@ export function startBulkScheduleJob({
     pages_expected: pages_expected != null ? pages_expected : uniquePages.length,
     pages_planned: pages_planned != null ? pages_planned : uniquePages.length,
     media_reuse,
+    match_bundle,
+    comment_link_posts_per_run,
+    parallel_apps,
   });
 }

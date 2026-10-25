@@ -63,6 +63,11 @@
     .rl-banner.on { display:block; }
     .rl-banner b { color:#f5c96a; }
     .rl-banner .sec { font-variant-numeric:tabular-nums; font-weight:800; font-size:1.15rem; color:#ffe08a; }
+    .pick-mode.on {
+      border-color: rgba(96,165,250,.7);
+      background: rgba(96,165,250,.18);
+      color: #bfdbfe;
+    }
   </style>
 </head>
 <body>
@@ -100,16 +105,72 @@
           <section class="panel">
             <h2 class="panel-hd">1. Chọn Page</h2>
             <div class="panel-body">
-              <input type="text" id="pageFilter" placeholder="Lọc tên page…" style="margin-bottom:.6rem" />
+              <label class="field">Chọn nhanh theo</label>
+              <div style="display:flex;flex-wrap:wrap;gap:.35rem;margin-bottom:.55rem" id="pickModeBar">
+                <button type="button" class="btn-ghost btn-sm pick-mode on" data-mode="manual">Thủ công</button>
+                <button type="button" class="btn-ghost btn-sm pick-mode" data-mode="account">Tài khoản</button>
+                <button type="button" class="btn-ghost btn-sm pick-mode" data-mode="account_group">Nhóm tài khoản</button>
+                <button type="button" class="btn-ghost btn-sm pick-mode" data-mode="page_group">Nhóm page</button>
+                <button type="button" class="btn-ghost btn-sm pick-mode" data-mode="token">Token / Meta App</button>
+              </div>
+              <div id="pickByAccount" class="pick-panel" style="display:none;margin-bottom:.55rem">
+                <label class="field">Tài khoản (admin)</label>
+                <select id="selAccount" style="width:100%;padding:.55rem .7rem;border-radius:10px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);font:inherit"></select>
+              </div>
+              <div id="pickByAccountGroup" class="pick-panel" style="display:none;margin-bottom:.55rem">
+                <label class="field">Nhóm tài khoản (từ màn Đăng bài)</label>
+                <select id="selAccountGroup" style="width:100%;padding:.55rem .7rem;border-radius:10px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);font:inherit"></select>
+              </div>
+              <div id="pickByPageGroup" class="pick-panel" style="display:none;margin-bottom:.55rem">
+                <label class="field">Nhóm page (từ màn Đăng bài)</label>
+                <select id="selPageGroup" style="width:100%;padding:.55rem .7rem;border-radius:10px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);font:inherit"></select>
+              </div>
+              <div id="pickByToken" class="pick-panel" style="display:none;margin-bottom:.55rem">
+                <label class="field">Token / Meta App</label>
+                <select id="selToken" style="width:100%;padding:.55rem .7rem;border-radius:10px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);font:inherit"></select>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.55rem">
+                <button type="button" class="btn-ok btn-sm" id="btnTickScope">Tick theo lựa chọn</button>
+                <button type="button" class="btn-ghost btn-sm" id="btnUntickScope">Bỏ tick lựa chọn</button>
+                <button type="button" class="btn-ghost btn-sm" id="btnClearTicks">Bỏ tick tất cả</button>
+              </div>
+              <p class="muted" style="margin:0 0 .55rem;font-size:.78rem;line-height:1.4" id="scopeHint">
+                Tick thủ công từng page, hoặc chọn Tài khoản / Nhóm / Token rồi bấm «Tick theo lựa chọn».
+              </p>
+              <input type="text" id="pageFilter" placeholder="Lọc tên page / page_id / tài khoản…" style="margin-bottom:.6rem" />
               <div class="page-pick" id="pageList"><p class="muted" style="padding:.75rem">Đang tải…</p></div>
-              <div class="chk"><input type="checkbox" id="chkAll" /> <span>Chọn tất cả (đã lọc)</span></div>
+              <div class="chk"><input type="checkbox" id="chkAll" /> <span>Chọn tất cả (đang hiện)</span></div>
               <p class="muted" style="margin:.6rem 0 0;font-size:.8rem" id="pageCount">0 page</p>
+              <p class="muted" style="margin:.25rem 0 0;font-size:.8rem" id="selectedCount">Đã tick: 0</p>
             </div>
           </section>
 
           <section class="panel">
             <h2 class="panel-hd">2. Bộ lọc & tốc độ</h2>
             <div class="panel-body">
+              <label class="field">Chế độ xóa (2 option)</label>
+              <div style="display:flex;flex-direction:column;gap:.45rem;margin:.35rem 0 .75rem">
+                <label class="chk" style="margin:0;align-items:flex-start">
+                  <input type="radio" name="deleteTargetMode" id="modePublished" value="published" checked />
+                  <span>
+                    <b>1. Chỉ bài đã publish</b>
+                    <span class="muted" style="display:block;font-size:.8rem;line-height:1.4;margin-top:.15rem">
+                      Xóa bài đã lên page (post/ảnh/video/reel…). <b>Không đụng bài đang chờ hẹn.</b>
+                      Dùng với «Từ / Đến hết ngày» để xóa đúng ngày đã đăng.
+                    </span>
+                  </span>
+                </label>
+                <label class="chk" style="margin:0;align-items:flex-start">
+                  <input type="radio" name="deleteTargetMode" id="modeScheduled" value="scheduled" />
+                  <span>
+                    <b>2. Chỉ bài đang hẹn (chờ đăng)</b>
+                    <span class="muted" style="display:block;font-size:.8rem;line-height:1.4;margin-top:.15rem">
+                      Có chức năng xóa bài hẹn — list <code>scheduled_posts</code> rồi DELETE.
+                      Lọc ngày theo <b>giờ hẹn lên</b>. Không xóa bài đã publish.
+                    </span>
+                  </span>
+                </label>
+              </div>
               <div class="field-row">
                 <div>
                   <label class="field">Từ ngày (tùy chọn)</label>
@@ -117,13 +178,13 @@
                 </div>
                 <div>
                   <label class="field">Đến hết ngày (tùy chọn)</label>
-                  <input type="date" id="until" title="Xóa bài đến 23:59:59 ngày này — bài SAU ngày này không xóa" />
+                  <input type="date" id="until" title="Hết 23:59:59 ngày này. Mode publish = ngày đã đăng; mode hẹn = ngày giờ hẹn." />
                 </div>
               </div>
               <p class="muted" style="margin:.45rem 0 0;font-size:.78rem;line-height:1.45">
-                <b>Từ / Đến hết ngày:</b> chỉ xóa bài có <code>created_time</code> trong khoảng
-                (<b>đến = hết ngày 23:59:59</b>). Bài <b>sau</b> «Đến hết ngày» <b>không</b> bị xóa
-                (đã fix bug multi-pass). Để trống cả hai = full wipe mọi bài list được + share/visitor.
+                <b>Từ / Đến hết ngày:</b> <b>đến = 23:59:59</b> giờ máy.
+                Mode <b>publish</b> → theo ngày bài đã lên; mode <b>hẹn</b> → theo <code>scheduled_publish_time</code>.
+                Để trống cả hai = không giới hạn ngày trong mode đang chọn.
               </p>
               <div class="chk" style="margin-top:.55rem;align-items:flex-start">
                 <input type="checkbox" id="deleteBranding" />
@@ -157,12 +218,12 @@
               </div>
               <div class="field-row" style="margin-top:.75rem">
                 <div>
-                  <label class="field">List page song song (1 = tránh #4)</label>
-                  <input type="number" id="listParallel" value="1" min="1" max="3" title="List tốn nhiều GET (paginate). Mặc định 1 — multi-list là nguyên nhân #4 storm" />
+                  <label class="field">Hàng đợi list Page</label>
+                  <input type="number" id="listParallel" value="1" min="1" max="1" readonly title="Luôn list tuần tự từng Page" />
                 </div>
                 <div>
-                  <label class="field">Xóa page song song (delete)</label>
-                  <input type="number" id="pageParallel" value="2" min="1" max="12" title="Chỉ áp dụng khi ĐÃ list xong — DELETE batch song song giữa các page" />
+                  <label class="field">Hàng đợi xóa Page</label>
+                  <input type="number" id="pageParallel" value="1" min="1" max="1" readonly title="Luôn hoàn tất Page hiện tại rồi mới chuyển Page kế" />
                 </div>
               </div>
               <div class="field-row" style="margin-top:.75rem">
@@ -186,16 +247,44 @@
                 </div>
                 <div></div>
               </div>
-              <div class="chk"><input type="checkbox" id="useBatch" checked /> <span>Graph Batch 50 DELETE · list: published + feed (share/visitor) + video + photo + tagged</span></div>
+              <div style="margin-top:.85rem">
+                <label class="field">Loại bài xóa (xóa tổng = tick hết)</label>
+                <div style="display:flex;flex-wrap:wrap;gap:.45rem .75rem;font-size:.82rem;margin-top:.35rem" id="contentTypeBox">
+                  <label class="chk" style="margin:0"><input type="checkbox" class="ctype" value="posts" checked /> Bài thường / share</label>
+                  <label class="chk" style="margin:0"><input type="checkbox" class="ctype" value="photos" checked /> Ảnh</label>
+                  <label class="chk" style="margin:0"><input type="checkbox" class="ctype" value="videos" checked /> Video</label>
+                  <label class="chk" style="margin:0"><input type="checkbox" class="ctype" value="reels" checked /> Reels</label>
+                  <label class="chk" style="margin:0"><input type="checkbox" class="ctype" value="live" checked /> Livestream</label>
+                  <label class="chk" style="margin:0"><input type="checkbox" class="ctype" value="scheduled" /> Bài hẹn giờ (chờ đăng) — mặc định TẮT</label>
+                  <label class="chk" style="margin:0"><input type="checkbox" class="ctype" value="tagged" checked /> Tagged</label>
+                  <label class="chk" style="margin:0"><input type="checkbox" class="ctype" value="visitor" checked /> Visitor posts</label>
+                </div>
+                <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.45rem">
+                  <button type="button" class="btn-ghost btn-sm" id="btnTypesAll">Tick hết loại</button>
+                  <button type="button" class="btn-ghost btn-sm" id="btnTypesNone">Bỏ hết loại</button>
+                </div>
+              </div>
+              <div class="chk"><input type="checkbox" id="useBatch" checked /> <span>Graph Batch 50 DELETE</span></div>
               <p class="muted" style="margin-top:.75rem;font-size:.8rem;line-height:1.45">
-                <b>Full wipe:</b> để trống ngày → xóa post chữ + ảnh timeline + share/visitor + video/reel.<br/>
-                Avatar/bìa: chỉ khi tick «Có xóa ảnh đại diện + ảnh bìa?» (tách khỏi list bài thường).<br/>
-                <b>Lọc ngày:</b> «Đến hết ngày» = 23:59:59 — bài sau đó được giữ. Log hiện khoảng lọc + số object bỏ ngoài khoảng.<br/>
-                List//1 khi #4. Quyền: <code>pages_manage_posts</code>, <code>pages_read_engagement</code>, MANAGE page (avatar/bìa).
+                Chọn <b>option 1 hoặc 2</b> phía trên. Có đủ chức năng xóa bài đã hẹn (option 2).<br/>
+                Avatar/bìa: chỉ option 1 + tick «Xóa avatar + ảnh bìa».<br/>
+                <b>Limit:</b> theo từng Meta App/token — App khác không bị dừng chung.
               </p>
             </div>
           </section>
         </div>
+
+        <section class="panel section-gap" id="jobListPanel" style="border-color:rgba(96,165,250,.45)">
+          <h2 class="panel-hd">Job xóa đang chạy / gần đây</h2>
+          <div class="panel-body">
+            <p class="muted" style="font-size:.8rem;margin:0 0 .55rem;line-height:1.4">
+              Đổi tab / F5 <b>không dừng</b> job trên server. Vào lại trang này sẽ <b>tự gắn lại</b> tiến trình.
+              Bấm «Theo dõi» nếu muốn xem job khác.
+            </p>
+            <div id="deleteJobList" class="page-pick" style="max-height:180px"><p class="muted" style="padding:.75rem">Chưa có job.</p></div>
+            <button type="button" class="btn-ghost btn-sm" id="btnRefreshJobs" style="margin-top:.5rem">Làm mới danh sách</button>
+          </div>
+        </section>
 
         <section class="panel section-gap">
           <h2 class="panel-hd">3. Tiến trình</h2>
@@ -220,6 +309,7 @@
               Còn <span class="sec" id="rlSec">—</span> giây.
               <div class="muted" id="rlMsg" style="margin-top:.35rem;font-size:.8rem"></div>
             </div>
+            <div id="pageLive" style="max-height:240px;overflow:auto;margin:.55rem 0;font-size:.78rem"></div>
             <div class="log-box" id="logBox">Log sẽ hiện ở đây…</div>
           </div>
         </section>
@@ -258,8 +348,17 @@
   <script>
     const $ = (id) => document.getElementById(id);
     let pages = [];
+    let accounts = [];
+    let tokens = [];
+    let accountGroups = [];
+    let pageGroups = [];
+    let pickMode = "manual";
+    /** @type {Set<number>} */
+    let checkedIds = new Set();
     let currentJobId = null;
     let es = null;
+    const LS_ACTIVE_JOB = "delete_posts_active_job_v1";
+    const LS_CHECKED = "delete_posts_checked_ids_v1";
 
     async function api(path, opts = {}) {
       const res = await fetch(path, {
@@ -269,6 +368,141 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || res.statusText);
       return data;
+    }
+
+    function syncCheckedFromDom() {
+      checkedIds = new Set(selectedIds());
+      updateSelectedCount();
+    }
+
+    function updateSelectedCount() {
+      const n = checkedIds.size || selectedIds().length;
+      if ($("selectedCount")) $("selectedCount").textContent = `Đã tick: ${n}`;
+    }
+
+    function setPickMode(mode) {
+      pickMode = mode || "manual";
+      document.querySelectorAll(".pick-mode").forEach((btn) => {
+        btn.classList.toggle("on", btn.dataset.mode === pickMode);
+      });
+      const map = {
+        account: "pickByAccount",
+        account_group: "pickByAccountGroup",
+        page_group: "pickByPageGroup",
+        token: "pickByToken",
+      };
+      document.querySelectorAll(".pick-panel").forEach((el) => {
+        el.style.display = "none";
+      });
+      if (map[pickMode] && $(map[pickMode])) $(map[pickMode]).style.display = "block";
+      const hints = {
+        manual: "Tick thủ công từng page, hoặc chọn Tài khoản / Nhóm / Token rồi bấm «Tick theo lựa chọn».",
+        account: "Chọn 1 tài khoản (admin) → Tick theo lựa chọn = mọi page của tài khoản đó.",
+        account_group: "Chọn nhóm tài khoản đã lưu ở màn Đăng bài → tick mọi page thuộc các admin trong nhóm.",
+        page_group: "Chọn nhóm page đã lưu ở màn Đăng bài → tick đúng list page trong nhóm.",
+        token: "Chọn Meta App / token (App 1, App 2…) → tick mọi page thuộc app đó.",
+      };
+      if ($("scopeHint")) $("scopeHint").textContent = hints[pickMode] || hints.manual;
+      renderPages($("pageFilter")?.value || "");
+    }
+
+    function idsForCurrentScope() {
+      if (pickMode === "account") {
+        const aid = Number($("selAccount")?.value);
+        if (!aid) return [];
+        return pages.filter((p) => Number(p.account_id) === aid).map((p) => Number(p.id));
+      }
+      if (pickMode === "token") {
+        const key = String($("selToken")?.value || "");
+        if (!key) return [];
+        return pages
+          .filter((p) => String(p.meta_app_key || "app1") === key)
+          .map((p) => Number(p.id));
+      }
+      if (pickMode === "page_group") {
+        const gid = String($("selPageGroup")?.value || "");
+        const g = pageGroups.find((x) => String(x.id) === gid);
+        return g ? (g.page_row_ids || []).map(Number).filter((n) => n > 0) : [];
+      }
+      if (pickMode === "account_group") {
+        const gid = String($("selAccountGroup")?.value || "");
+        const g = accountGroups.find((x) => String(x.id) === gid);
+        if (!g) return [];
+        const accSet = new Set((g.account_ids || []).map(Number));
+        return pages
+          .filter((p) => accSet.has(Number(p.account_id)))
+          .map((p) => Number(p.id));
+      }
+      // manual: currently visible filtered list
+      return visiblePageIds();
+    }
+
+    function visiblePageIds() {
+      return [...document.querySelectorAll("#pageList input[type=checkbox]")].map((el) =>
+        Number(el.value)
+      );
+    }
+
+    function applyTicks(ids, on) {
+      const set = new Set((ids || []).map(Number).filter((n) => n > 0));
+      if (on) {
+        for (const id of set) checkedIds.add(id);
+      } else {
+        for (const id of set) checkedIds.delete(id);
+      }
+      persistChecked();
+      renderPages($("pageFilter")?.value || "");
+    }
+
+    function fillScopeSelects() {
+      const accSel = $("selAccount");
+      if (accSel) {
+        accSel.innerHTML =
+          `<option value="">— Chọn tài khoản —</option>` +
+          accounts
+            .map(
+              (a) =>
+                `<option value="${a.id}">${esc(a.name)} · ${esc(a.meta_app_name || a.meta_app_key)} · ${a.page_count} page</option>`
+            )
+            .join("");
+      }
+      const tokSel = $("selToken");
+      if (tokSel) {
+        tokSel.innerHTML =
+          `<option value="">— Chọn token / Meta App —</option>` +
+          tokens
+            .map(
+              (t) =>
+                `<option value="${esc(t.meta_app_key)}">${esc(t.meta_app_name || t.meta_app_key)} · ${t.page_count} page · ${t.account_count} TK</option>`
+            )
+            .join("");
+      }
+      const agSel = $("selAccountGroup");
+      if (agSel) {
+        agSel.innerHTML =
+          `<option value="">— Chọn nhóm tài khoản —</option>` +
+          (accountGroups.length
+            ? accountGroups
+                .map(
+                  (g) =>
+                    `<option value="${esc(g.id)}">${esc(g.name || g.id)} · ${(g.account_ids || []).length} TK</option>`
+                )
+                .join("")
+            : `<option value="" disabled>(Chưa có nhóm — tạo ở màn Đăng bài)</option>`);
+      }
+      const pgSel = $("selPageGroup");
+      if (pgSel) {
+        pgSel.innerHTML =
+          `<option value="">— Chọn nhóm page —</option>` +
+          (pageGroups.length
+            ? pageGroups
+                .map(
+                  (g) =>
+                    `<option value="${esc(g.id)}">${esc(g.name || g.id)} · ${(g.page_row_ids || []).length} page</option>`
+                )
+                .join("")
+            : `<option value="" disabled>(Chưa có nhóm — tạo ở màn Đăng bài)</option>`);
+      }
     }
 
     /** Start of local calendar day 00:00:00 → unix */
@@ -328,36 +562,84 @@
     const toUnix = toUnixSince; // legacy alias
 
     function selectedIds() {
-      return [...document.querySelectorAll("#pageList input[type=checkbox]:checked")]
-        .map((el) => Number(el.value))
-        .filter((n) => n > 0);
+      // Tracked set survives filter/re-render — nguồn đúng cho Dry-run / Xóa
+      return [...checkedIds];
+    }
+
+    function pageMatchesFilter(p, q) {
+      if (!q) return true;
+      return (
+        (p.name || "").toLowerCase().includes(q) ||
+        String(p.page_id).includes(q) ||
+        String(p.account_name || "").toLowerCase().includes(q) ||
+        String(p.meta_app_name || "").toLowerCase().includes(q) ||
+        String(p.meta_app_key || "").toLowerCase().includes(q) ||
+        String(p.account_id || "").includes(q)
+      );
+    }
+
+    function pageInActiveScope(p) {
+      if (pickMode === "manual") return true;
+      if (pickMode === "account") {
+        const aid = Number($("selAccount")?.value);
+        if (!aid) return true;
+        return Number(p.account_id) === aid;
+      }
+      if (pickMode === "token") {
+        const key = String($("selToken")?.value || "");
+        if (!key) return true;
+        return String(p.meta_app_key || "app1") === key;
+      }
+      if (pickMode === "page_group") {
+        const gid = String($("selPageGroup")?.value || "");
+        const g = pageGroups.find((x) => String(x.id) === gid);
+        if (!g) return true;
+        return (g.page_row_ids || []).map(Number).includes(Number(p.id));
+      }
+      if (pickMode === "account_group") {
+        const gid = String($("selAccountGroup")?.value || "");
+        const g = accountGroups.find((x) => String(x.id) === gid);
+        if (!g) return true;
+        return (g.account_ids || []).map(Number).includes(Number(p.account_id));
+      }
+      return true;
     }
 
     function renderPages(filter = "") {
       const q = filter.trim().toLowerCase();
-      const list = pages.filter((p) => {
-        if (!q) return true;
-        return (p.name || "").toLowerCase().includes(q) || String(p.page_id).includes(q);
-      });
-      $("pageCount").textContent = `${list.length} page${list.length !== pages.length ? ` (lọc từ ${pages.length})` : ""}`;
+      const list = pages.filter((p) => pageInActiveScope(p) && pageMatchesFilter(p, q));
+      $("pageCount").textContent = `${list.length} page hiện · đã tick ${checkedIds.size}${
+        list.length !== pages.length ? ` (tổng ${pages.length})` : ""
+      }`;
       if (!list.length) {
-        $("pageList").innerHTML = `<p class="muted" style="padding:.75rem">Không có page. Hãy Connect Facebook ở màn Kết nối.</p>`;
+        $("pageList").innerHTML = `<p class="muted" style="padding:.75rem">Không có page khớp. Kiểm tra Connect Facebook hoặc đổi bộ lọc.</p>`;
+        updateSelectedCount();
         return;
       }
-      $("pageList").innerHTML = list.map((p) => `
-        <label data-id="${p.id}">
-          <input type="checkbox" value="${p.id}" />
+      $("pageList").innerHTML = list
+        .map((p) => {
+          const on = checkedIds.has(Number(p.id));
+          return `
+        <label data-id="${p.id}" class="${on ? "checked" : ""}">
+          <input type="checkbox" value="${p.id}" ${on ? "checked" : ""} />
           <span>
             <b>${esc(p.name || "Page")}</b>
-            <small>${esc(p.page_id)} · row #${p.id}</small>
+            <small>${esc(p.account_name || "—")} · ${esc(p.meta_app_name || p.meta_app_key || "App")} · ${esc(p.page_id)} · #${p.id}</small>
           </span>
-        </label>
-      `).join("");
+        </label>`;
+        })
+        .join("");
       $("pageList").querySelectorAll("input").forEach((inp) => {
         inp.addEventListener("change", () => {
+          const id = Number(inp.value);
+          if (inp.checked) checkedIds.add(id);
+          else checkedIds.delete(id);
           inp.closest("label")?.classList.toggle("checked", inp.checked);
+          updateSelectedCount();
+          persistChecked();
         });
       });
+      updateSelectedCount();
     }
 
     function esc(s) {
@@ -370,13 +652,75 @@
       $("pageList").innerHTML = `<p class="muted" style="padding:.75rem">Đang tải…</p>`;
       const data = await api("/api/delete-posts/pages");
       pages = data.pages || [];
-      renderPages($("pageFilter").value);
+      accounts = data.accounts || [];
+      tokens = data.tokens || [];
+      try {
+        const g = await api("/api/posting/selection-groups");
+        accountGroups = g.account_groups || [];
+        pageGroups = g.page_groups || [];
+      } catch {
+        accountGroups = [];
+        pageGroups = [];
+      }
+      // Drop ticks for pages no longer present
+      const valid = new Set(pages.map((p) => Number(p.id)));
+      checkedIds = new Set([...checkedIds].filter((id) => valid.has(id)));
+      fillScopeSelects();
+      renderPages($("pageFilter")?.value || "");
+    }
+
+    function deleteTargetMode() {
+      const el = document.querySelector('input[name="deleteTargetMode"]:checked');
+      return el?.value === "scheduled" ? "scheduled" : "published";
+    }
+
+    function selectedContentTypes() {
+      const mode = deleteTargetMode();
+      if (mode === "scheduled") return ["scheduled"];
+      const boxes = [...document.querySelectorAll(".ctype:checked")]
+        .map((el) => el.value)
+        .filter((v) => v !== "scheduled");
+      const publishedAll = ["posts", "photos", "videos", "reels", "live", "tagged", "visitor"];
+      if (!boxes.length) return publishedAll.slice();
+      const onlyPublished =
+        boxes.length === publishedAll.length &&
+        publishedAll.every((t) => boxes.includes(t));
+      if (onlyPublished) return null; // server: all published, skip scheduled
+      return boxes;
+    }
+
+    function syncDeleteModeUi() {
+      const mode = deleteTargetMode();
+      const box = $("contentTypeBox");
+      const schedCb = document.querySelector('.ctype[value="scheduled"]');
+      if (mode === "scheduled") {
+        if (box) box.style.opacity = "0.45";
+        if (schedCb) schedCb.checked = true;
+        document.querySelectorAll(".ctype").forEach((el) => {
+          if (el.value !== "scheduled") el.checked = false;
+        });
+      } else {
+        if (box) box.style.opacity = "1";
+        if (schedCb) schedCb.checked = false;
+        // restore common published types if none checked
+        const any = [...document.querySelectorAll(".ctype")].some(
+          (el) => el.value !== "scheduled" && el.checked
+        );
+        if (!any) {
+          ["posts", "photos", "videos", "reels", "live", "tagged", "visitor"].forEach((v) => {
+            const el = document.querySelector(`.ctype[value="${v}"]`);
+            if (el) el.checked = true;
+          });
+        }
+      }
     }
 
     function optsFromForm(extra = {}) {
       const bp = Math.min(12, Math.max(1, Number($("batchParallel")?.value) || 6));
       const since = toUnixSince($("since").value);
       const until = toUnixUntil($("until").value);
+      const mode = deleteTargetMode();
+      const content_types = selectedContentTypes();
       return {
         page_row_ids: selectedIds(),
         since,
@@ -385,18 +729,84 @@
         keyword: $("keyword").value.trim() || null,
         max_posts: Math.max(0, Number($("maxPosts").value) || 0),
         delay_ms: Math.max(0, Number($("delayMs").value) || 0),
-        list_parallel: Math.min(3, Math.max(1, Number($("listParallel")?.value) || 1)),
-        page_parallel: Math.min(12, Math.max(1, Number($("pageParallel").value) || 2)),
+        list_parallel: 1,
+        page_parallel: 1,
         batch_parallel: bp,
         concurrency: Math.min(24, Math.max(1, bp * 2)),
         adaptive: $("adaptiveParallel") ? $("adaptiveParallel").checked : true,
-        // wipe includes feed + share/visitor + photos (not only published_posts)
-        list_mode: "wipe",
+        list_mode: mode === "scheduled" ? "full" : "wipe",
+        content_types,
+        include_scheduled: mode === "scheduled",
         use_batch: $("useBatch").checked,
         // false when unchecked — never default true (avoids wiping avatar on date-filter jobs)
-        delete_branding: $("deleteBranding") ? !!$("deleteBranding").checked : false,
+        delete_branding:
+          mode === "scheduled"
+            ? false
+            : $("deleteBranding")
+              ? !!$("deleteBranding").checked
+              : false,
         ...extra,
       };
+    }
+
+    function persistActiveJob(id) {
+      try {
+        if (id) localStorage.setItem(LS_ACTIVE_JOB, String(id));
+        else localStorage.removeItem(LS_ACTIVE_JOB);
+      } catch {}
+    }
+
+    function persistChecked() {
+      try {
+        localStorage.setItem(LS_CHECKED, JSON.stringify([...checkedIds]));
+      } catch {}
+    }
+
+    function restoreChecked() {
+      try {
+        const raw = localStorage.getItem(LS_CHECKED);
+        if (!raw) return;
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) checkedIds = new Set(arr.map(Number).filter((n) => n > 0));
+      } catch {}
+    }
+
+    async function refreshDeleteJobList() {
+      const box = $("deleteJobList");
+      if (!box) return;
+      try {
+        const data = await api("/api/delete-posts/jobs?limit=15");
+        const list = data.jobs || [];
+        if (!list.length) {
+          box.innerHTML = `<p class="muted" style="padding:.75rem">Chưa có job xóa trong phiên này (restart app sẽ mất list in-memory).</p>`;
+          return;
+        }
+        box.innerHTML = list
+          .map((j) => {
+            const p = j.progress || {};
+            const active = ["queued", "listing", "running", "rate_limited"].includes(j.status);
+            const watching = currentJobId === j.id;
+            return `<label style="cursor:default;align-items:center">
+              <span style="flex:1;min-width:0">
+                <b>${esc(j.id)}</b> · <span style="color:${active ? "#f5c96a" : "var(--muted)"}">${esc(j.status)}</span>
+                <small>OK ${p.ok || 0} · FAIL ${p.fail || 0} · ${p.matched || 0} bài · ${esc((p.label || "").slice(0, 80))}</small>
+              </span>
+              <button type="button" class="btn-ghost btn-sm job-watch" data-id="${esc(j.id)}" ${watching ? "disabled" : ""}>${watching ? "Đang xem" : "Theo dõi"}</button>
+            </label>`;
+          })
+          .join("");
+        box.querySelectorAll(".job-watch").forEach((btn) => {
+          btn.onclick = () => {
+            const id = btn.dataset.id;
+            if (!id) return;
+            persistActiveJob(id);
+            watchJob(id);
+            refreshDeleteJobList();
+          };
+        });
+      } catch (e) {
+        box.innerHTML = `<p style="padding:.75rem;color:var(--danger)">${esc(e.message)}</p>`;
+      }
     }
 
     $("presetSafe").onclick = () => {
@@ -412,7 +822,7 @@
       if ($("adaptiveParallel")) $("adaptiveParallel").checked = true;
       $("delayMs").value = 40;
       if ($("listParallel")) $("listParallel").value = 1;
-      $("pageParallel").value = 2;
+      $("pageParallel").value = 1;
       $("batchParallel").value = 4;
     };
     $("presetTurbo").onclick = () => {
@@ -420,7 +830,7 @@
       if ($("adaptiveParallel")) $("adaptiveParallel").checked = true;
       $("delayMs").value = 0;
       if ($("listParallel")) $("listParallel").value = 1; // NEVER parallel list on turbo
-      $("pageParallel").value = 3;
+      $("pageParallel").value = 1;
       $("batchParallel").value = 8;
       $("maxPosts").value = 0;
     };
@@ -428,7 +838,8 @@
     function renderReport(job) {
       const done = ["ok", "fail", "partial", "stopped"].includes(job.status);
       const sec = $("reportSection");
-      if (!done && !job.report) {
+      const hasPages = (job.pages || []).some((p) => p.page_name || p.matched || p.ok || p.fail || p.status === "deleting");
+      if (!done && !job.report && !hasPages) {
         sec.style.display = "none";
         return;
       }
@@ -571,11 +982,31 @@
       $("btnStop").disabled = !running;
       $("btnDelete").disabled = running;
       $("btnDry").disabled = running;
-      if (Array.isArray(job.recent) && job.recent.length) {
-        $("logBox").innerHTML = job.recent
-          .slice(0, 40)
-          .map((r) => `<div>[${esc((r.at || "").slice(11, 19))}] ${esc(r.text)}</div>`)
-          .join("");
+      const pageLive = $("pageLive");
+      if (pageLive) {
+        const pages = job.pages || [];
+        pageLive.innerHTML = pages.length
+          ? pages.map((pg) => {
+              const st = String(pg.status || "pending");
+              const cls = st === "ok" ? "ok" : (st === "fail" || st === "partial") ? "fail" : "muted";
+              const err = pg.error ? ` · ${esc(String(pg.error).slice(0, 100))}` : "";
+              return `<div style="display:grid;grid-template-columns:1.3fr auto;gap:.4rem;padding:.16rem 0;border-bottom:1px solid rgba(255,255,255,.06)">
+                <span>${esc(pg.page_name || pg.page_id || pg.page_row_id || "?")}</span>
+                <span class="${cls}">${esc(st)} · OK ${Number(pg.ok || 0)}/${Number(pg.matched || pg.listed || 0)} · lỗi ${Number(pg.fail || 0)}${err}</span>
+              </div>`;
+            }).join("")
+          : "";
+      }
+      const logBox = $("logBox");
+      if (logBox) {
+        const lines = Array.isArray(job.log_lines) && job.log_lines.length
+          ? job.log_lines
+          : [...(job.recent || [])].reverse();
+        const stick = logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 28;
+        logBox.innerHTML = lines.length
+          ? lines.map((r) => `<div>[${esc((r.at || "").slice(11, 19))}] ${esc(r.text || "")}</div>`).join("")
+          : `<div class="muted">Chưa có dòng log</div>`;
+        if (stick) logBox.scrollTop = logBox.scrollHeight;
       }
       renderReport(job);
     }
@@ -583,6 +1014,7 @@
     function watchJob(id) {
       if (es) { try { es.close(); } catch {} es = null; }
       currentJobId = id;
+      persistActiveJob(id);
       es = new EventSource(`/api/delete-posts/jobs/${id}/stream`);
       es.onmessage = (ev) => {
         try {
@@ -596,11 +1028,13 @@
         $("btnStop").disabled = true;
         $("btnDelete").disabled = false;
         $("btnDry").disabled = false;
+        refreshDeleteJobList();
       });
       es.onerror = () => {
         // fallback poll
         pollJob(id);
       };
+      refreshDeleteJobList();
     }
 
     async function pollJob(id) {
@@ -626,8 +1060,11 @@
         return;
       }
       if (!dry) {
+        const mode = deleteTargetMode();
         const ok = confirm(
-          `XÓA VĨNH VIỄN bài đăng trên ${ids.length} page?\n\nHành động không hoàn tác được.`
+          mode === "scheduled"
+            ? `XÓA VĨNH VIỄN bài ĐANG HẸN (chờ đăng) trên ${ids.length} page?\nKhông xóa bài đã publish.\n\nKhông hoàn tác được.`
+            : `XÓA VĨNH VIỄN bài ĐÃ PUBLISH trên ${ids.length} page?\nKhông xóa bài đang chờ hẹn.\n\nKhông hoàn tác được.`
         );
         if (!ok) return;
       }
@@ -638,6 +1075,7 @@
         });
         applyJob(data.job);
         watchJob(data.job.id);
+        refreshDeleteJobList();
       } catch (e) {
         alert(e.message || String(e));
       }
@@ -688,11 +1126,37 @@
     $("pageFilter").addEventListener("input", () => renderPages($("pageFilter").value));
     $("chkAll").addEventListener("change", () => {
       const on = $("chkAll").checked;
-      $("pageList").querySelectorAll("input[type=checkbox]").forEach((inp) => {
-        inp.checked = on;
-        inp.closest("label")?.classList.toggle("checked", on);
-      });
+      const vis = visiblePageIds();
+      applyTicks(vis, on);
     });
+    document.querySelectorAll(".pick-mode").forEach((btn) => {
+      btn.addEventListener("click", () => setPickMode(btn.dataset.mode));
+    });
+    ["selAccount", "selAccountGroup", "selPageGroup", "selToken"].forEach((id) => {
+      $(id)?.addEventListener("change", () => renderPages($("pageFilter")?.value || ""));
+    });
+    $("btnTickScope").onclick = () => {
+      const ids = idsForCurrentScope();
+      if (!ids.length) {
+        alert(
+          pickMode === "manual"
+            ? "Không có page đang hiện để tick."
+            : "Chưa chọn tài khoản / nhóm / token, hoặc nhóm trống."
+        );
+        return;
+      }
+      applyTicks(ids, true);
+      alert(`Đã tick ${ids.length} page theo lựa chọn (${pickMode}).`);
+    };
+    $("btnUntickScope").onclick = () => {
+      const ids = idsForCurrentScope();
+      if (!ids.length) return;
+      applyTicks(ids, false);
+    };
+    $("btnClearTicks").onclick = () => {
+      checkedIds = new Set();
+      renderPages($("pageFilter")?.value || "");
+    };
     $("btnReloadPages").onclick = () => loadPages().catch((e) => alert(e.message));
     $("btnPreview").onclick = () => preview();
     $("btnDry").onclick = () => startJob(true);
@@ -725,9 +1189,62 @@
       }
     };
 
-    loadPages().catch((e) => {
-      $("pageList").innerHTML = `<p style="padding:.75rem;color:var(--danger)">${esc(e.message)}</p>`;
+    $("btnTypesAll")?.addEventListener("click", () => {
+      if (deleteTargetMode() === "scheduled") {
+        document.querySelectorAll(".ctype").forEach((el) => {
+          el.checked = el.value === "scheduled";
+        });
+        return;
+      }
+      document.querySelectorAll(".ctype").forEach((el) => {
+        el.checked = el.value !== "scheduled";
+      });
     });
+    $("btnTypesNone")?.addEventListener("click", () => {
+      document.querySelectorAll(".ctype").forEach((el) => { el.checked = false; });
+    });
+    document.querySelectorAll('input[name="deleteTargetMode"]').forEach((el) => {
+      el.addEventListener("change", () => syncDeleteModeUi());
+    });
+    $("btnRefreshJobs")?.addEventListener("click", () => refreshDeleteJobList());
+    syncDeleteModeUi();
+
+    setPickMode("manual");
+    restoreChecked();
+    loadPages()
+      .then(async () => {
+        await refreshDeleteJobList();
+        // Re-attach running job after tab switch / reload
+        let resumeId = null;
+        try { resumeId = localStorage.getItem(LS_ACTIVE_JOB); } catch {}
+        if (resumeId) {
+          try {
+            const data = await api(`/api/delete-posts/jobs/${resumeId}`);
+            if (data.job) {
+              applyJob(data.job);
+              if (["queued", "listing", "running", "rate_limited"].includes(data.job.status)) {
+                watchJob(resumeId);
+              } else {
+                persistActiveJob(null);
+              }
+            }
+          } catch {
+            persistActiveJob(null);
+          }
+        } else {
+          // Auto-follow newest active job if any
+          try {
+            const data = await api("/api/delete-posts/jobs?limit=5");
+            const active = (data.jobs || []).find((j) =>
+              ["queued", "listing", "running", "rate_limited"].includes(j.status)
+            );
+            if (active) watchJob(active.id);
+          } catch {}
+        }
+      })
+      .catch((e) => {
+        $("pageList").innerHTML = `<p style="padding:.75rem;color:var(--danger)">${esc(e.message)}</p>`;
+      });
   </script>
 </body>
 </html>

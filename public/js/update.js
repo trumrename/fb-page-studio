@@ -1,11 +1,9 @@
 /**
- * GitHub Releases auto-update
- * - Panel rõ ràng: version, % tải, log trạng thái (không chỉ đổi chữ nút nhỏ)
- * - Sidebar "Cập nhật phiên bản" luôn mở được panel (không phụ thuộc topbar button)
- * - Progress poll có session: không kết thúc nhầm khi state idle giữa chừng
+ * GitHub Releases update.
+ * Hỏi GitHub chỉ khi bấm «Kiểm tra GitHub» hoặc «Cập nhật ngay».
+ * Mở app và mở panel không tự hỏi.
  */
 (function () {
-  const RECHECK_MS = 4 * 60 * 60 * 1000;
   const DISMISS_KEY = "fbps_update_dismiss_v";
   const RELEASES_URL = "https://github.com/trumrename/fb-page-studio/releases/latest";
 
@@ -99,7 +97,7 @@
     const s = document.createElement("style");
     s.id = "fbpsUpdateStyles";
     s.textContent = `
-      #updateBanner { position: sticky; top: 0; z-index: 80; }
+      #updateBanner { position: static; z-index: 1; }
       .update-banner-inner {
         display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; justify-content:space-between;
         padding:.65rem 1rem; background: rgba(245,197,66,.12); border-bottom:1px solid rgba(245,197,66,.35);
@@ -678,7 +676,6 @@
         a.addEventListener("click", (e) => {
           e.preventDefault();
           openPanel();
-          runCheckUi(false);
         });
       }
     });
@@ -716,20 +713,13 @@
     if (btn) {
       btn.onclick = () => {
         openPanel();
-        if (btn.dataset.hasUpdate === "1") doUpdate(true);
-        else runCheckUi(false);
       };
     }
-
-    // Auto-check (silent) — still fills banner if update exists
-    await runCheck(btn, info);
-    setInterval(() => runCheck(btn, info), RECHECK_MS);
   }
 
   // Global so sidebar inline onclick can call even before button exists
   window.fbpsOpenUpdate = function fbpsOpenUpdate() {
     openPanel();
-    runCheckUi(false);
   };
 
   if (document.readyState === "loading") {

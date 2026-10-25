@@ -100,15 +100,6 @@ export const FEATURES = {
     multiThread: true,
     notes: "Groups API official đã deprecate (2024+)",
   },
-  group_delete_posts: {
-    id: "group_delete_posts",
-    label: "Xóa bài Group",
-    engine: "session",
-    status: "partial",
-    hidden: true,
-    multiThread: true,
-    notes: "Có UI/service delete-group; hoàn thiện session HTTP",
-  },
   group_list: {
     id: "group_list",
     label: "List group của nick",

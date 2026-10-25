@@ -57,9 +57,24 @@ function normalizeAccountGroup(g, validAccounts) {
     id: String(g.id || uid("acc")).slice(0, 64),
     name: cleanName(g.name, "Nhóm tài khoản"),
     account_ids,
+    media_folder: cleanStoredPath(g.media_folder),
+    posted_folder: cleanStoredPath(g.posted_folder),
     color: String(g.color || "").slice(0, 20) || null,
     updated_at: g.updated_at || new Date().toISOString(),
   };
+}
+
+function cleanStoredPath(value) {
+  const s = String(value || "")
+    .replace(/[\u0000\r\n]/g, "")
+    .trim()
+    .slice(0, 400);
+  if (!s) return "";
+  return s.replace(/[\\/]+$/g, "") || s;
+}
+
+function ownMediaFlag(value) {
+  return value === true || value === 1 || value === "1" || value === "true" ? 1 : 0;
 }
 
 function normalizePageGroup(g, validPages) {
@@ -75,6 +90,9 @@ function normalizePageGroup(g, validPages) {
     id: String(g.id || uid("pg")).slice(0, 64),
     name: cleanName(g.name, "Nhóm page"),
     page_row_ids,
+    media_folder: cleanStoredPath(g.media_folder),
+    posted_folder: cleanStoredPath(g.posted_folder),
+    use_own_media: ownMediaFlag(g.use_own_media),
     color: String(g.color || "").slice(0, 20) || null,
     updated_at: g.updated_at || new Date().toISOString(),
   };
@@ -116,10 +134,19 @@ export function upsertAccountGroup(body = {}) {
   const data = getSelectionGroups();
   const validAccounts = activeAccountIds();
   const id = body.id ? String(body.id) : uid("acc");
+  const prev = data.account_groups.find((g) => g.id === id) || null;
   const group = normalizeAccountGroup(
     {
+      ...(prev || {}),
       ...body,
       id,
+      account_ids: Array.isArray(body.account_ids)
+        ? body.account_ids
+        : prev?.account_ids || [],
+      media_folder:
+        body.media_folder != null ? body.media_folder : prev?.media_folder || "",
+      posted_folder:
+        body.posted_folder != null ? body.posted_folder : prev?.posted_folder || "",
       updated_at: new Date().toISOString(),
     },
     validAccounts
@@ -138,10 +165,32 @@ export function upsertPageGroup(body = {}) {
   const data = getSelectionGroups();
   const validPages = activePageIds();
   const id = body.id ? String(body.id) : uid("pg");
+  const prev = data.page_groups.find((g) => g.id === id) || null;
+  let page_row_ids;
+  if (body.merge_pages) {
+    const incoming = Array.isArray(body.page_row_ids)
+      ? body.page_row_ids
+      : Array.isArray(body.page_ids)
+        ? body.page_ids
+        : [];
+    page_row_ids = [...(prev?.page_row_ids || []), ...incoming];
+  } else if (Array.isArray(body.page_row_ids)) {
+    page_row_ids = body.page_row_ids;
+  } else if (Array.isArray(body.page_ids)) {
+    page_row_ids = body.page_ids;
+  } else {
+    page_row_ids = prev?.page_row_ids || [];
+  }
   const group = normalizePageGroup(
     {
+      ...(prev || {}),
       ...body,
       id,
+      page_row_ids,
+      media_folder: body.media_folder != null ? body.media_folder : prev?.media_folder || "",
+      posted_folder: body.posted_folder != null ? body.posted_folder : prev?.posted_folder || "",
+      use_own_media:
+        body.use_own_media != null ? body.use_own_media : prev?.use_own_media || 0,
       updated_at: new Date().toISOString(),
     },
     validPages

@@ -438,14 +438,27 @@ export function buildSlotsFromActiveHours(topHours, opts = {}) {
   const maxMs = now + 30 * 24 * 60 * 60 * 1000;
   const slots = [];
 
-  // "Today" in target timezone
-  const nowInTz = new Date(now + offsetMin * 60 * 1000);
-  const y0 = nowInTz.getUTCFullYear();
-  const m0 = nowInTz.getUTCMonth();
-  const d0 = nowInTz.getUTCDate();
+  // "Today" in target timezone, or ngày user chọn
+  let y0;
+  let m0;
+  let d0;
+  const startDay = String(opts.startDay || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (startDay) {
+    y0 = Number(startDay[1]);
+    m0 = Number(startDay[2]) - 1;
+    d0 = Number(startDay[3]);
+  } else {
+    const nowInTz = new Date(now + offsetMin * 60 * 1000);
+    y0 = nowInTz.getUTCFullYear();
+    m0 = nowInTz.getUTCMonth();
+    d0 = nowInTz.getUTCDate();
+  }
+  const startHm = String(opts.startTime || "").match(/^(\d{1,2}):(\d{2})/);
+  const startHour = startHm ? Number(startHm[1]) : 0;
 
   for (let day = 0; day < daysAhead; day++) {
     for (const hour of hours) {
+      if (day === 0 && startHour && Number(hour) < startHour) continue;
       // Random minute in hour (5..55) — tránh mọi bài đều :00
       const minute =
         jitterMin > 0
@@ -501,7 +514,9 @@ export function buildSlotsFromWindows(windows, opts = {}) {
     ? Number(opts.tzOffsetMinutes)
     : 420;
   const staggerMin = Number(opts.pageStaggerMinutes) || 0;
-  const minGapMin = Math.max(0, Number(opts.minGapMinutes) || 30);
+  const gapRaw = Number(opts.minGapMinutes);
+  // 0 là hợp lệ (đúng khoảng user gõ). Chỉ khi không truyền mới giữ mặc định 30.
+  const minGapMin = Math.max(0, Number.isFinite(gapRaw) ? gapRaw : 30);
   // Có seed thì dùng PRNG tất định: "Xem kế hoạch" và "Hẹn giờ thật" phải ra
   // cùng bộ giờ, nếu không user thấy giờ nhảy mỗi lần bấm.
   const rand = opts.seed != null ? makeSeededRng(opts.seed) : Math.random;

@@ -169,23 +169,77 @@ export function normalizeUntilUnix(raw, { expandMidnight = true } = {}) {
   return u;
 }
 
+/** Parse Graph time → unix seconds (or null). */
+export function parseGraphTimeUnix(raw) {
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  // unix seconds or ms
+  if (Number.isFinite(n) && n > 1e9) {
+    return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+  }
+  const ms = Date.parse(String(raw));
+  if (!Number.isFinite(ms)) return null;
+  return Math.floor(ms / 1000);
+}
+
 /**
- * Client-side time filter (Graph since/until is unreliable on /videos / reels).
- * - since: keep posts with created_time >= since (inclusive)
- * - until: keep posts with created_time <= until (inclusive)
- * Posts without created_time: drop when any time filter is set (safer than deleting outside range).
+ * Các mốc thời gian Graph của 1 object (unix sec).
+ */
+export function postTimeParts(post) {
+  return {
+    created: parseGraphTimeUnix(post?.created_time),
+    scheduled: parseGraphTimeUnix(post?.scheduled_publish_time),
+    updated: parseGraphTimeUnix(post?.updated_time),
+    source: String(post?._source || ""),
+  };
+}
+
+/**
+ * Thời điểm hiển thị/log (ưu tiên giờ hẹn → tạo → cập nhật).
+ */
+export function postEffectiveUnix(post) {
+  const { created, scheduled, updated } = postTimeParts(post);
+  if (scheduled != null) return scheduled;
+  if (created != null) return created;
+  return updated;
+}
+
+/**
+ * Client-side time filter (Graph since/until hay bỏ qua trên /videos & reels).
+ *
+ * until (Đến hết ngày X): KHÔNG xóa nếu *bất kỳ* mốc created/scheduled > until.
+ *   → Bài hẹn/đăng ngày 18 không bị xóa khi until=17, kể cả khi một mốc còn ngày 17.
+ * since (Từ ngày): dùng mốc sớm nhất có nghĩa (scheduled ?? created ?? updated).
+ *
+ * Không có time nào + đang lọc ngày → bỏ (không xóa).
  */
 export function postInTimeRange(post, sinceUnix, untilUnix) {
   const hasSince = sinceUnix != null && Number.isFinite(Number(sinceUnix));
   const hasUntil = untilUnix != null && Number.isFinite(Number(untilUnix));
   if (!hasSince && !hasUntil) return true;
-  const raw = post?.created_time;
-  if (!raw) return false; // unknown time + filter → do not delete
-  const ms = Date.parse(raw);
-  if (!Number.isFinite(ms)) return false;
-  const sec = Math.floor(ms / 1000);
-  if (hasSince && sec < Number(sinceUnix)) return false;
-  if (hasUntil && sec > Number(untilUnix)) return false;
+
+  const { created, scheduled, updated } = postTimeParts(post);
+  const known = [created, scheduled, updated].filter((t) => t != null);
+  if (!known.length) return false;
+
+  if (hasUntil) {
+    const until = Number(untilUnix);
+    // Siết: chỉ cần 1 mốc (created hoặc scheduled) sau until → không xóa
+    if (created != null && created > until) return false;
+    if (scheduled != null && scheduled > until) return false;
+    // Không có created/scheduled: dùng updated (yếu hơn)
+    if (created == null && scheduled == null && updated != null && updated > until) {
+      return false;
+    }
+  }
+
+  if (hasSince) {
+    const since = Number(sinceUnix);
+    // Mốc “nội dung thuộc ngày nào”: giờ hẹn nếu có, không thì ngày tạo
+    const goLive = scheduled ?? created ?? updated;
+    if (goLive != null && goLive < since) return false;
+  }
+
   return true;
 }
 
@@ -257,6 +311,22 @@ export function isBrandingGraphItem(post) {
   return false;
 }
 
+/** Bài chờ hẹn / chưa publish — mặc định KHÔNG xóa khi lọc theo ngày. */
+export function isScheduledPendingPost(post) {
+  if (!post || typeof post !== "object") return false;
+  const src = String(post._source || "").toLowerCase();
+  if (/scheduled/.test(src)) return true;
+  const sched = parseGraphTimeUnix(post.scheduled_publish_time);
+  if (sched == null) return false;
+  // Có giờ hẹn trong tương lai → đang chờ đăng
+  if (sched > Math.floor(Date.now() / 1000) - 60) return true;
+  // unpublished / scheduled status
+  const st = String(post.status_type || post.status || "").toLowerCase();
+  if (/schedul|unpublish|pending/.test(st)) return true;
+  if (post.is_published === false || post.published === false) return true;
+  return false;
+}
+
 export function filterPostsByOptions(posts, opts = {}) {
   const sinceU = toUnixSeconds(opts.since);
   const untilU =
@@ -266,6 +336,25 @@ export function filterPostsByOptions(posts, opts = {}) {
         })
       : null;
   let out = Array.isArray(posts) ? posts : [];
+  // Mặc định: chỉ bài đã publish. Option 2 / include_scheduled mới xóa bài đợi hẹn.
+  const ctypes = Array.isArray(opts.content_types)
+    ? opts.content_types.map(String)
+    : [];
+  const allowScheduled =
+    opts.include_scheduled === true ||
+    opts.includeScheduled === true ||
+    ctypes.includes("scheduled");
+  const scheduledOnly =
+    allowScheduled && ctypes.length === 1 && ctypes[0] === "scheduled";
+  if (scheduledOnly) {
+    out = out.filter(
+      (p) =>
+        /scheduled/i.test(String(p._source || "")) ||
+        p.scheduled_publish_time != null
+    );
+  } else if (!allowScheduled) {
+    out = out.filter((p) => !isScheduledPendingPost(p));
+  }
   if (sinceU != null || untilU != null) {
     out = out.filter((p) => postInTimeRange(p, sinceU, untilU));
   }
@@ -445,9 +534,9 @@ export async function previewPagePosts(pageRowId, opts = {}) {
  * - max_posts: cap per page when listing
  * - use_batch: default true
  * - concurrency: default 12 (khi fallback single DELETE)
- * - list_parallel: page list song song (default 1 — Meta #4 storm if multi-list)
- * - page_parallel: page DELETE song song (default 2, max 12)
- * - batch_parallel: max concurrent Graph batch HTTP (×50 DELETE), default 6, max 12
+ * - list_parallel: page list tuần tự (default 1)
+ * - page_parallel: page DELETE tuần tự (default 1; page chưa tới lượt ở hàng chờ)
+ * - batch_parallel: max concurrent Graph batch HTTP (×50 DELETE). Wipe default 6 max 12; xóa đúng id default 24 max 24
  * - adaptive: true = ramp // based on X-App-Usage + rate-limit
  * - list_mode: wipe (3 edges) | full (all edges)
  * - delay_ms: base pause giữa batch
@@ -461,9 +550,6 @@ export function startDeleteJob(opts = {}) {
         .filter((n) => Number.isFinite(n) && n > 0)
     ),
   ];
-  if (!pageRowIds.length) {
-    throw new Error("Chọn ít nhất 1 Page (page_row_ids)");
-  }
 
   const explicitIds = Array.isArray(opts.post_ids)
     ? opts.post_ids.map(String).filter(Boolean)
@@ -471,17 +557,49 @@ export function startDeleteJob(opts = {}) {
       ? opts.postIds.map(String).filter(Boolean)
       : null;
 
+  /** @type {Map<number, string[]>|null} per-page explicit IDs (xóa theo job đăng bài) */
+  let postsByPage = null;
+  if (opts.posts_by_page && typeof opts.posts_by_page === "object" && !Array.isArray(opts.posts_by_page)) {
+    postsByPage = new Map();
+    for (const [k, arr] of Object.entries(opts.posts_by_page)) {
+      const pid = Number(k);
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      const ids = (Array.isArray(arr) ? arr : []).map(String).filter(Boolean);
+      if (ids.length) postsByPage.set(pid, [...new Set(ids)]);
+    }
+  } else if (Array.isArray(opts.items) && opts.items.length) {
+    postsByPage = new Map();
+    for (const it of opts.items) {
+      const pid = Number(it?.page_row_id ?? it?.pageRowId);
+      const postId = String(it?.post_id ?? it?.postId ?? "").trim();
+      if (!Number.isFinite(pid) || pid <= 0 || !postId) continue;
+      if (!postsByPage.has(pid)) postsByPage.set(pid, []);
+      postsByPage.get(pid).push(postId);
+    }
+    for (const [pid, ids] of postsByPage) {
+      postsByPage.set(pid, [...new Set(ids)]);
+    }
+  }
+  // Nếu chỉ truyền items/posts_by_page mà quên page_row_ids → lấy từ map
+  if (postsByPage?.size) {
+    for (const pid of postsByPage.keys()) {
+      if (!pageRowIds.includes(pid)) pageRowIds.push(pid);
+    }
+  }
+  if (!pageRowIds.length) {
+    throw new Error("Chọn ít nhất 1 Page (page_row_ids) hoặc truyền items/posts_by_page");
+  }
+
   const dryRun = Boolean(opts.dry_run || opts.dryRun);
-  // DELETE multi-page OK; LIST must stay low (each list = hundreds of GETs)
+  const knownIds = !!(postsByPage?.size || explicitIds?.length);
+  // Page là đơn vị hàng đợi: luôn hoàn tất Page hiện tại rồi mới chuyển Page kế.
+  // Không gửi tổng tất cả page cùng lúc, tránh trạng thái progress sai và burst lỗi.
+  const pageCap = 1;
   const pageParallel = Math.min(
-    12,
-    Math.max(1, Number(opts.page_parallel ?? opts.pageParallel ?? 2) || 2)
+    pageCap,
+    Math.max(1, Number(opts.page_parallel ?? opts.pageParallel ?? 1) || 1)
   );
-  // Community 2026: serialize list across pages under Platform rate limit (#4)
-  const listParallel = Math.min(
-    3,
-    Math.max(1, Number(opts.list_parallel ?? opts.listParallel ?? 1) || 1)
-  );
+  const listParallel = 1;
   const adaptive =
     opts.adaptive !== false &&
     opts.adaptive !== 0 &&
@@ -513,6 +631,9 @@ export function startDeleteJob(opts = {}) {
     brandingRaw === "false"
   ) {
     deleteBranding = false;
+  } else if (postsByPage?.size || explicitIds?.length) {
+    // Xóa đúng list bài (theo job) — không đụng avatar/bìa
+    deleteBranding = false;
   } else {
     // undefined: full wipe only → default ON; date/keyword → default OFF
     deleteBranding = !hasDateOrKw;
@@ -539,16 +660,40 @@ export function startDeleteJob(opts = {}) {
       })(),
       use_batch: opts.use_batch !== false && opts.useBatch !== false,
       concurrency: Math.min(24, Math.max(1, Number(opts.concurrency) || 12)),
-      // Ceiling for concurrent Graph batch (50 DELETE each). Adaptive ramps within this.
+      // Ceiling for concurrent Graph batch (50 DELETE each).
+      // Known ids: 24 HTTP batch / page. Wipe stays at 12.
       batch_parallel: Math.min(
-        12,
-        Math.max(1, Number(opts.batch_parallel ?? opts.batchParallel ?? 6) || 6)
+        knownIds ? 24 : 12,
+        Math.max(1, Number(opts.batch_parallel ?? opts.batchParallel ?? (knownIds ? 24 : 6)) || (knownIds ? 24 : 6))
       ),
       adaptive,
       page_parallel: pageParallel,
       list_parallel: listParallel,
       list_mode: listMode,
+      pace: opts.pace === "max" ? "max" : "adaptive",
       delay_ms: Math.max(0, Number(opts.delay_ms ?? opts.delayMs ?? 0)),
+      // null = mọi loại ĐÃ PUBLISH (không gồm bài hẹn). Thêm "scheduled" mới xóa bài đợi hẹn.
+      content_types: (() => {
+        const raw = opts.content_types ?? opts.contentTypes;
+        if (raw == null || raw === "" || raw === "all") return null;
+        if (Array.isArray(raw)) {
+          const arr = raw.map((x) => String(x).trim()).filter(Boolean);
+          return arr.length && !arr.includes("all") ? arr : null;
+        }
+        const arr = String(raw)
+          .split(/[,|;]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        return arr.length && !arr.includes("all") ? arr : null;
+      })(),
+      include_scheduled: (() => {
+        if (opts.include_scheduled === true || opts.includeScheduled === true) return true;
+        const raw = opts.content_types ?? opts.contentTypes;
+        if (Array.isArray(raw)) return raw.map(String).includes("scheduled");
+        if (typeof raw === "string")
+          return raw.split(/[,|;]+/).map((s) => s.trim()).includes("scheduled");
+        return false;
+      })(),
     },
     pages: pageRowIds.map((id) => ({
       page_row_id: id,
@@ -581,6 +726,9 @@ export function startDeleteJob(opts = {}) {
     notifications: [],
     report: null,
     explicit_post_ids: explicitIds,
+    /** Per-page explicit IDs — hỗ trợ xóa đúng list từ job đăng (nhiều page) */
+    posts_by_page: postsByPage,
+    source_posting_job_id: opts.source_posting_job_id || opts.sourcePostingJobId || null,
     /** @type {Map<number, Map<string, object>>} filled while job runs (not snapshotted fully) */
     _postMeta: null,
   };
@@ -607,22 +755,47 @@ export function startDeleteJob(opts = {}) {
   return snapshot(job);
 }
 
-function pushRecent(job, line) {
+const DELETE_LIMIT_LINE = /FB limit|Tạm dừng|tạm dừng|rate.?limit/i;
+
+/** Full delete progress log. Rate-limit lines stay off this list so page lines are kept. */
+export function recordDeleteLogLine(job, line) {
   const text = String(line || "");
-  // Debounce spam limit lines (parallel batches used to flood UI)
-  if (/FB limit|Tạm dừng|tạm dừng|rate.?limit/i.test(text)) {
+  const at = nowIso();
+  const isLimit = DELETE_LIMIT_LINE.test(text);
+  if (!isLimit) {
+    if (!Array.isArray(job.log_lines)) job.log_lines = [];
+    job.log_lines.push({ at, text });
+    if (job.log_lines.length > 2000) {
+      job.log_lines.splice(0, job.log_lines.length - 2000);
+    }
+  }
+  return { at, text, isLimit };
+}
+
+export function deleteJobMatchesSource(job, sourceId) {
+  if (!job || job.dry_run || job.stop_requested) return false;
+  if (String(job.source_posting_job_id || "") !== String(sourceId || "")) return false;
+  return ["queued", "listing", "running", "rate_limited"].includes(String(job.status || ""));
+}
+
+function pushRecent(job, line) {
+  const { at, text, isLimit } = recordDeleteLogLine(job, line);
+  if (isLimit) {
     const last = job.recent?.[0];
     if (
       last &&
-      /FB limit|Tạm dừng|tạm dừng/i.test(last.text || "") &&
+      DELETE_LIMIT_LINE.test(last.text || "") &&
       Date.now() - Date.parse(last.at || 0) < 2500
     ) {
-      job.recent[0] = { at: nowIso(), text };
+      job.recent[0] = { at, text };
       return;
     }
+    job.recent.unshift({ at, text });
+    if (job.recent.length > 8) job.recent.length = 8;
+    return;
   }
-  job.recent.unshift({ at: nowIso(), text });
-  if (job.recent.length > 60) job.recent.length = 60;
+  job.recent.unshift({ at, text });
+  if (job.recent.length > 40) job.recent.length = 40;
 }
 
 function recompute(job) {
@@ -642,6 +815,8 @@ function recompute(job) {
   const donePages = pages.filter((p) =>
     ["ok", "fail", "partial", "skipped", "dry_run"].includes(p.status)
   ).length;
+  const queuedPages = pages.filter((p) => ["pending", "ready"].includes(p.status)).length;
+  const activePage = pages.find((p) => ["listing", "deleting"].includes(p.status));
   const finished = ["ok", "fail", "partial", "stopped"].includes(job.status);
   let percent = 0;
   if (job.dry_run) {
@@ -672,6 +847,10 @@ function recompute(job) {
     ok,
     fail,
     pending,
+    pages_total: pages.length,
+    pages_done: donePages,
+    pages_queued: queuedPages,
+    current_page: activePage?.page_name || null,
     done: ok + fail,
     total_delete: matched,
     label:
@@ -685,8 +864,8 @@ function recompute(job) {
       job.progress.label = `Đang list… ${listed} object`;
     } else if (["running", "rate_limited"].includes(job.status) || pending > 0) {
       const active = pages.filter((p) => p.status === "deleting").map((p) => p.page_name);
-      const who = active.length ? active.slice(0, 2).join(", ") : "…";
-      job.progress.label = `${who} · OK ${ok} · lỗi ${fail} · còn ${pending}/${matched}`;
+      const who = active.length ? active.slice(0, 2).join(", ") : "Chờ Page tiếp theo";
+      job.progress.label = `${who} · Page ${donePages}/${pages.length} · OK ${ok} · lỗi ${fail} · còn ${pending}/${matched}`;
     }
   }
 }
@@ -730,6 +909,7 @@ function snapshot(job) {
     kind: job.kind,
     status: job.status,
     dry_run: job.dry_run,
+    source_posting_job_id: job.source_posting_job_id || null,
     created_at: job.created_at,
     finished_at: job.finished_at,
     stop_requested: job.stop_requested,
@@ -737,6 +917,7 @@ function snapshot(job) {
     pages,
     progress: job.progress,
     recent: (job.recent || []).slice(0, 40),
+    log_lines: (job.log_lines || []).slice(-800),
     notifications: (job.notifications || []).slice(0, 10),
     report: finished && job.report
       ? {
@@ -752,18 +933,22 @@ function snapshot(job) {
   return JSON.parse(JSON.stringify(copy));
 }
 
-/** Run async work over items with limited parallelism. */
+function groupPagesByApp(pages) {
+  const groups = new Map();
+  for (const pageState of pages || []) {
+    const key = String(pageState.meta_app_key || "app").trim() || "app";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(pageState);
+  }
+  return groups;
+}
+
+/** Run async work over items in queue order; one Page at a time. */
 async function mapPool(items, parallel, worker) {
   const list = [...items];
-  let i = 0;
-  const n = Math.min(Math.max(1, parallel), list.length || 1);
-  async function run() {
-    while (i < list.length) {
-      const idx = i++;
-      await worker(list[idx], idx);
-    }
+  for (const [idx, item] of list.entries()) {
+    await worker(item, idx);
   }
-  await Promise.all(Array.from({ length: n }, () => run()));
 }
 
 function applyRateLimitUi(job, info, pageName = "") {
@@ -790,9 +975,9 @@ function applyRateLimitUi(job, info, pageName = "") {
   emit(job);
 }
 
-function clearRateLimitUi(job, resumeLabel) {
-  // If still in GLOBAL pause, do not clear banner / spam "Hết limit"
-  if (isGlobalGraphPaused()) {
+function clearRateLimitUi(job, resumeLabel, metaAppKey) {
+  // Nếu App này vẫn đang pause thì giữ banner
+  if (isGlobalGraphPaused(metaAppKey)) {
     return;
   }
   job.progress.rate_limited = false;
@@ -821,27 +1006,52 @@ async function listOnePage(job, pageState, toDelete) {
     return;
   }
   try {
-    // Wait global pause before taking list slot (no N pages queue-storm)
-    if (isGlobalGraphPaused()) {
+    const pageEarly = loadPageForDelete(pageState.page_row_id);
+    const appKeyEarly = pageEarly?.meta_app_key || "";
+    // Chỉ chờ pause của Meta App page này
+    if (isGlobalGraphPaused(appKeyEarly)) {
       await waitGlobalGraphPause({
+        metaAppKey: appKeyEarly,
         shouldStop: () => job.stop_requested,
         onTick: (info) => applyRateLimitUi(job, { ...info, ticking: true }),
       });
     }
-    await acquireListSlot({ shouldStop: () => job.stop_requested });
+    const perPageIdsEarly = job.posts_by_page?.get?.(pageState.page_row_id);
+    const knownPageIds = !!perPageIdsEarly?.length;
+    if (!knownPageIds) {
+      await acquireListSlot({ shouldStop: () => job.stop_requested });
+    }
     try {
-    const page = loadPageForDelete(pageState.page_row_id);
+    const page = pageEarly;
     pageState.page_id = page.page_id;
     pageState.page_name = page.name;
+    pageState.meta_app_key = page.meta_app_key || "app1";
     pageState.status = "listing";
-    job.progress.label = `List · ${page.name} (list//${job.options.list_parallel || 1})`;
+  job.progress.label = `List · ${page.name} (hàng đợi Page)`;
     emit(job);
 
     if (!job._postMeta) job._postMeta = new Map();
     const meta = new Map();
 
     let ids;
-    if (job.explicit_post_ids?.length && job.pages.length === 1) {
+    const perPageIds = perPageIdsEarly;
+    if (perPageIds?.length) {
+      ids = perPageIds;
+      pageState.listed = ids.length;
+      pageState.matched = ids.length;
+      for (const id of ids) {
+        meta.set(id, {
+          id,
+          link: buildPostUrl(id, page.page_id),
+          message: "",
+          created_time: null,
+        });
+      }
+      pushRecent(
+        job,
+        `${page.name}: xóa đúng ${ids.length} bài (theo job đăng)`
+      );
+    } else if (job.explicit_post_ids?.length && job.pages.length === 1) {
       ids = job.explicit_post_ids;
       pageState.listed = ids.length;
       pageState.matched = ids.length;
@@ -868,21 +1078,26 @@ async function listOnePage(job, pageState, toDelete) {
         since: sinceU ?? undefined,
         until: untilU ?? undefined,
         metaAppKey: page.meta_app_key,
-        // wipe = published + feed(share/visitor) + videos + photos; full = all edges
+        // wipe = posts+photos+videos+reels+live+scheduled+tagged+visitor
         listMode: job.options.list_mode || "wipe",
+        content_types: job.options.content_types || null,
+        include_scheduled: !!job.options.include_scheduled,
         shouldStop: () => job.stop_requested,
         onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
         onBatch: (_batch, total) => {
           pageState.listed = total;
           recompute(job);
-          if (job.status === "rate_limited" && !isGlobalGraphPaused()) {
-            clearRateLimitUi(job, `List · ${page.name}`);
+          if (
+            job.status === "rate_limited" &&
+            !isGlobalGraphPaused(page.meta_app_key)
+          ) {
+            clearRateLimitUi(job, `List · ${page.name}`, page.meta_app_key);
           }
           emit(job);
         },
       });
-      if (!isGlobalGraphPaused()) {
-        clearRateLimitUi(job, `List xong · ${page.name}`);
+      if (!isGlobalGraphPaused(page.meta_app_key)) {
+        clearRateLimitUi(job, `List xong · ${page.name}`, page.meta_app_key);
       }
       pageState.listed = posts.length;
       pageState.edge_stats = posts._edgeStats || null;
@@ -903,9 +1118,14 @@ async function listOnePage(job, pageState, toDelete) {
         until_exact: true, // already normalized
         keyword: job.options.keyword,
         include_branding: false,
+        include_scheduled: !!job.options.include_scheduled,
+        content_types: job.options.content_types,
       });
       const brandingSkipped = (Array.isArray(posts) ? posts : []).filter((p) =>
         isBrandingGraphItem(p)
+      ).length;
+      const schedSkipped = (Array.isArray(posts) ? posts : []).filter((p) =>
+        isScheduledPendingPost(p)
       ).length;
       const dropped =
         (Array.isArray(posts) ? posts.length : 0) - filtered.length;
@@ -916,6 +1136,12 @@ async function listOnePage(job, pageState, toDelete) {
             (job.options.delete_branding
               ? "sẽ thử bước branding riêng (Meta hay #200 nếu upload tay)"
               : "không xóa (tick «Xóa avatar + ảnh bìa» nếu muốn thử)")
+        );
+      }
+      if (schedSkipped > 0 && !job.options.include_scheduled) {
+        pushRecent(
+          job,
+          `${page.name}: bỏ ${schedSkipped} bài ĐỢI HẸN — không xóa (tick «Bài hẹn giờ» nếu muốn xóa)`
         );
       }
       if (
@@ -936,6 +1162,7 @@ async function listOnePage(job, pageState, toDelete) {
           link: buildPostUrl(p.id, page.page_id, p.permalink_url),
           message: String(p.message || p.story || p.description || "").slice(0, 200),
           created_time: p.created_time || null,
+          scheduled_publish_time: p.scheduled_publish_time || null,
           source: p._source || null,
         });
       }
@@ -957,7 +1184,7 @@ async function listOnePage(job, pageState, toDelete) {
       pageState.status = "ready";
     }
     } finally {
-      releaseListSlot();
+      if (!knownPageIds) releaseListSlot();
     }
   } catch (e) {
     if (e.code === "STOPPED") {
@@ -994,7 +1221,8 @@ async function deleteOnePage(job, pageState, toDelete) {
   try {
     const page = loadPageForDelete(pageState.page_row_id);
     pageState.status = "deleting";
-    job.progress.label = `Xóa · ${page.name} (${ids.length}) · //${job.options.page_parallel} page`;
+    job.progress.label = `Xóa · ${page.name} (${ids.length}) · Page hiện tại`;
+    pushRecent(job, `Bắt đầu xóa · ${page.name} · ${ids.length} bài`);
     emit(job);
 
     const onDelProgress = (info) => {
@@ -1022,11 +1250,13 @@ async function deleteOnePage(job, pageState, toDelete) {
     };
 
     let result = await deletePagePostsFast(ids, page.page_token, {
+      pageRowId: pageState.page_row_id,
       useBatch: job.options.use_batch,
       concurrency: job.options.concurrency,
       batchParallel: job.options.batch_parallel,
       adaptive: job.options.adaptive !== false,
       delayMs: job.options.delay_ms,
+      pace: job.options.pace,
       metaAppKey: page.meta_app_key,
       shouldStop: () => job.stop_requested,
       onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
@@ -1035,12 +1265,19 @@ async function deleteOnePage(job, pageState, toDelete) {
 
     // Pass 2+3: re-list leftovers. ALWAYS re-apply date filter.
     // (Old bug: multi-pass without since/until → xóa hết sau «đến ngày».)
+    // CRITICAL: khi xóa đúng list (post_ids / posts_by_page theo job đăng) → CẤM multi-pass
+    // (trước đây chỉ check explicit_post_ids → posts_by_page vẫn bị wipe pass 2/3).
+    const hasExplicitTargets =
+      !!job.explicit_post_ids?.length ||
+      (job.posts_by_page instanceof Map
+        ? job.posts_by_page.size > 0
+        : !!(job.posts_by_page && Object.keys(job.posts_by_page).length));
     const dateLocked = hasContentFilters({
       ...job.options,
       explicit_post_ids: job.explicit_post_ids,
     });
     const multiPass =
-      !job.explicit_post_ids?.length &&
+      !hasExplicitTargets &&
       (job.options.max_posts === 0 || job.options.max_posts >= 5000);
 
     async function mergeDeleteResult(base, extra) {
@@ -1089,6 +1326,8 @@ async function deleteOnePage(job, pageState, toDelete) {
             until: untilU ?? undefined,
             metaAppKey: page.meta_app_key,
             listMode: pass >= 3 ? "full" : job.options.list_mode || "wipe",
+            content_types: job.options.content_types || null,
+            include_scheduled: !!job.options.include_scheduled,
             shouldStop: () => job.stop_requested,
             onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
           });
@@ -1098,6 +1337,8 @@ async function deleteOnePage(job, pageState, toDelete) {
             until: untilU,
             until_exact: true,
             keyword: job.options.keyword,
+            include_scheduled: !!job.options.include_scheduled,
+            content_types: job.options.content_types,
           });
           if (againRaw?._edgeStats) {
             const parts = Object.entries(againRaw._edgeStats)
@@ -1126,6 +1367,7 @@ async function deleteOnePage(job, pageState, toDelete) {
           );
           pageState._ok_base = result.ok || 0;
           const rPass = await deletePagePostsFast(stillThere, page.page_token, {
+            pageRowId: pageState.page_row_id,
             useBatch: job.options.use_batch,
             concurrency: job.options.concurrency,
             batchParallel: Math.max(
@@ -1134,6 +1376,7 @@ async function deleteOnePage(job, pageState, toDelete) {
             ),
             adaptive: job.options.adaptive !== false,
             delayMs: job.options.delay_ms,
+            pace: job.options.pace,
             metaAppKey: page.meta_app_key,
             shouldStop: () => job.stop_requested,
             onRateLimit: (info) => applyRateLimitUi(job, info, page.name),
@@ -1239,10 +1482,19 @@ async function deleteOnePage(job, pageState, toDelete) {
       pushRecent(job, `${page.name} · top lỗi: ${top3}`);
     }
     if (failed.length) {
-      pushRecent(
-        job,
-        `${page.name}: ${failed.length} link lỗi (xem bảng kết quả / tải CSV)`
-      );
+      const show = failed.slice(0, 30);
+      for (const it of show) {
+        pushRecent(
+          job,
+          `${page.name}: FAIL ${it.post_id} · ${String(it.error || "lỗi").slice(0, 140)}`
+        );
+      }
+      if (failed.length > show.length) {
+        pushRecent(
+          job,
+          `${page.name}: còn ${failed.length - show.length} lỗi nữa (tải CSV)`
+        );
+      }
     }
   } catch (e) {
     pageState.status = "fail";
@@ -1259,13 +1511,18 @@ async function runDeleteJob(jobId) {
   const job = jobs.get(jobId);
   if (!job) return;
 
-  const pageParallel = job.options.page_parallel || 2;
-  const listParallel = job.options.list_parallel || 1;
+  const pageParallel = 1;
+  const listParallel = 1;
   setListSlotMax(listParallel);
 
-  job.status = "listing";
-  job.progress.phase = "listing";
-  job.progress.label = `Đang list (list//${listParallel}, xóa//${pageParallel}) · mode ${job.options.list_mode || "wipe"}…`;
+  const knownTargets =
+    (job.posts_by_page instanceof Map && job.posts_by_page.size > 0) ||
+    !!job.explicit_post_ids?.length;
+  job.status = knownTargets ? "running" : "listing";
+  job.progress.phase = knownTargets ? "deleting" : "listing";
+  job.progress.label = knownTargets
+    ? `Xóa đúng bài của job · tuần tự từng Page · chưa tới lượt ở hàng chờ`
+    : `Đang list tuần tự từng Page · mode ${job.options.list_mode || "wipe"}…`;
   recompute(job);
   emit(job);
   pushRecent(
@@ -1306,10 +1563,14 @@ async function runDeleteJob(jobId) {
   }
 
   if (!allIdsCount) {
-    job.status = "ok";
+    const failedPages = job.pages.filter((p) => p.status === "fail");
+    const completedPages = job.pages.filter((p) => ["ok", "dry_run"].includes(p.status));
+    job.status = failedPages.length && completedPages.length ? "partial" : failedPages.length ? "fail" : "ok";
     job.finished_at = nowIso();
     job.progress.phase = "done";
-    job.progress.label = "Không có bài nào để xóa";
+    job.progress.label = failedPages.length
+      ? `Không thể list ${failedPages.length}/${job.pages.length} Page — không tự kết luận là không có bài`
+      : "Không có bài nào để xóa";
     job.progress.percent = 100;
     finalizeReport(job);
     emit(job);
@@ -1318,13 +1579,14 @@ async function runDeleteJob(jobId) {
 
   job.status = "running";
   job.progress.phase = "deleting";
-  job.progress.label = `Đang xóa ${allIdsCount} bài (//${pageParallel} page)…`;
+  job.progress.label = `Đang xóa ${allIdsCount} bài · tuần tự từng Page · 50 bài/lần`;
   recompute(job);
   emit(job);
-
-  await mapPool(job.pages, pageParallel, async (pageState) => {
+  pushRecent(job, `Hàng đợi Page: ${job.pages.length} · đang xử lý lần lượt · batch trong từng Page tối đa ${job.options.batch_parallel}`);
+  for (const pageState of job.pages) {
+    if (job.stop_requested) break;
     await deleteOnePage(job, pageState, toDelete);
-  });
+  }
 
   const okPages = job.pages.filter((p) => p.status === "ok").length;
   const failPages = job.pages.filter((p) =>
@@ -1408,6 +1670,17 @@ export function failedPostsToCsv(jobOrId) {
 export function getDeleteJob(id) {
   const job = jobs.get(id);
   return job ? snapshot(job) : null;
+}
+
+/** Job xóa đang chạy cho đúng một job đăng — bấm lại không mở job thứ hai. */
+export function findActiveDeleteForPostingJob(sourceId) {
+  const want = String(sourceId || "");
+  if (!want) return null;
+  for (const job of jobs.values()) {
+    if (!deleteJobMatchesSource(job, want)) continue;
+    return snapshot(job);
+  }
+  return null;
 }
 
 export function listDeleteJobs(limit = 20) {

@@ -121,7 +121,7 @@ export function readCustomerDefaultEnvText() {
     `FB_REDIRECT_URI=${DEFAULT_FB_REDIRECT_URI}`,
     `FB_APP_ID=${DEFAULT_CUSTOMER_APP_ID}`,
     "FB_APP_NAME=App 1",
-    "FB_GRAPH_VERSION=v21.0",
+    "FB_GRAPH_VERSION=v26.0",
     "FB_SCOPES=pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_engagement,pages_manage_metadata,pages_read_user_content,business_management,read_insights,public_profile",
     "TOKEN_ENCRYPTION_KEY=",
     "GITHUB_REPO=trumrename/fb-page-studio",

@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Theo dõi bài đăng · FB Page Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    .tabs { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.85rem; }
+    .tab-btn {
+      border:1px solid var(--border); background:rgba(0,0,0,.2); color:var(--text);
+      border-radius:999px; padding:.45rem .9rem; font:inherit; font-size:.86rem; cursor:pointer;
+    }
+    .tab-btn.on {
+      border-color:rgba(96,165,250,.7); background:rgba(96,165,250,.18); color:#bfdbfe; font-weight:700;
+    }
+    .filters {
+      display:flex; flex-wrap:wrap; gap:.45rem; align-items:center; margin-bottom:.65rem;
+    }
+    .filters select, .filters input[type=date] {
+      max-width:12rem; padding:.4rem .55rem; border-radius:8px; border:1px solid var(--border);
+      background:rgba(0,0,0,.25); color:var(--text); font:inherit; font-size:.8rem;
+    }
+    .cal-grid {
+      display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:4px; margin-top:.35rem;
+    }
+    .cal-dow { text-align:center; font-size:.68rem; color:var(--muted); padding:.2rem 0; font-weight:600; }
+    .cal-cell {
+      min-height:4.1rem; border:1px solid rgba(255,255,255,.08); border-radius:8px;
+      padding:.28rem .32rem; background:rgba(0,0,0,.18); cursor:pointer; text-align:left;
+    }
+    .cal-cell:hover { border-color:rgba(125,211,252,.45); }
+    .cal-cell.is-today { border-color:rgba(52,211,153,.55); background:rgba(52,211,153,.08); }
+    .cal-cell.is-selected { border-color:rgba(96,165,250,.75); background:rgba(96,165,250,.14); }
+    .cal-cell.is-empty { opacity:.55; }
+    .cal-cell.is-muted { opacity:.35; }
+    .cal-cell .d { font-size:.78rem; font-weight:700; }
+    .cal-cell .n { font-size:.72rem; color:#6ee7b7; font-weight:700; margin-top:.15rem; }
+    .cal-cell .o { font-size:.68rem; color:#f5c96a; }
+    .cal-cell .s { font-size:.62rem; color:var(--muted); margin-top:.1rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .view-mode.on {
+      border-color:rgba(96,165,250,.7); background:rgba(96,165,250,.18); color:#bfdbfe;
+    }
+    .list-box {
+      max-height:380px; overflow:auto; border:1px solid rgba(255,255,255,.08);
+      border-radius:10px; padding:.35rem .55rem; margin-top:.35rem;
+    }
+    .row {
+      display:grid; grid-template-columns:7.2rem 1fr auto; gap:.4rem;
+      padding:.3rem 0; border-bottom:1px solid rgba(255,255,255,.06); font-size:.78rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main-wrap">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="menu-btn" id="menuBtn">☰</button>
+          <div>
+            <div class="view-eyebrow cyan">THEO DÕI</div>
+            <h1>Theo dõi bài đăng</h1>
+            <p class="sub">Tab Đã đăng / Chờ đăng · lọc tài khoản · ngày · nhóm</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" class="btn-ghost btn-sm" id="btnRefresh">Làm mới</button>
+          <a class="btn-ghost btn-sm" href="/posting.html#rotationWorkspace" style="text-decoration:none">← Lập lịch</a>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="panel">
+          <div class="panel-body">
+            <div class="tabs" role="tablist">
+              <button type="button" class="tab-btn on" data-tab="pending" id="tabPending">Chờ đăng</button>
+              <button type="button" class="tab-btn" data-tab="published" id="tabPublished">Đã đăng</button>
+            </div>
+
+            <div class="filters">
+              <div style="display:flex;gap:.3rem">
+                <button type="button" class="btn-ghost btn-sm view-mode on" data-view="month">Tháng</button>
+                <button type="button" class="btn-ghost btn-sm view-mode" data-view="week">Tuần</button>
+              </div>
+              <button type="button" class="btn-ghost btn-sm" id="btnPrev">‹</button>
+              <button type="button" class="btn-ghost btn-sm" id="btnToday">Hôm nay</button>
+              <button type="button" class="btn-ghost btn-sm" id="btnNext">›</button>
+              <b id="calTitle" style="min-width:8.5rem">—</b>
+              <select id="filterAccount"><option value="">Mọi tài khoản</option></select>
+              <select id="filterApp"><option value="">Mọi App</option></select>
+              <select id="filterPageGroup"><option value="">Mọi nhóm page</option></select>
+              <select id="filterAccountGroup"><option value="">Mọi nhóm TK</option></select>
+              <select id="filterPage" style="max-width:14rem"><option value="">Mọi page</option></select>
+              <input type="search" id="filterPageQ" placeholder="Tìm tên page / ID…" style="max-width:11rem;padding:.4rem .55rem;border-radius:8px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);font:inherit;font-size:.8rem" />
+              <select id="filterJob" style="display:none"><option value="">Mọi job</option></select>
+              <button type="button" class="btn-primary btn-sm" id="btnReconcile" disabled title="Chỉ đối soát đúng 1 ngày đang chọn">Đối soát ngày đang chọn</button>
+              <button type="button" class="btn-ok btn-sm" id="btnReconcileFilter" title="Đối soát mọi bài «chưa đối soát» đang hiện theo bộ lọc (cả tháng đang xem)">Đối soát theo bộ lọc</button>
+            </div>
+
+            <div id="summary" class="muted" style="margin-bottom:.5rem;font-size:.86rem">—</div>
+            <div id="calGrid" class="cal-grid" aria-label="Lịch bài"></div>
+
+            <div style="margin-top:.85rem;display:flex;justify-content:space-between;gap:.5rem;align-items:center">
+              <b id="dayTitle" style="font-size:.92rem">Chọn một ngày</b>
+              <span class="muted" id="dayMeta" style="font-size:.76rem">—</span>
+            </div>
+            <div id="dayList" class="list-box"><div class="muted">Click ô ngày để xem chi tiết.</div></div>
+            <div id="reconcileBox" style="display:none;margin-top:.65rem;padding:.75rem .9rem;border-radius:12px;border:1px solid rgba(96,165,250,.4);background:rgba(96,165,250,.1);font-size:.84rem;line-height:1.45"></div>
+            <div id="reconcileBarWrap" style="display:none;margin-top:.45rem">
+              <div style="display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:.25rem">
+                <span id="reconcileBarLabel" class="muted">Đối soát…</span>
+                <b id="reconcileBarPct">0%</b>
+              </div>
+              <div style="height:10px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden;border:1px solid var(--border)">
+                <i id="reconcileBarFill" style="display:block;height:100%;width:0%;background:linear-gradient(90deg,#38bdf8,#34d399);transition:width .2s ease"></i>
+              </div>
+            </div>
+            <div id="directLocalBox" style="margin-top:.75rem;display:none">
+              <b style="font-size:.85rem">Đăng theo giờ · đang chờ</b>
+              <div id="directLocalList" class="list-box" style="max-height:160px"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="/js/shell.js"></script>
+  <script src="/js/update.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let tab = "pending"; // pending | published
+    let calView = "month";
+    let calCursor = null;
+    let selectedDay = null;
+    let lastData = null;
+
+    async function api(path, opts = {}) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+      return data;
+    }
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+    function vnTodayStr() {
+      return new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+    }
+    function parseDayStr(s) {
+      const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return null;
+      return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12));
+    }
+    function dayStrFromDate(d) {
+      return d.toISOString().slice(0, 10);
+    }
+    function ensureCursor() {
+      if (!calCursor) calCursor = parseDayStr(vnTodayStr()) || new Date();
+      return calCursor;
+    }
+    function monthParam() {
+      const d = ensureCursor();
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    }
+    function fmtTime(iso) {
+      if (!iso) return "—";
+      try {
+        return new Date(iso).toLocaleString("vi-VN", {
+          timeZone: "Asia/Ho_Chi_Minh",
+          hour12: false,
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      } catch {
+        return String(iso);
+      }
+    }
+
+    /** /reel/ID → https://www.facebook.com/reel/ID */
+    function absFbUrl(url, postId) {
+      const raw = String(url || "").trim();
+      const id = postId != null ? String(postId).trim() : "";
+      if (raw) {
+        if (/^https?:\/\//i.test(raw)) return raw;
+        if (raw.startsWith("//")) return `https:${raw}`;
+        if (raw.startsWith("/")) return `https://www.facebook.com${raw}`;
+        if (/^(facebook\.com|www\.facebook\.com|fb\.watch|fb\.com)/i.test(raw))
+          return `https://${raw.replace(/^(https?:\/\/)?/i, "")}`;
+        return `https://www.facebook.com/${raw.replace(/^\/+/, "")}`;
+      }
+      if (!id) return "";
+      if (/^\d+_\d+$/.test(id)) {
+        const [pageId, storyId] = id.split("_");
+        return `https://www.facebook.com/${pageId}/posts/${storyId}`;
+      }
+      return `https://www.facebook.com/${id}`;
+    }
+
+    async function copyText(text) {
+      const t = String(text || "");
+      if (!t) return false;
+      try {
+        await navigator.clipboard.writeText(t);
+        return true;
+      } catch {
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = t;
+          ta.style.position = "fixed";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    }
+
+    function fillFilters(opts) {
+      const o = opts || {};
+      const setSel = (id, items, key, labelFn, empty) => {
+        const el = $(id);
+        if (!el) return;
+        const cur = el.value;
+        el.innerHTML =
+          `<option value="">${esc(empty)}</option>` +
+          (items || [])
+            .map((it) => `<option value="${esc(String(it[key] ?? it.id ?? ""))}">${esc(labelFn(it))}</option>`)
+            .join("");
+        if ([...el.options].some((op) => op.value === cur)) el.value = cur;
+      };
+      setSel("filterAccount", o.accounts, "id", (a) => a.name || `TK #${a.id}`, "Mọi tài khoản");
+      setSel("filterApp", o.tokens, "meta_app_key", (t) => t.name || t.meta_app_key, "Mọi App");
+      setSel(
+        "filterPageGroup",
+        o.page_groups,
+        "id",
+        (g) => `${g.name || g.id} (${(g.page_row_ids || []).length})`,
+        "Mọi nhóm page"
+      );
+      setSel(
+        "filterAccountGroup",
+        o.account_groups,
+        "id",
+        (g) => `${g.name || g.id} (${(g.account_ids || []).length} TK)`,
+        "Mọi nhóm TK"
+      );
+      setSel(
+        "filterJob",
+        o.jobs,
+        "id",
+        (j) => `${j.title || j.id}`,
+        "Mọi job"
+      );
+      setSel(
+        "filterPage",
+        o.pages,
+        "id",
+        (p) =>
+          `${p.name || "Page"} · #${p.id}` +
+          (p.page_id ? ` · ${p.page_id}` : ""),
+        "Mọi page"
+      );
+    }
+
+    function weekRange() {
+      const cur = ensureCursor();
+      const dowIdx = (cur.getUTCDay() + 6) % 7;
+      const monday = new Date(cur);
+      monday.setUTCDate(cur.getUTCDate() - dowIdx);
+      const sunday = new Date(monday);
+      sunday.setUTCDate(monday.getUTCDate() + 6);
+      const fmt = (d) => d.toISOString().slice(0, 10);
+      return { from: fmt(monday), to: fmt(sunday) };
+    }
+
+    function queryCommon() {
+      const q = new URLSearchParams({ days: "62", limit: "2000" });
+      if (calView === "week") {
+        const r = weekRange();
+        q.set("from", r.from);
+        q.set("to", r.to);
+      } else {
+        q.set("month", monthParam());
+      }
+      const acc = $("filterAccount")?.value;
+      const app = $("filterApp")?.value;
+      const pg = $("filterPageGroup")?.value;
+      const ag = $("filterAccountGroup")?.value;
+      const page = $("filterPage")?.value;
+      const pageQ = $("filterPageQ")?.value?.trim();
+      const job = $("filterJob")?.value;
+      if (acc) q.set("account_id", acc);
+      if (app) q.set("meta_app_key", app);
+      if (pg) q.set("page_group_id", pg);
+      if (ag) q.set("account_group_id", ag);
+      if (page) q.set("page_row_id", page);
+      if (pageQ) q.set("page_q", pageQ);
+      if (tab === "pending" && job) q.set("job_id", job);
+      return q;
+    }
+
+    function renderGrid(cells, year, month, extra = {}) {
+      const grid = $("calGrid");
+      if (!grid) return;
+      const cellMap = new Map((cells || []).map((c) => [c.day, c]));
+      const today = vnTodayStr();
+      $("calTitle").textContent =
+        calView === "week"
+          ? `Tuần · ${dayStrFromDate(ensureCursor())}`
+          : `Tháng ${String(month).padStart(2, "0")}/${year}`;
+
+      const dow = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
+      let html = dow.map((d) => `<div class="cal-dow">${d}</div>`).join("");
+
+      const paint = (day, label) => {
+        const c = cellMap.get(day) || { count: 0, waiting: 0, overdue: 0, sample_pages: [] };
+        const cls = [
+          "cal-cell",
+          day === today ? "is-today" : "",
+          day === selectedDay ? "is-selected" : "",
+          c.count ? "" : "is-empty",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return (
+          `<button type="button" class="${cls}" data-day="${day}">` +
+          `<div class="d">${label}</div>` +
+          (c.count
+            ? `<div class="n">${c.count} bài</div>`
+            : `<div class="n" style="color:var(--muted)">·</div>`) +
+          (c.overdue || c.needs_reconcile ? `<div class="o">⏳ ${c.overdue || c.needs_reconcile} chưa ĐS</div>` : "") +
+          (c.sample_pages?.length
+            ? `<div class="s">${esc(c.sample_pages.slice(0, 2).join(", "))}</div>`
+            : "") +
+          `</button>`
+        );
+      };
+
+      if (calView === "month") {
+        const first = new Date(Date.UTC(year, month - 1, 1, 12));
+        const startPad = (first.getUTCDay() + 6) % 7;
+        for (let i = 0; i < startPad; i++) html += `<div class="cal-cell is-empty is-muted"></div>`;
+        const dim = new Date(Date.UTC(year, month, 0)).getUTCDate();
+        for (let d = 1; d <= dim; d++) {
+          const day = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+          html += paint(day, String(d));
+        }
+      } else {
+        const cur = ensureCursor();
+        const dowIdx = (cur.getUTCDay() + 6) % 7;
+        const monday = new Date(cur);
+        monday.setUTCDate(cur.getUTCDate() - dowIdx);
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(monday);
+          d.setUTCDate(monday.getUTCDate() + i);
+          const day = dayStrFromDate(d);
+          html += paint(day, `${day.slice(8)}/${day.slice(5, 7)}`);
+        }
+      }
+      grid.innerHTML = html;
+      grid.querySelectorAll(".cal-cell[data-day]").forEach((el) => {
+        el.onclick = () => showDay(el.getAttribute("data-day"));
+      });
+    }
+
+    function rowsForDay(day) {
+      if (!lastData || !day) return [];
+      if (tab === "pending") {
+        const pack = (lastData.fb_scheduled?.by_day || []).find((d) => d.day === day);
+        return pack?.rows || [];
+      }
+      const pack = (lastData.by_day || []).find((d) => d.day === day);
+      return pack?.rows || [];
+    }
+
+    function showDay(day) {
+      selectedDay = day;
+      $("btnReconcile").disabled = !(tab === "pending" && day);
+      $("dayTitle").textContent = day ? `Ngày ${day}` : "Chọn một ngày";
+      const rows = rowsForDay(day);
+      const needRec = rows.filter((r) => r.needs_reconcile || r.overdue).length;
+      const waiting = rows.filter((r) => r.waiting).length;
+      $("dayMeta").innerHTML =
+        `${rows.length} bài` +
+        (tab === "pending"
+          ? ` · chờ ${waiting}` +
+            (needRec
+              ? ` · <span style="color:#f5c96a">chưa đối soát ${needRec}</span>`
+              : "")
+          : "");
+      document.querySelectorAll(".cal-cell").forEach((el) => {
+        el.classList.toggle("is-selected", el.getAttribute("data-day") === day);
+      });
+      const box = $("dayList");
+      if (!rows.length) {
+        box.innerHTML =
+          tab === "pending"
+            ? `<div class="ok">Không còn bài <b>chờ đăng</b> ngày này (theo bộ lọc).</div>
+               <div class="muted" style="margin-top:.35rem">Nếu vừa đối soát xong: mở tab <b>Đã đăng</b> để xem bài đã lên tường.</div>`
+            : `<div class="muted">Không có bài đã đăng trong bộ lọc cho ngày này.</div>`;
+        return;
+      }
+      box.innerHTML = rows
+        .slice(0, 400)
+        .map((r) => {
+          const badge =
+            tab === "pending"
+              ? r.needs_reconcile || r.overdue
+                ? `<span style="color:#f5c96a">chưa đối soát</span>`
+                : r.reconciled_waiting
+                  ? `<span class="muted">chờ FB lên</span>`
+                  : r.waiting
+                    ? `<span class="ok">chờ</span>`
+                    : `<span class="muted">${esc(r.status)}</span>`
+              : `<span class="ok">${esc(r.status)}</span>`;
+          const when = r.scheduled_publish_time || r.created_at || r.run_at;
+          const postUrl = absFbUrl(r.fb_post_url, r.fb_post_id);
+          const linkRow = postUrl
+            ? `<div style="display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin-top:.2rem">
+                 <a href="${esc(postUrl)}" target="_blank" rel="noopener" style="font-size:.72rem;word-break:break-all">${esc(postUrl)}</a>
+                 <button type="button" class="btn-ghost btn-sm btn-copy-link" data-url="${esc(postUrl)}" title="Copy link">Copy link</button>
+                 <a class="btn-ghost btn-sm" href="${esc(postUrl)}" target="_blank" rel="noopener">Mở</a>
+               </div>`
+            : r.fb_post_id
+              ? `<div class="muted" style="font-size:.72rem;margin-top:.15rem">id: ${esc(r.fb_post_id)} (không có URL)</div>`
+              : "";
+          return (
+            `<div class="row">` +
+            `<span class="muted">${esc(fmtTime(when))}</span>` +
+            `<span><b>${esc(r.page_name || "?")}</b>` +
+            (r.account_name ? ` · <span class="muted">${esc(r.account_name)}</span>` : "") +
+            ` · ${esc(r.post_type || r.meta_app_key || "")}` +
+            (r.media_name ? ` · <code style="font-size:.7rem">${esc(r.media_name)}</code>` : "") +
+            (r.job_title ? `<div class="muted" style="font-size:.7rem">job: ${esc(r.job_title)}</div>` : "") +
+            (r.caption_preview
+              ? `<div class="muted" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.caption_preview)}</div>`
+              : "") +
+            linkRow +
+            `</span>${badge}</div>`
+          );
+        })
+        .join("");
+      box.querySelectorAll(".btn-copy-link").forEach((btn) => {
+        btn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const url = btn.getAttribute("data-url") || "";
+          const ok = await copyText(url);
+          const prev = btn.textContent;
+          btn.textContent = ok ? "Đã copy" : "Copy lỗi";
+          setTimeout(() => {
+            btn.textContent = prev || "Copy link";
+          }, 1200);
+        };
+      });
+    }
+
+    async function load() {
+      try {
+        ensureCursor();
+        const q = queryCommon();
+        const path =
+          tab === "pending"
+            ? `/api/posting/pending?${q}`
+            : `/api/posting/published?${q}`;
+        const data = await api(path);
+        lastData = data;
+        fillFilters(data.filter_options || {});
+        $("filterJob").style.display = tab === "pending" ? "" : "none";
+        $("directLocalBox").style.display = tab === "pending" ? "" : "none";
+        $("btnReconcile").style.display = tab === "pending" ? "" : "none";
+        if ($("btnReconcileFilter"))
+          $("btnReconcileFilter").style.display = tab === "pending" ? "" : "none";
+
+        const s = data.summary || {};
+        if (tab === "pending") {
+          $("summary").innerHTML =
+            `<span class="ok">Trong lịch: <b>${s.total_in_view || 0}</b></span>` +
+            ` · chờ đúng hạn <b>${s.fb_waiting || 0}</b>` +
+            ` · <span style="color:#f5c96a">chưa đối soát <b>${s.fb_overdue || 0}</b></span>` +
+            ` · Tool chờ <b>${s.tool_waiting || 0}</b>`;
+        } else {
+          $("summary").innerHTML = `<span class="ok">Đã đăng trong lịch: <b>${s.total_in_view || 0}</b></span>`;
+        }
+
+        const cal = data.calendar || {};
+        renderGrid(cal.cells || [], cal.year, cal.month);
+
+        const dl = data.direct_local_waiting || [];
+        const dlBox = $("directLocalList");
+        if (tab === "pending" && dlBox) {
+          dlBox.innerHTML = dl.length
+            ? dl
+                .slice(0, 80)
+                .map(
+                  (t) =>
+                    `<div class="row"><span class="muted">${esc(fmtTime(t.run_at))}</span>` +
+                    `<span><b>${esc(t.page_name)}</b>` +
+                    (t.job_title ? `<div class="muted" style="font-size:.7rem">${esc(t.job_title)}</div>` : "") +
+                    `</span>` +
+                    (t.overdue || t.needs_reconcile
+                      ? `<span style="color:#f5c96a">chưa đối soát</span>`
+                      : `<span class="ok">chờ</span>`) +
+                    `</div>`
+                )
+                .join("")
+            : `<div class="muted">Không có bài đăng theo giờ đang chờ.</div>`;
+        }
+
+        if (selectedDay) showDay(selectedDay);
+        else if ((cal.cells || []).some((c) => c.day === vnTodayStr() && c.count)) {
+          showDay(vnTodayStr());
+        } else {
+          showDay(null);
+        }
+      } catch (e) {
+        $("summary").innerHTML = `<span class="fail">${esc(e.message)}</span>`;
+      }
+    }
+
+    function setTab(next, { keepDay = false } = {}) {
+      tab = next === "published" ? "published" : "pending";
+      $("tabPending").classList.toggle("on", tab === "pending");
+      $("tabPublished").classList.toggle("on", tab === "published");
+      if (!keepDay) selectedDay = null;
+      return load();
+    }
+
+    $("tabPending").onclick = () => setTab("pending");
+    $("tabPublished").onclick = () => setTab("published");
+    $("btnRefresh").onclick = () => load();
+    document.querySelectorAll(".view-mode").forEach((btn) => {
+      btn.onclick = () => {
+        calView = btn.dataset.view === "week" ? "week" : "month";
+        document.querySelectorAll(".view-mode").forEach((b) => {
+          b.classList.toggle("on", b.dataset.view === calView);
+        });
+        load();
+      };
+    });
+    $("btnPrev").onclick = () => {
+      ensureCursor();
+      if (calView === "week") calCursor.setUTCDate(calCursor.getUTCDate() - 7);
+      else calCursor.setUTCMonth(calCursor.getUTCMonth() - 1);
+      load();
+    };
+    $("btnNext").onclick = () => {
+      ensureCursor();
+      if (calView === "week") calCursor.setUTCDate(calCursor.getUTCDate() + 7);
+      else calCursor.setUTCMonth(calCursor.getUTCMonth() + 1);
+      load();
+    };
+    $("btnToday").onclick = () => {
+      calCursor = parseDayStr(vnTodayStr());
+      selectedDay = vnTodayStr();
+      load();
+    };
+    ["filterAccount", "filterApp", "filterPageGroup", "filterAccountGroup", "filterPage", "filterJob"].forEach((id) => {
+      $(id)?.addEventListener("change", () => load());
+    });
+    let pageQTimer = null;
+    $("filterPageQ")?.addEventListener("input", () => {
+      clearTimeout(pageQTimer);
+      pageQTimer = setTimeout(() => load(), 350);
+    });
+    $("btnReconcileFilter").style.display = tab === "pending" ? "" : "none";
+    function setReconcileProgress(pct, label) {
+      const wrap = $("reconcileBarWrap");
+      const fill = $("reconcileBarFill");
+      const pctEl = $("reconcileBarPct");
+      const lab = $("reconcileBarLabel");
+      if (wrap) wrap.style.display = "block";
+      if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+      if (pctEl) pctEl.textContent = `${Math.round(pct)}%`;
+      if (lab) lab.textContent = label || "Đối soát…";
+    }
+
+    function collectVisibleLogs({ day = null, onlyNeedsReconcile = false } = {}) {
+      const days = lastData?.fb_scheduled?.by_day || [];
+      const packs = day
+        ? days.filter((d) => d.day === day)
+        : days;
+      const visible = packs.flatMap((d) => d.rows || []);
+      const filtered = onlyNeedsReconcile
+        ? visible.filter((r) => r.needs_reconcile || r.overdue)
+        : visible;
+      const log_ids = filtered
+        .filter(
+          (r) =>
+            r.fb_post_id &&
+            !String(r.id || "").startsWith("job:") &&
+            Number(r.id) > 0
+        )
+        .map((r) => Number(r.id));
+      const noIdCount = filtered.filter(
+        (r) => !r.fb_post_id && !String(r.id || "").startsWith("job:")
+      ).length;
+      const page_row_ids = [
+        ...new Set(filtered.map((r) => Number(r.page_row_id)).filter((n) => n > 0)),
+      ];
+      return { visible: filtered, log_ids, noIdCount, page_row_ids };
+    }
+
+    /** mode: 'day' = ngày đang chọn; 'filter' = mọi bài chưa ĐS theo bộ lọc tháng đang xem */
+    async function streamReconcile(mode = "day") {
+      const account_id = $("filterAccount")?.value || null;
+      const meta_app_key = $("filterApp")?.value || null;
+      const page_group_id = $("filterPageGroup")?.value || null;
+      const account_group_id = $("filterAccountGroup")?.value || null;
+      const page_row_id = $("filterPage")?.value || null;
+      const day = mode === "day" ? selectedDay : null;
+      if (mode === "day" && !day) {
+        throw new Error("Hãy click một ô ngày trên lịch trước.");
+      }
+      const { visible, log_ids, noIdCount, page_row_ids } = collectVisibleLogs({
+        day,
+        onlyNeedsReconcile: mode === "filter",
+      });
+      if (!visible.length) {
+        throw new Error(
+          mode === "day"
+            ? "Ngày này không có bài trong bộ lọc hiện tại."
+            : "Không có bài «chưa đối soát» trong bộ lọc / tháng đang xem."
+        );
+      }
+      if (!log_ids.length) {
+        throw new Error(
+          `Có ${visible.length} bài nhưng không có Facebook post id (thiếu id lúc hẹn). Không đối soát Graph được. Thiếu id: ${noIdCount}.`
+        );
+      }
+      const scopeNote = [
+        mode === "day" ? `ngày ${day}` : `bộ lọc · tháng ${monthParam()}`,
+        `${log_ids.length} bài có post id`,
+        noIdCount ? `${noIdCount} thiếu id (bỏ)` : null,
+        account_id ? `TK #${account_id}` : null,
+        page_row_id ? `page #${page_row_id}` : null,
+        meta_app_key ? `App ${meta_app_key}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      setReconcileProgress(0, `Phạm vi: ${scopeNote}`);
+      const res = await fetch("/api/posting/reconcile-scheduled", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          day: day || null,
+          limit: Math.min(200, Math.max(80, log_ids.length)),
+          stream: true,
+          account_id: account_id ? Number(account_id) : null,
+          meta_app_key: meta_app_key || null,
+          page_group_id: page_group_id || null,
+          account_group_id: account_group_id || null,
+          page_row_ids: page_row_id
+            ? [Number(page_row_id)]
+            : page_row_ids,
+          log_ids,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || res.statusText);
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let donePayload = null;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n");
+        buf = parts.pop() || "";
+        for (const chunk of parts) {
+          const lines = chunk.split("\n");
+          let event = "message";
+          let dataLine = "";
+          for (const ln of lines) {
+            if (ln.startsWith("event:")) event = ln.slice(6).trim();
+            if (ln.startsWith("data:")) dataLine += ln.slice(5).trim();
+          }
+          if (!dataLine) continue;
+          let data;
+          try {
+            data = JSON.parse(dataLine);
+          } catch {
+            continue;
+          }
+          if (event === "progress") {
+            setReconcileProgress(
+              Number(data.percent || 0),
+              data.message || `${data.current || 0}/${data.total || "?"}`
+            );
+          } else if (event === "done") {
+            donePayload = data;
+            setReconcileProgress(100, "Hoàn tất đối soát");
+          } else if (event === "error") {
+            throw new Error(data.error || "Đối soát lỗi");
+          }
+        }
+      }
+      if (!donePayload) throw new Error("Không nhận được kết quả đối soát (stream đứt)");
+      return donePayload;
+    }
+
+    async function runReconcile(mode) {
+      if (tab !== "pending") {
+        alert("Chỉ dùng trên tab «Chờ đăng».");
+        return;
+      }
+      if (mode === "day" && !selectedDay) {
+        alert("Hãy click một ô ngày trên lịch trước, rồi bấm Đối soát ngày đang chọn.");
+        return;
+      }
+      const box = $("reconcileBox");
+      const btnDay = $("btnReconcile");
+      const btnFilter = $("btnReconcileFilter");
+      box.style.display = "block";
+      box.innerHTML =
+        mode === "day"
+          ? `<b>Đang đối soát ngày ${esc(selectedDay)}…</b>`
+          : `<b>Đang đối soát theo bộ lọc (tháng đang xem)…</b>`;
+      if (btnDay) btnDay.disabled = true;
+      if (btnFilter) btnFilter.disabled = true;
+      setReconcileProgress(0, "Bắt đầu…");
+      box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      try {
+        const rec = await streamReconcile(mode);
+        const checked = Number(rec.checked || 0);
+        const published = Number(rec.published || 0);
+        const stillOver = Number(rec.overdue || 0);
+        const stillFb = Number(rec.still_on_fb || 0);
+        const unknown = Number(rec.unknown || 0);
+        const commentsOk = Number(rec.comments_ok || 0);
+        const commentsWait = Number(rec.comments_waiting || 0);
+
+        const dayKeep = selectedDay;
+        const scopeLabel =
+          mode === "day"
+            ? `ngày ${dayKeep}`
+            : `bộ lọc · tháng ${monthParam()}`;
+        const summaryHtml =
+          `<b>Xong đối soát (${esc(scopeLabel)})</b><br/>` +
+          `Đã hỏi FB <b>${checked}</b> bài (đã tới giờ, có post id)` +
+          `<br/>→ <b class="ok">Đã lên tường: ${published}</b>` +
+          `<br/>→ Vẫn trên lịch hẹn FB: <b>${stillFb}</b> (nhãn «chờ FB lên»)` +
+          `<br/>→ Chưa public: <b>${stillOver}</b>` +
+          (unknown ? `<br/>→ Lỗi đọc Graph: <b class="fail">${unknown}</b>` : "") +
+          (commentsOk || commentsWait
+            ? `<br/>Comment: ok ${commentsOk}` +
+              (commentsWait ? ` · đang chờ ${commentsWait}` : "")
+            : "") +
+          (checked === 0
+            ? `<br/><span class="fail">${esc(rec.empty_reason || "Không có bài đủ điều kiện trong phạm vi đang chọn.")}</span>`
+            : "");
+
+        box.innerHTML = summaryHtml + `<br/><span class="muted">Đang làm mới bảng…</span>`;
+        await load();
+        if (dayKeep) showDay(dayKeep);
+        box.style.display = "block";
+        box.innerHTML =
+          summaryHtml +
+          `<br/><span class="muted">Chỉ đụng đúng phạm vi đã chọn (ngày/bộ lọc + page đang hiện) — ngoài phạm vi không đụng.</span>` +
+          (published > 0
+            ? `<br/><span class="ok">${published} bài đã lên → tab <b>Đã đăng</b>.</span>
+               <button type="button" class="btn-ghost btn-sm" id="btnGoPublished">Mở Đã đăng</button>`
+            : "");
+        $("btnGoPublished")?.addEventListener("click", async () => {
+          selectedDay = dayKeep;
+          await setTab("published", { keepDay: true });
+          if (dayKeep) showDay(dayKeep);
+        });
+        box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      } catch (e) {
+        box.style.display = "block";
+        box.innerHTML = `<span class="fail"><b>Lỗi đối soát:</b> ${esc(e.message)}</span>`;
+        alert("Đối soát lỗi: " + (e.message || e));
+      } finally {
+        if (btnDay) btnDay.disabled = !selectedDay;
+        if (btnFilter) btnFilter.disabled = false;
+        setTimeout(() => {
+          const wrap = $("reconcileBarWrap");
+          if (wrap) wrap.style.display = "none";
+        }, 2500);
+      }
+    }
+
+    $("btnReconcile").onclick = () => runReconcile("day");
+    $("btnReconcileFilter").onclick = () => {
+      if (
+        !confirm(
+          "Đối soát TẤT CẢ bài «chưa đối soát» đang hiện theo bộ lọc / tháng đang xem?\n" +
+            "Không đụng page/TK ngoài filter.\nCó thể mất vài phút."
+        )
+      ) {
+        return;
+      }
+      runReconcile("filter");
+    };
+
+    load();
+  </script>
+</body>
+</html>

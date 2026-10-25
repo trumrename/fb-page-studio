@@ -12,7 +12,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { getDb } from "../db/index.js";
-import { getLastUsage } from "./rateLimit.js";
+import { getLastUsage, getUsagePeakPercent, isCommunitySpamBlock, isPermissionError, isSpamBlockError } from "./rateLimit.js";
 import {
   ensureDir,
   moveToPosted,
@@ -153,6 +153,16 @@ export function ensureAntiSpamTables() {
       streak INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS page_circuit (
+      page_row_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      until_ts INTEGER NOT NULL,
+      reason TEXT,
+      fail_count INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (page_row_id, action)
+    );
   `);
 
   const mediaCols = db.prepare(`PRAGMA table_info(media_hash_used)`).all().map((c) => c.name);
@@ -291,8 +301,18 @@ function logEvent(kind, detail) {
 }
 
 export function fileSha256(filePath) {
-  const buf = fs.readFileSync(filePath);
-  return crypto.createHash("sha256").update(buf).digest("hex");
+  const hash = crypto.createHash("sha256");
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const buf = Buffer.allocUnsafe(1024 * 1024);
+    let n = 0;
+    while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
+      hash.update(n === buf.length ? buf : buf.subarray(0, n));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
 }
 
 export function normalizeCaption(caption) {
@@ -305,6 +325,63 @@ export function normalizeCaption(caption) {
 export function isMediaHashUsed(hash) {
   ensureAntiSpamTables();
   return !!getDb().prepare(`SELECT hash FROM media_hash_used WHERE hash = ?`).get(hash);
+}
+
+export function getMediaHashRow(hash) {
+  if (!hash) return null;
+  ensureAntiSpamTables();
+  return (
+    getDb().prepare(`SELECT * FROM media_hash_used WHERE hash = ?`).get(hash) || null
+  );
+}
+
+/**
+ * File còn nằm trong kho media = chưa tiêu thụ xong (đăng/hẹn xong phải MOVE sang posted).
+ * Hash chỉ chặn khi đã có posted_path KHÁC file hiện tại (thường là file trong folder đã đăng)
+ * hoặc cùng nội dung đã gắn fb_post_id với đích khác.
+ * Hash mồ côi (ghi hash nhưng file vẫn trong inbox / posted_path = chính file đó) → không chặn.
+ */
+function sameDiskPath(a, b) {
+  const left = path.resolve(String(a || ""));
+  const right = path.resolve(String(b || ""));
+  if (process.platform === "win32") return left.toLowerCase() === right.toLowerCase();
+  return left === right;
+}
+
+export function mediaHashBlocksInboxFile(hash, filePath) {
+  const row = getMediaHashRow(hash);
+  if (!row) return false;
+  const posted = String(row.posted_path || "").trim();
+  if (!posted) return false;
+  let postedAbs;
+  try {
+    postedAbs = path.resolve(posted);
+  } catch {
+    return false;
+  }
+  if (!postedAbs || sameDiskPath(postedAbs, filePath)) return false;
+  // Path cũ, ổ không có trên máy này, hoặc file đã bị xóa: không chặn.
+  try {
+    if (!fs.existsSync(postedAbs)) {
+      getDb().prepare(`DELETE FROM media_hash_used WHERE hash = ?`).run(hash);
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/** Xóa hash mồ côi khi file vẫn còn trong kho media. */
+export function releaseStaleMediaHash(hash, filePath) {
+  if (!hash || mediaHashBlocksInboxFile(hash, filePath)) return false;
+  if (!getMediaHashRow(hash)) return false;
+  getDb().prepare(`DELETE FROM media_hash_used WHERE hash = ?`).run(hash);
+  logEvent(
+    "media_hash_stale_cleared",
+    `${path.basename(String(filePath || ""))} ${String(hash).slice(0, 12)}`
+  );
+  return true;
 }
 
 export function recordMediaHash({
@@ -366,6 +443,110 @@ function countPostsSince(isoCutoff) {
   return countPostsBetween(isoCutoff, new Date().toISOString());
 }
 
+const CIRCUIT_ACTIONS = new Set(["post", "comment", "delete", "schedule", "auth"]);
+const CIRCUIT_BASE_SEC = {
+  post: 24 * 3600,
+  comment: 12 * 3600,
+  delete: 6 * 3600,
+  schedule: 24 * 3600,
+  auth: 72 * 3600,
+};
+const CIRCUIT_MAX_SEC = 72 * 3600;
+
+function circuitBaseSec(action, baseSec) {
+  const n = Number(baseSec);
+  if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  const settings = getAntiSpamSettings();
+  const fromSettings = Number(settings[`circuit_${action}_sec`]);
+  if (Number.isFinite(fromSettings) && fromSettings > 0) return Math.floor(fromSettings);
+  return CIRCUIT_BASE_SEC[action] || 6 * 3600;
+}
+
+export function openPageCircuit(pageRowId, action, reason, baseSec) {
+  ensureAntiSpamTables();
+  const id = Number(pageRowId);
+  const act = String(action || "").trim();
+  if (!id || !CIRCUIT_ACTIONS.has(act)) return null;
+  const db = getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const base = Math.min(CIRCUIT_MAX_SEC, circuitBaseSec(act, baseSec));
+  const existing = db
+    .prepare(`SELECT until_ts, fail_count FROM page_circuit WHERE page_row_id = ? AND action = ?`)
+    .get(id, act);
+  let until = now + base;
+  let fail = 1;
+  if (existing && Number(existing.until_ts) > now) {
+    const remain = Math.max(base, Number(existing.until_ts) - now);
+    until = now + Math.min(CIRCUIT_MAX_SEC, remain * 2);
+    fail = Number(existing.fail_count || 1) + 1;
+  }
+  const why = String(reason || "").slice(0, 400);
+  db.prepare(
+    `INSERT INTO page_circuit (page_row_id, action, until_ts, reason, fail_count, updated_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(page_row_id, action) DO UPDATE SET
+       until_ts = excluded.until_ts,
+       reason = excluded.reason,
+       fail_count = excluded.fail_count,
+       updated_at = datetime('now')`
+  ).run(id, act, until, why, fail);
+  db.prepare(`INSERT INTO anti_spam_events (kind, detail) VALUES ('circuit_open', ?)`).run(
+    JSON.stringify({ page_row_id: id, action: act, until_ts: until, reason: why })
+  );
+  return { page_row_id: id, action: act, until_ts: until, fail_count: fail, reason: why };
+}
+
+export function isPageCircuitOpen(pageRowId, action) {
+  ensureAntiSpamTables();
+  const id = Number(pageRowId);
+  const act = String(action || "").trim();
+  if (!id || !CIRCUIT_ACTIONS.has(act)) return { open: false };
+  const row = getDb()
+    .prepare(`SELECT until_ts, reason, fail_count FROM page_circuit WHERE page_row_id = ? AND action = ?`)
+    .get(id, act);
+  const now = Math.floor(Date.now() / 1000);
+  if (!row || Number(row.until_ts) <= now) return { open: false };
+  return {
+    open: true,
+    until_ts: Number(row.until_ts),
+    reason: row.reason || "",
+    fail_count: Number(row.fail_count) || 1,
+    seconds_left: Number(row.until_ts) - now,
+  };
+}
+
+export function closePageCircuit(pageRowId, action) {
+  ensureAntiSpamTables();
+  const id = Number(pageRowId);
+  const act = String(action || "").trim();
+  if (!id || !CIRCUIT_ACTIONS.has(act)) return { closed: false };
+  const db = getDb();
+  const info = db.prepare(`DELETE FROM page_circuit WHERE page_row_id = ? AND action = ?`).run(id, act);
+  db.prepare(`INSERT INTO anti_spam_events (kind, detail) VALUES ('circuit_close', ?)`).run(
+    JSON.stringify({ page_row_id: id, action: act })
+  );
+  return { closed: info.changes > 0, page_row_id: id, action: act };
+}
+
+export function listOpenPageCircuits() {
+  ensureAntiSpamTables();
+  const now = Math.floor(Date.now() / 1000);
+  return getDb()
+    .prepare(
+      `SELECT c.page_row_id, c.action, c.until_ts, c.reason, c.fail_count, c.updated_at,
+              p.name AS page_name, p.page_id
+       FROM page_circuit c
+       LEFT JOIN fb_pages p ON p.id = c.page_row_id
+       WHERE c.until_ts > ?
+       ORDER BY c.until_ts ASC`
+    )
+    .all(now)
+    .map((row) => ({
+      ...row,
+      seconds_left: Number(row.until_ts) - now,
+    }));
+}
+
 export function getBackoffState() {
   ensureAntiSpamTables();
   const row = getDb().prepare(`SELECT * FROM graph_backoff WHERE id = 1`).get();
@@ -392,12 +573,15 @@ export function noteGraphFailure(err) {
   ensureAntiSpamTables();
   const s = getAntiSpamSettings();
   if (!s.enabled) return getBackoffState();
+  // Khóa tần suất cộng đồng chỉ thuộc credential vừa bị Facebook từ chối.
+  // Không bật backoff toàn tool: page khác và token khác vẫn được gửi.
+  if (isCommunitySpamBlock(err) || isSpamBlockError(err) || isPermissionError(err)) return getBackoffState();
   const msg = String(err?.message || err || "");
   const code = err?.code || err?.fb?.code;
   const spamLike =
-    /spam|rate limit|too many|temporarily blocked|reduce the amount|permission denied|(#4)|(#17)|(#32)|(#613)|(#368)/i.test(
+    /rate limit|too many|temporarily blocked|reduce the amount|(#4)|(#17)|(#32)|(#613)/i.test(
       msg
-    ) || [4, 17, 32, 613, 368, 80001, 80006].includes(Number(code));
+    ) || [4, 17, 32, 613, 80001, 80006].includes(Number(code));
 
   const row = getDb().prepare(`SELECT streak FROM graph_backoff WHERE id = 1`).get();
   const streak = (row?.streak || 0) + 1;
@@ -435,6 +619,8 @@ export function assertCanPublish({
   isSchedule = false,
   scheduledAtUnix,
   reuse_all_pages = false,
+  skip_time_caps = false,
+  skip_caption_dup = false,
 } = {}) {
   ensureAntiSpamTables();
   const s = getAntiSpamSettings();
@@ -450,15 +636,12 @@ export function assertCanPublish({
         error: `Anti-spam backoff Graph ~${Math.ceil(bo.seconds_left / 60)} phút (lỗi trước: ${bo.last_error || "—"})`,
       };
     }
-    const usage = getLastUsage();
-    if (
-      usage?.call_count != null &&
-      Number(usage.call_count) >= s.pause_on_app_usage_pct
-    ) {
+    const peak = getUsagePeakPercent();
+    if (peak >= s.pause_on_app_usage_pct) {
       return {
         ok: false,
         code: "APP_USAGE_HIGH",
-        error: `Anti-spam: App API usage ${usage.call_count}% ≥ ${s.pause_on_app_usage_pct}% — tạm dừng publish.`,
+        error: `Anti-spam: hạn mức API ${peak}% ≥ ${s.pause_on_app_usage_pct}% (lượt gọi, CPU hoặc thời gian) — tạm dừng publish.`,
       };
     }
     return { ok: true, settings: s, burst: true };
@@ -492,16 +675,13 @@ export function assertCanPublish({
     };
   }
 
-  // App usage pause
-  const usage = getLastUsage();
-  if (
-    usage?.call_count != null &&
-    Number(usage.call_count) >= s.pause_on_app_usage_pct
-  ) {
+  // App usage pause — max của call_count / CPU / thời gian, không chỉ % lượt gọi
+  const peak = getUsagePeakPercent();
+  if (peak >= s.pause_on_app_usage_pct) {
     return {
       ok: false,
       code: "APP_USAGE_HIGH",
-      error: `Anti-spam: App API usage ${usage.call_count}% ≥ ${s.pause_on_app_usage_pct}% — tạm dừng publish.`,
+      error: `Anti-spam: hạn mức API ${peak}% ≥ ${s.pause_on_app_usage_pct}% (lượt gọi, CPU hoặc thời gian) — tạm dừng publish.`,
     };
   }
 
@@ -518,11 +698,12 @@ export function assertCanPublish({
     };
   }
 
-  // Global caps
   const targetMs = isSchedule && Number(scheduledAtUnix) > 0
     ? Number(scheduledAtUnix) * 1000
     : Date.now();
   const targetIso = new Date(targetMs).toISOString();
+  // Theo bộ được dồn nhiều page cùng giờ. Không cắt trần bài/giờ, bài/ngày, cooldown page.
+  if (!skip_time_caps) {
   const hourAgo = new Date(targetMs - 60 * 60 * 1000).toISOString();
   const dayAgo = new Date(targetMs - 24 * 60 * 60 * 1000).toISOString();
   const nHour = countPostsBetween(hourAgo, targetIso);
@@ -560,6 +741,7 @@ export function assertCanPublish({
       };
     }
   }
+  }
 
   // Keywords
   const cap = String(caption || "");
@@ -575,7 +757,7 @@ export function assertCanPublish({
   }
 
   // Caption duplicate
-  if (s.block_duplicate_caption && cap.trim()) {
+  if (!skip_caption_dup && s.block_duplicate_caption && cap.trim()) {
     const norm = normalizeCaption(cap);
     const since = new Date(
       targetMs - s.caption_dup_window_hours * 60 * 60 * 1000
@@ -614,7 +796,7 @@ export function assertCanPublish({
     }
   }
 
-  // Media hash once
+  // Media hash once — chỉ chặn khi đã chuyển sang posted (file inbox còn lại = hash mồ côi → xóa)
   if (
     s.block_duplicate_media &&
     mediaPath &&
@@ -623,15 +805,16 @@ export function assertCanPublish({
   ) {
     try {
       const hash = fileSha256(mediaPath);
-      if (isMediaHashUsed(hash)) {
+      if (mediaHashBlocksInboxFile(hash, mediaPath)) {
         return {
           ok: false,
           code: "MEDIA_DUP",
           error:
-            "Anti-spam: ảnh/video này (hash) đã đăng 1 lần — không đăng lại. File nên chuyển sang posted.",
+            "Anti-spam: ảnh/video này (hash) đã đăng 1 lần và đã có bản ở folder posted — không đăng lại từ kho.",
           media_hash: hash,
         };
       }
+      releaseStaleMediaHash(hash, mediaPath);
     } catch (e) {
       return {
         ok: false,
@@ -674,6 +857,7 @@ export function finalizeMediaAfterSuccess({
     if (keep_in_inbox) {
       logEvent("media_kept", `${originalName} giữ trong kho (reuse mọi page)`);
       if (caption) recordCaption(caption, page_row_id, page_id);
+      noteGraphSuccess();
       return { movedPath: null, hash, moveError: null, kept: true };
     }
     const destDir = postedFolder || path.join(path.dirname(mediaPath), "..", "posted");
@@ -813,37 +997,52 @@ export function pickUnusedMedia(folder, kind, pickMode, slotIndex, postedFolder,
   }
 
   const protectUsed = Boolean(s.media_once_forever || (s.enabled && s.block_duplicate_media));
+  const mode = String(pickMode || "").toLowerCase();
+  const ordinal = mode === "match_media" || mode === "sequential" || mode === "ordinal";
   if (!protectUsed) {
-    return { path: pickRandomMediaSpaced(files, folder, kind), skipped: 0 };
+    const picked = ordinal
+      ? sortMediaByOrdinal(files)[0] || null
+      : pickRandomMediaSpaced(files, folder, kind);
+    if (picked) inflightMedia.add(path.resolve(picked));
+    return { path: picked, skipped: 0 };
   }
 
+  // Chỉ hash vài file ứng viên. Không chuyển cả kho sang posted — file chưa dùng giữ nguyên.
+  const ordered = ordinal ? sortMediaByOrdinal(files) : null;
+  const maxHash = Math.min(files.length, ordinal ? files.length : 8);
+  const rejected = new Set();
   let skipped = 0;
-  const usable = [];
-  for (const f of files) {
+  for (let n = 0; n < maxHash; n++) {
+    let candidate = null;
+    if (ordered) {
+      candidate = ordered[n] || null;
+    } else {
+      const rest = files.filter((f) => !rejected.has(path.resolve(f)));
+      candidate = pickRandomMediaSpaced(rest, folder, kind);
+    }
+    if (!candidate) break;
+    const key = path.resolve(candidate);
+    rejected.add(key);
     try {
-      const h = fileSha256(f);
-      if (isMediaHashUsed(h)) {
-        skipped++;
-        if (postedFolder) {
-          try {
-            ensureDir(postedFolder);
-            moveToPosted(f, postedFolder);
-            logEvent("media_dup_moved", path.basename(f));
-          } catch {
-            /* ignore */
-          }
-        }
+      const h = fileSha256(candidate);
+      if (mediaHashBlocksInboxFile(h, candidate)) {
+        skipped += 1;
         continue;
       }
-      usable.push(f);
+      releaseStaleMediaHash(h, candidate);
     } catch {
-      usable.push(f);
+      /* hash lỗi vẫn dùng file này, không đụng file khác */
     }
+    inflightMedia.add(key);
+    return { path: candidate, skipped };
   }
-  if (!usable.length) return { path: null, skipped };
-  const picked = pickRandomMediaSpaced(usable, folder, kind);
-  if (picked) inflightMedia.add(path.resolve(picked));
-  return { path: picked, skipped };
+  return {
+    path: null,
+    skipped,
+    error: skipped
+      ? `Đã bỏ qua ${skipped} file vì đúng file đó còn nằm trong ổ đã đăng. File không còn trên đĩa thì được đăng lại.`
+      : null,
+  };
 }
 
 function pickRandomMediaSpaced(files, folder, kind) {
@@ -871,17 +1070,35 @@ function pickRandomMediaSpaced(files, folder, kind) {
 
 /**
  * Inventory one media folder for plan checks / UI.
- * total = files on disk · used = hash already in media_hash_used · unused = can post
+ * Rule: file còn trong kho media = chưa đăng xong (đăng/hẹn xong phải MOVE → posted).
+ * Hash mồ côi (file vẫn inbox) được xóa và tính là unused.
+ * Chỉ «used» khi cùng nội dung đã có posted_path khác (bản đã chuyển posted).
  */
-export function inspectMediaFolder(folder, kind) {
+export function inspectMediaFolder(folder, kind, opts = {}) {
   const s = getAntiSpamSettings();
   const protectUsed = Boolean(
     s.media_once_forever || (s.enabled && s.block_duplicate_media)
   );
   const files = listMediaFilesSync(folder, kind);
+  if (opts.skipHash) {
+    return {
+      folder: folder || null,
+      kind,
+      total: files.length,
+      unused: files.length,
+      used: 0,
+      unreadable: 0,
+      stale_cleared: 0,
+      protect_used: protectUsed,
+      media_once_forever: !!s.media_once_forever,
+      anti_enabled: !!s.enabled,
+      hash_skipped: true,
+    };
+  }
   let unused = 0;
   let used = 0;
   let unreadable = 0;
+  let stale_cleared = 0;
   if (!protectUsed) {
     return {
       folder: folder || null,
@@ -890,6 +1107,7 @@ export function inspectMediaFolder(folder, kind) {
       unused: files.length,
       used: 0,
       unreadable: 0,
+      stale_cleared: 0,
       protect_used: false,
       media_once_forever: !!s.media_once_forever,
       anti_enabled: !!s.enabled,
@@ -897,8 +1115,13 @@ export function inspectMediaFolder(folder, kind) {
   }
   for (const file of files) {
     try {
-      if (isMediaHashUsed(fileSha256(file))) used++;
-      else unused++;
+      const hash = fileSha256(file);
+      if (mediaHashBlocksInboxFile(hash, file)) {
+        used++;
+      } else {
+        if (releaseStaleMediaHash(hash, file)) stale_cleared++;
+        unused++;
+      }
     } catch {
       unreadable++;
       unused++; // still try at pick time
@@ -911,6 +1134,7 @@ export function inspectMediaFolder(folder, kind) {
     unused,
     used,
     unreadable,
+    stale_cleared,
     protect_used: true,
     media_once_forever: !!s.media_once_forever,
     anti_enabled: !!s.enabled,
@@ -1139,6 +1363,7 @@ export function getAntiSpamStats() {
     media_hashes: db.prepare(`SELECT COUNT(*) AS n FROM media_hash_used`).get().n,
     captions_tracked: db.prepare(`SELECT COUNT(*) AS n FROM caption_recent`).get().n,
     backoff: getBackoffState(),
+    circuits: listOpenPageCircuits(),
     app_usage: getLastUsage(),
     recommendations: getRecommendations().tips,
   };

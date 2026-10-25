@@ -15,20 +15,67 @@ import { listPages } from "../services/accounts.js";
 
 const router = Router();
 
-/** Pages available for delete UI */
+/** Pages available for delete UI (+ account / token app để lọc chọn) */
 router.get("/pages", (_req, res) => {
   try {
     const pages = listPages({ limit: 5000 });
+    const mapped = pages.map((p) => ({
+      id: p.id,
+      page_id: p.page_id,
+      name: p.name,
+      account_id: p.account_id,
+      account_name: p.account_name || null,
+      account_fb_user_id: p.account_fb_user_id || null,
+      meta_app_key: p.meta_app_key || "app1",
+      meta_app_name: p.meta_app_name || p.meta_app_key || "App 1",
+      category: p.category,
+      status: p.status,
+    }));
+    // Tóm tắt để UI dropdown tài khoản / token
+    const accountsMap = new Map();
+    const tokensMap = new Map();
+    for (const p of mapped) {
+      const aid = Number(p.account_id);
+      if (Number.isFinite(aid) && aid > 0) {
+        if (!accountsMap.has(aid)) {
+          accountsMap.set(aid, {
+            id: aid,
+            name: p.account_name || `Account #${aid}`,
+            fb_user_id: p.account_fb_user_id || null,
+            meta_app_key: p.meta_app_key,
+            meta_app_name: p.meta_app_name,
+            page_count: 0,
+          });
+        }
+        accountsMap.get(aid).page_count += 1;
+      }
+      const tk = String(p.meta_app_key || "app1");
+      if (!tokensMap.has(tk)) {
+        tokensMap.set(tk, {
+          meta_app_key: tk,
+          meta_app_name: p.meta_app_name || tk,
+          page_count: 0,
+          account_ids: new Set(),
+        });
+      }
+      const tok = tokensMap.get(tk);
+      tok.page_count += 1;
+      if (p.account_id) tok.account_ids.add(Number(p.account_id));
+    }
     res.json({
       ok: true,
-      pages: pages.map((p) => ({
-        id: p.id,
-        page_id: p.page_id,
-        name: p.name,
-        account_id: p.account_id,
-        category: p.category,
-        status: p.status,
-      })),
+      pages: mapped,
+      accounts: [...accountsMap.values()].sort((a, b) =>
+        String(a.name).localeCompare(String(b.name), "vi")
+      ),
+      tokens: [...tokensMap.values()]
+        .map((t) => ({
+          meta_app_key: t.meta_app_key,
+          meta_app_name: t.meta_app_name,
+          page_count: t.page_count,
+          account_count: t.account_ids.size,
+        }))
+        .sort((a, b) => String(a.meta_app_key).localeCompare(String(b.meta_app_key))),
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
